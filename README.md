@@ -1,8 +1,8 @@
 # MCP server tool changes
 
-Last change observed 2026-09-27T11:12:31+00:00. Built by `research/feed/watch.py` on the `main` branch. Watching 9409 npm servers from the official MCP registry (154 daily, the rest weekly) and 18576 hosted endpoints (daily).
+Last change observed 2026-09-27T11:45:37+00:00. Built by `research/feed/watch.py` on the `main` branch. Watching 9409 npm servers from the official MCP registry (154 daily, the rest weekly) and 18576 hosted endpoints (daily).
 
-11821 changes to a tool definition: 341 npm releases (95 observed live, 246 from the [churn study](https://github.com/rufat325/heldfast/blob/main/docs/CHURN.md)) and 11480 readings of hosted servers that found their tools changed; 8 where `heldfast wrap --drift graded` would refuse something.
+11839 changes to a tool definition: 341 npm releases (95 observed live, 246 from the [churn study](https://github.com/rufat325/heldfast/blob/main/docs/CHURN.md)) and 11498 readings of hosted servers that found their tools changed; 8 where `heldfast wrap --drift graded` would refuse something. [Per operator, and by kind of change](#per-operator).
 
 Subscribe: [feed.xml](feed.xml) (Atom) or [feed.json](feed.json). Every event, with the words that moved: [events/](events).
 
@@ -12,6 +12,24 @@ Each day's commit is anchored in Bitcoin with OpenTimestamps: [checkpoints/](che
 
 | published | server | release | tools | grade |
 |---|---|---|---|---|
+| 2026-09-27 | `remote/fi.akkilahdot/travel-search` | 2026-09-27T111140568608 -> 2026-09-27T114538656141 | 1 changed | quiet |
+| 2026-09-27 | `remote/io.github.socialloopai/socialloop-mcp.1` | 2026-09-27T111058411751 -> 2026-09-27T114445125418 | 1 changed | quiet |
+| 2026-09-27 | `remote/se.sistaminuten/travel-search` | 2026-09-27T111228858531 -> 2026-09-27T113300535003 | 1 changed | quiet |
+| 2026-09-27 | `remote/no.restplass/travel-search` | 2026-09-27T111233244543 -> 2026-09-27T113235843857 | 1 changed | quiet |
+| 2026-09-27 | `remote/dk.afbudsrejser/travel-search` | 2026-09-27T111215250704 -> 2026-09-27T113217089744 | 1 changed | quiet |
+| 2026-09-27 | `remote/io.github.moralito311-andr/andreax` | 2026-09-27T105310222819 -> 2026-09-27T113051434838 | 2 changed, 1 added | quiet |
+| 2026-09-27 | `remote/com.tkawen/intelligence-gateway` | 2026-09-27T110917455481 -> 2026-09-27T112844030598 | 1 changed | quiet |
+| 2026-09-27 | `remote/net.praegant/landhaus` | 2026-09-27T103533048082 -> 2026-09-27T112820497695 | 2 changed | quiet |
+| 2026-09-27 | `remote/io.github.Kopaev/openvan-travel` | 2026-09-23T160600643129 -> 2026-09-27T112815669662 | 4 added | quiet |
+| 2026-09-27 | `remote/io.github.SidneyBissoli/ibge-br-mcp` | 2026-09-23T160603025805 -> 2026-09-27T112658616036 | 23 changed (every tool) | quiet |
+| 2026-09-27 | `remote/io.github.pipeworx-io/ted-eu` | 2026-09-26T113833149740 -> 2026-09-27T112632550515 | 4 changed | quiet |
+| 2026-09-27 | `remote/io.github.pipeworx-io/take-the-meeting` | 2026-09-26T044908359112 -> 2026-09-27T112632319862 | 4 changed | quiet |
+| 2026-09-27 | `remote/io.github.tettertotter/fundinglandscape` | 2026-09-27T103244029495 -> 2026-09-27T112545743772 | 2 changed | quiet |
+| 2026-09-27 | `remote/com.llmotions.farm/gpt-5-6-sol-agent` | 2026-09-23T160353231485 -> 2026-09-27T112512155977 | 1 changed | quiet |
+| 2026-09-27 | `remote/com.googleapis.compute/mcp` | 2026-09-27T110451807745 -> 2026-09-27T112429980414 | 10 changed | quiet |
+| 2026-09-27 | `remote/online.x-402/mcp` | 2026-09-26T044708544922 -> 2026-09-27T112406386959 | 5 added | quiet |
+| 2026-09-27 | `remote/io.github.moonspacenow-tech/aicomglobal` | 2026-09-27T102915928698 -> 2026-09-27T112126496078 | 2 changed | quiet |
+| 2026-09-27 | `remote/com.agiscorecard/agi-scorecard` | 2026-09-27T065244321759 -> 2026-09-27T112114926338 | 1 changed | quiet |
 | 2026-09-27 | `remote/no.restplass/travel-search` | 2026-09-27T105330730752 -> 2026-09-27T111233244543 | 1 changed | quiet |
 | 2026-09-27 | `remote/se.sistaminuten/travel-search` | 2026-09-27T105503526461 -> 2026-09-27T111228858531 | 1 changed | quiet |
 | 2026-09-27 | `remote/dk.afbudsrejser/travel-search` | 2026-09-27T105315316322 -> 2026-09-27T111215250704 | 1 changed | quiet |
@@ -54,21 +72,23 @@ Each day's commit is anchored in Bitcoin with OpenTimestamps: [checkpoints/](che
 | 2026-09-27 | `remote/app.sallim/korea-realty` | 2026-09-27T055157481925 -> 2026-09-27T105159627535 | 1 added | quiet |
 | 2026-09-27 | `remote/io.ppc/postclick-landing-page-cro` | 2026-09-23T162719909813 -> 2026-09-27T105139512025 | 1 changed, 1 added | quiet |
 | 2026-09-27 | `remote/kr.gronox/finbridge` | 2026-09-25T120258350349 -> 2026-09-27T105108180746 | 1 changed | quiet |
-| 2026-09-27 | `remote/org.golfcore/golfcore` | 2026-09-23T160710444414 -> 2026-09-27T105106382893 | 1 changed, 2 added | quiet |
-| 2026-09-27 | `remote/io.github.koraykoylu/ibanchecker-mcp` | 2026-09-27T065750569921 -> 2026-09-27T105124217326 | 5 changed (every tool) | quiet |
-| 2026-09-27 | `remote/com.handsforagents/hands` | 2026-09-26T114026136754 -> 2026-09-27T105101970572 | 3 changed | quiet |
-| 2026-09-27 | `remote/ch.blust/mental-model` | 2026-09-27T065917757966 -> 2026-09-27T105035462810 | 1 changed | quiet |
-| 2026-09-27 | `remote/org.billcommons/bill-commons` | 2026-09-23T160644465302 -> 2026-09-27T105031959011 | 1 changed | quiet |
-| 2026-09-27 | `remote/dev.workers.mars-economic.mars-economic-agent-gateway/mars-economic` | 2026-09-23T160630066365 -> 2026-09-27T105013835883 | 1 changed | quiet |
-| 2026-09-27 | `remote/ai.greenlandai/greenlandai` | 2026-09-24T202320972781 -> 2026-09-27T105003763378 | 2 changed | quiet |
-| 2026-09-27 | `remote/io.github.si-imtiaz/leadquasar` | 2026-09-23T202129136331 -> 2026-09-27T104954171157 | 2 changed | quiet |
-| 2026-09-27 | `remote/fr.humanmirror/x402` | 2026-09-26T113855385003 -> 2026-09-27T104939185500 | 1 changed | quiet |
-| 2026-09-27 | `remote/io.github.Its-fortunatefolly/hubvibe` | 2026-09-27T055039945416 -> 2026-09-27T104938926577 | 5 added | quiet |
-| 2026-09-27 | `remote/io.github.simonplmak-cloud/hkex-filings` | 2026-09-23T160559230343 -> 2026-09-27T104935711447 | 3 changed, 1 added (every tool) | quiet |
-| 2026-09-27 | `remote/io.github.ulasarslan6262-ui/speedbot` | 2026-09-26T231108363171 -> 2026-09-27T103811255312 | 1 added | quiet |
-| 2026-09-27 | `remote/io.github.samuelzcom/chauffeur-booking` | 2026-09-27T065953671423 -> 2026-09-27T103718621082 | 1 changed | quiet |
-| 2026-09-27 | `remote/co.radicadouno/mcp` | 2026-09-26T231102111308 -> 2026-09-27T103536548487 | 1 changed | quiet |
-| 2026-09-27 | `remote/net.praegant/landhaus` | 2026-09-26T132430904924 -> 2026-09-27T103533048082 | 3 changed | quiet |
-| 2026-09-27 | `remote/com.freqblog/music-metadata` | 2026-09-27T065800378189 -> 2026-09-27T103451682759 | 2 changed | quiet |
-| 2026-09-27 | `remote/io.companygraph/mental-model` | 2026-09-27T065746042918 -> 2026-09-27T103433449815 | 1 changed | quiet |
-| 2026-09-27 | `remote/com.agenttrafficlab/atl` | 2026-09-27T065728075174 -> 2026-09-27T103411373079 | 3 changed (every tool) | quiet |
+
+## Per operator
+
+A few operators account for most of the changes, and many changes move only a number or an order: 8684 substantive, 3086 that changed only numbers (a catalogue counter ticking, a date), 69 that only reordered a list. A number can still matter -- a price is one -- so this sorts the count, it excuses nothing. Grouped by hosted servers by registrable domain under the Public Suffix List (2026-09-24_13-26-36_UTC), private section included; npm servers by package. Approximate: it merges different customers of one host the list does not name, and splits an operator who uses several domains. Every event: [stats.json](stats.json).
+
+| operator | changes | substantive | numbers only | reordered only |
+|---|---|---|---|---|
+| `pipeworx.io` | 6996 | 4021 | 2975 | 0 |
+| `nolimit-observatory.workers.dev` | 2341 | 2341 | 0 | 0 |
+| `a2awire.com` | 424 | 424 | 0 | 0 |
+| `caseyjhand.com` | 55 | 55 | 0 | 0 |
+| `daedalmap.com` | 47 | 47 | 0 | 0 |
+| `sistaminuten.se` | 19 | 2 | 0 | 17 |
+| `afbudsrejser.dk` | 18 | 2 | 0 | 16 |
+| `akkilahdot.fi` | 18 | 2 | 0 | 16 |
+| `assetfare.dev` | 18 | 18 | 0 | 0 |
+| `dayze.com` | 18 | 18 | 0 | 0 |
+| `restplass.no` | 18 | 2 | 0 | 16 |
+| `socialloop.ai` | 18 | 18 | 0 | 0 |
+| 921 other operators | 1849 | 1734 | 111 | 4 |
