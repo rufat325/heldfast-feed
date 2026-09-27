@@ -1,0 +1,1216 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Single-product classification. Accepts a free-text description plus optional structured hints (materials, intended_use, category, origin/destination country). POPULATE EVERY HINT YOU HAVE \u2014 materials/intended_use/category materially improve retrieval and candidate quality vs a description-only call (e.g. description:\"Funko POP Vinyl\", category:\"Figurines\", materials:[\"PVC plastic\"], intended_use:\"decorative collectible figure\" reliably surfaces ch. 95). Returns top-3 CN candidates, EUDR scope, MFN duty, a bilingual reasoning_md narrative, a gap_analysis flagging missing inputs, and a tri-state status (confident / review_recommended / manual_review_required). Trust `status` for review-routing \u2014 do not re-derive your own confidence threshold. PAT-authed callers also receive prior_decisions[] from the org dictionary history.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "category": {
+    "description": "Your internal product-taxonomy label, e.g. \"Figurines\", \"Vacuum Cleaner Accessories\". Folded into the retrieval query to anchor the right chapter (e.g. \"Figurines\" pulls ch. 95 toys instead of ch. 39 raw polymer). Populate whenever you have one.",
+    "maxLength": 200,
+    "minLength": 1,
+    "type": "string"
+   },
+   "current_cn": {
+    "pattern": "^(\\d{2}|\\d{4}|\\d{6}|\\d{8}|\\d{10})$",
+    "type": "string"
+   },
+   "description": {
+    "maxLength": 4000,
+    "minLength": 1,
+    "type": "string"
+   },
+   "destination_iso2": {
+    "description": "Import destination country (ISO 3166-1 alpha-2, e.g. \"SE\"). Adds destination-specific measure/declaration context.",
+    "pattern": "^[A-Z]{2}$",
+    "type": "string"
+   },
+   "dry_run": {
+    "description": "First half of the BYOM eval loop: with dry_run:true retrieval + prompt-build run but the judge is NOT called \u2014 returns candidates_top10 + request_token only, no judge spend. Judge with your own model (e.g. fan out across subagents to parallelise), then call klassio_submit_classification_verdict. Prefer this over the inline judge for bulk eval/scoring.",
+    "type": "boolean"
+   },
+   "include": {
+    "description": "L3 opt-ins. 'compact_rules' hoists per-candidate rule bodies into a shared top-level classification_rules pool (candidates carry rule_ids[] instead). 'truncate_rules' truncates the pool bodies to ~240 chars (use with compact_rules). Default = master shape (per-candidate bilingual classification_rules, no pool).",
+    "items": {
+     "enum": [
+      "compact_rules",
+      "truncate_rules"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "intended_use": {
+    "description": "Function / end use, e.g. \"decorative collectible figure\" or \"kitchen cabinet door panel\". Disambiguates products whose bare name misleads (a \"Funko POP Vinyl\" reads as raw vinyl without it). Populate whenever known.",
+    "maxLength": 500,
+    "type": "string"
+   },
+   "lang": {
+    "description": "Return reasoning in a single language: drops the redundant rationale_* field for the other and (with compact_rules) collapses the shared rule pool to this language. Absent = bilingual (default).",
+    "enum": [
+     "sv",
+     "en"
+    ],
+    "type": "string"
+   },
+   "materials": {
+    "description": "Constituent materials, e.g. [\"PVC plastic\",\"vinyl\"] or [\"wood\",\"MDF\"]. Strongly improves retrieval \u2014 a material-poor description retrieves weaker candidates. Populate whenever known.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 20,
+    "type": "array"
+   },
+   "omit_raw_candidates": {
+    "description": "Dry-run only: omit the diagnostic dry_run_prompt.raw_candidates pool. Default false (raw_candidates included). The BYOM submit path re-runs retrieval, so omitting this does not affect request_token.",
+    "type": "boolean"
+   },
+   "omit_system_prompt": {
+    "description": "Dry-run only: omit the re-sent judge system prompt from dry_run_prompt.system (set null) to save ~3k tokens per call. prompt_version is still returned so a caller can validate a system cached via klassio_get_judge_system_prompt. Does NOT change request_token. Default false (system included).",
+    "type": "boolean"
+   },
+   "origin_iso2": {
+    "description": "Country of origin (ISO 3166-1 alpha-2, e.g. \"CN\"). Improves duty/FTA and EUDR country-risk context and disambiguates origin-sensitive headings.",
+    "pattern": "^[A-Z]{2}$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "description"
+  ],
+  "type": "object"
+ },
+ "name": "klassio_classify_article",
+ "outputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "candidates": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "classification_rules": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "rule_id": {
+          "type": "string"
+         },
+         "scope": {
+          "type": "string"
+         },
+         "text_en": {
+          "type": "string"
+         },
+         "text_sv": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "rule_id",
+         "scope",
+         "text_sv",
+         "text_en"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "cn_code": {
+       "type": "string"
+      },
+      "cn_code_display": {
+       "type": "string"
+      },
+      "confidence": {
+       "type": "number"
+      },
+      "description_en": {
+       "type": "string"
+      },
+      "description_sv": {
+       "type": "string"
+      },
+      "duty": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "as_of": {
+           "type": "string"
+          },
+          "geo_area": {
+           "type": "string"
+          },
+          "mfn_rate_percent": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          }
+         },
+         "required": [
+          "mfn_rate_percent",
+          "geo_area",
+          "as_of"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "eudr": {
+       "additionalProperties": false,
+       "properties": {
+        "commodity": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "in_scope": {
+         "type": "boolean"
+        },
+        "is_ex": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "in_scope",
+        "is_ex",
+        "commodity"
+       ],
+       "type": "object"
+      },
+      "rule_ids": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "required": [
+      "cn_code",
+      "cn_code_display",
+      "description_sv",
+      "description_en",
+      "confidence",
+      "eudr",
+      "duty"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "classification_rules": {
+    "additionalProperties": {
+     "additionalProperties": false,
+     "properties": {
+      "scope": {
+       "type": "string"
+      },
+      "text_en": {
+       "type": "string"
+      },
+      "text_sv": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "scope",
+      "text_sv",
+      "text_en"
+     ],
+     "type": "object"
+    },
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "confidence": {
+    "type": "number"
+   },
+   "dry_run_prompt": {
+    "additionalProperties": false,
+    "properties": {
+     "candidates_top10": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "cn_code": {
+         "type": "string"
+        },
+        "cn_code_display": {
+         "type": "string"
+        },
+        "description_en": {
+         "type": "string"
+        },
+        "distance": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "source": {
+         "enum": [
+          "vector",
+          "bm25",
+          "both",
+          "bti"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "cn_code",
+        "cn_code_display",
+        "description_en",
+        "source",
+        "distance"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "next_step": {
+      "type": "string"
+     },
+     "prompt_version": {
+      "type": "string"
+     },
+     "raw_candidates": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "cn_code": {
+         "type": "string"
+        },
+        "distance": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "source": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "cn_code",
+        "source",
+        "distance"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "request_token": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+     },
+     "retrieval_query": {
+      "type": "string"
+     },
+     "system": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "user": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "system",
+     "user",
+     "request_token",
+     "prompt_version",
+     "retrieval_query",
+     "candidates_top10",
+     "next_step"
+    ],
+    "type": "object"
+   },
+   "gap_analysis": {
+    "additionalProperties": false,
+    "properties": {
+     "affects": {
+      "type": "string"
+     },
+     "missing": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "suggested_questions": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "missing",
+     "affects",
+     "suggested_questions"
+    ],
+    "type": "object"
+   },
+   "gri_applied": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "judge_debug": {
+    "additionalProperties": false,
+    "properties": {
+     "api_key_set": {
+      "type": "boolean"
+     },
+     "bm25_overlap_with_dense_top10": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "bm25_top_n": {
+      "type": "number"
+     },
+     "chapter_hint": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "chapter_hint_source": {
+      "enum": [
+       "normalised",
+       "raw",
+       "bti"
+      ],
+      "type": "string"
+     },
+     "fallback_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "fired": {
+      "type": "boolean"
+     },
+     "heading_proposal_injected": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "judge_flagged_missing": {
+      "type": "boolean"
+     },
+     "normalize_ms": {
+      "anyOf": [
+       {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "normalize_outcome": {
+      "enum": [
+       "off",
+       "cache_hit",
+       "ok",
+       "timeout",
+       "parse_fail",
+       "refused",
+       "error"
+      ],
+      "type": "string"
+     },
+     "normalize_prompt_version": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "off_list_cn_code": {
+      "type": "string"
+     },
+     "off_list_reason": {
+      "type": "string"
+     },
+     "off_list_rejected": {
+      "type": "string"
+     },
+     "proposed_headings": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "proposed_headings_valid": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "query_normalize_fired": {
+      "type": "boolean"
+     },
+     "rationale_winner_mismatch": {
+      "type": "boolean"
+     },
+     "rerank_duration_ms": {
+      "type": "number"
+     },
+     "rerank_error": {
+      "type": "string"
+     },
+     "rerank_fired": {
+      "type": "boolean"
+     },
+     "rerank_prompt_version": {
+      "type": "string"
+     },
+     "rerank_skip_reason": {
+      "enum": [
+       "disabled",
+       "high_confidence_dense",
+       "shortlist_too_small",
+       "fallback_no_api_key",
+       "fallback_sidecar_error",
+       "fallback_model_error"
+      ],
+      "type": "string"
+     },
+     "rerank_top_changed": {
+      "type": "boolean"
+     },
+     "rerank_top_n": {
+      "type": "number"
+     },
+     "retrieval_ms": {
+      "anyOf": [
+       {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "retrieval_query": {
+      "type": "string"
+     },
+     "rewrite_dense_n": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "rewrite_only_codes": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "rewrite_only_in_pool": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "shortlist_size": {
+      "type": "number"
+     },
+     "tariff_rewrite": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "winner_off_shortlist": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "fired",
+     "shortlist_size",
+     "chapter_hint",
+     "api_key_set",
+     "fallback_reason",
+     "rerank_fired",
+     "bm25_top_n",
+     "bm25_overlap_with_dense_top10",
+     "retrieval_query",
+     "query_normalize_fired"
+    ],
+    "type": "object"
+   },
+   "judge_quota_remaining": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "judge_runner_up": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "judge_winner": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "mfn_across_leaves": {
+    "additionalProperties": false,
+    "properties": {
+     "basis": {
+      "enum": [
+       "all_leaves_agree",
+       "majority_with_conditional_exception",
+       "leaves_differ"
+      ],
+      "type": "string"
+     },
+     "per_leaf": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "cn10": {
+         "type": "string"
+        },
+        "conditional": {
+         "type": "boolean"
+        },
+        "duty": {
+         "anyOf": [
+          {
+           "additionalProperties": false,
+           "properties": {
+            "as_of": {
+             "type": "string"
+            },
+            "duty_amount_eur": {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "duty_expression": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "duty_rate_pct": {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "duty_unit": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "geo_area": {
+             "type": "string"
+            },
+            "source_cn": {
+             "type": "string"
+            }
+           },
+           "required": [
+            "duty_expression",
+            "duty_rate_pct",
+            "geo_area"
+           ],
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        }
+       },
+       "required": [
+        "cn10",
+        "duty",
+        "conditional"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "rate": {
+      "anyOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "as_of": {
+          "type": "string"
+         },
+         "duty_amount_eur": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "duty_expression": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "duty_rate_pct": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "duty_unit": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "geo_area": {
+          "type": "string"
+         },
+         "source_cn": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "duty_expression",
+         "duty_rate_pct",
+         "geo_area"
+        ],
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "rate",
+     "basis",
+     "per_leaf"
+    ],
+    "type": "object"
+   },
+   "prior_decisions": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "cn_code_display": {
+       "type": "string"
+      },
+      "decided_at": {
+       "type": "string"
+      },
+      "entry_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "entry_id",
+      "cn_code_display",
+      "decided_at"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "query_used": {
+    "type": "string"
+   },
+   "rationale_en": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "rationale_sv": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "reasoning_md": {
+    "type": "string"
+   },
+   "recommended_action": {
+    "oneOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "kind": {
+        "const": "accept",
+        "type": "string"
+       }
+      },
+      "required": [
+       "kind"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "fields": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "kind": {
+        "const": "add_fields",
+        "type": "string"
+       }
+      },
+      "required": [
+       "kind",
+       "fields"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "kind": {
+        "const": "human_review",
+        "type": "string"
+       },
+       "reason": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "kind",
+       "reason"
+      ],
+      "type": "object"
+     }
+    ]
+   },
+   "result_ref": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "retrieval_quality": {
+    "additionalProperties": false,
+    "properties": {
+     "advice": {
+      "enum": [
+       "ok",
+       "add_fields",
+       "thin_retrieval",
+       "ambiguous_cluster"
+      ],
+      "type": "string"
+     },
+     "bm25_only_top1": {
+      "type": "boolean"
+     },
+     "distance_gap": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "normalizer_fired": {
+      "type": "boolean"
+     },
+     "top_distance": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "top_distance",
+     "distance_gap",
+     "normalizer_fired",
+     "bm25_only_top1",
+     "advice"
+    ],
+    "type": "object"
+   },
+   "status": {
+    "enum": [
+     "confident",
+     "review_recommended",
+     "manual_review_required"
+    ],
+    "type": "string"
+   },
+   "taric_basis": {
+    "enum": [
+     "deterministic",
+     "resolved",
+     "needs_input",
+     "needs_resolution",
+     "no_taric"
+    ],
+    "type": "string"
+   },
+   "taric_candidates": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "cn_code10": {
+       "type": "string"
+      },
+      "effective_description_en": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "effective_description_sv": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "cn_code10",
+      "effective_description_sv",
+      "effective_description_en"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "taric_code": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "taric_gap": {
+    "additionalProperties": false,
+    "properties": {
+     "affects": {
+      "type": "string"
+     },
+     "missing": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "suggested_questions": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "missing",
+     "affects",
+     "suggested_questions"
+    ],
+    "type": "object"
+   },
+   "taric_measures": {
+    "additionalProperties": false,
+    "properties": {
+     "conditional": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "caveats": {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "additional_code": {
+            "anyOf": [
+             {
+              "type": "string"
+             },
+             {
+              "type": "null"
+             }
+            ]
+           },
+           "geo_area": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "geo_area",
+           "additional_code"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "measure_type": {
+         "enum": [
+          "anti_dumping",
+          "countervailing",
+          "quota",
+          "suspension",
+          "restriction",
+          "prohibition"
+         ],
+         "type": "string"
+        },
+        "present": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "measure_type",
+        "present",
+        "caveats"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "third_country_duty": {
+      "anyOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "as_of": {
+          "type": "string"
+         },
+         "duty_amount_eur": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "duty_expression": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "duty_rate_pct": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "duty_unit": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "geo_area": {
+          "type": "string"
+         },
+         "source_cn": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "duty_expression",
+         "duty_rate_pct",
+         "geo_area"
+        ],
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "third_country_duty",
+     "conditional"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "status",
+   "confidence",
+   "candidates",
+   "reasoning_md",
+   "gap_analysis",
+   "query_used",
+   "rationale_sv",
+   "rationale_en",
+   "gri_applied",
+   "judge_winner",
+   "judge_runner_up",
+   "judge_debug",
+   "result_ref"
+  ],
+  "type": "object"
+ }
+}

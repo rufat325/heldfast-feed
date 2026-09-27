@@ -1,0 +1,472 @@
+{
+ "annotations": {
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Content actions (classify pages + playbook)"
+ },
+ "description": "Return a content 'playbook' for the site: every content page classified into ONE of five action buckets over a weekly-style window comparison (current window vs the immediately preceding window of equal length), ranked by search-opportunity \u00d7 session gain so you can tell the user which page to GROW next and what to do: within the 'striking' bucket rows are ordered by expected_sessions_gain DESC (the band-CTR headroom that is the actionable lever there), while the other buckets keep real landing revenue DESC (largest revenue at stake first). This surfaces search intent to add sessions (grow the traffic denominator), NOT CVR \u2014 a page already winning on sessions/revenue but with zero clicks still shows up. Buckets: 'decaying' (search clicks actually fell, OR the page had real traffic (previous clicks \u22653) and its rank slid \u22652 positions from within the click zone while clicks did NOT grow \u2192 refresh/rewrite; a rank slide alone with growing/negligible clicks is NOT decay \u2014 search clicks are the primary signal, position only a leading indicator), 'striking' (has striking-distance queries at positions 4-20 with click upside but clicks still low \u2192 push those queries up; top 3 listed in striking_queries), 'rising' (clicks grew significantly \u2192 produce more of this, strengthen CTA), 'dormant' (has impressions but ~0 clicks and its main query is far below the click zone \u2192 big rewrite or consolidate; zero-pageview pure-rank pages surface here), 'stable' (none of the above \u2192 watch). Each page also carries current/previous clicks\u00b7impressions\u00b7avg_position, is_new, landing sessions/engaged/revenue_jpy, AI-referred sessions/revenue/sources, expected_sessions_gain (the window's expected incremental sessions from striking-band queries \u2014 a search click is ~1 session, so it is NOT re-converted via CTR; normalize to a monthly figure with the window length), and expected_revenue_gain (expected_sessions_gain \u00d7 page RPS, returned ONLY when revenue>0 and sessions>=5 \u2014 display-only projection, never a sort key). The deterministic action mapping and all (provisional) thresholds come back in `criteria`; the model does the narrative interpretation (mcp-first). Rows with confidence='low' carry `caveats` \u2014 'geo_winning_suspect' (AI Overview/citations likely substitute the click: a GEO win, don't break the page; cross-check get_ai_traffic), 'zero_click_suspect' (SERP-feature occupation or intent-mismatch/polysemous query: verify the live SERP first), 'ai_cited' (decaying but the AI citation is alive) \u2014 verify before acting on low-confidence rows; definitions in criteria.caveat_flags. The response is summary-first (token-aware): `bucket_summary` always holds the FULL pre-limit distribution (per-bucket count/revenue/clicks) plus `total_pages`, while `pages` returns only the top rows in priority order (default limit 15, max 200); pass bucket='striking' etc. to drill into one bucket, and check `truncated` \u2014 when present it tells how many rows were cut and how to fetch them. GSC-driven and Google-search only; data lags 1-2 days so the current window's right edge sits a few days back. When narrating a bucket to the user, scope it to Google search \u2014 say 'search traffic to this page is declining', NOT 'this page is declining'; the classification is a search-trend diagnosis, not overall page health, so a page labeled 'decaying' can be thriving on Direct/social/AI. Before calling a negative bucket (decaying/dormant) a problem, cross-check the row's landing sessions/revenue_jpy and ai_sessions. site_id is OPTIONAL when OAuth-authenticated. Default window is the last 7 days vs the prior 7; pass period='30d'/'90d' or a raw day count (2-365). Window date bounds are INCLUSIVE on both ends, so period=Nd actually spans N+1 calendar dates (the real range is in `window`); both windows share the same length, so the comparison stays symmetric. This is the cross-page action snapshot; for one page's time series use get_page_trend, and for AI-referred pages use get_ai_traffic(mode='referred').",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "bucket": {
+    "enum": [
+     "decaying",
+     "striking",
+     "rising",
+     "dormant",
+     "stable"
+    ],
+    "type": "string"
+   },
+   "limit": {
+    "maximum": 200,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "period": {
+    "anyOf": [
+     {
+      "const": "7d",
+      "type": "string"
+     },
+     {
+      "const": "30d",
+      "type": "string"
+     },
+     {
+      "const": "90d",
+      "type": "string"
+     },
+     {
+      "maximum": 365,
+      "minimum": 2,
+      "type": "integer"
+     }
+    ],
+    "default": "7d"
+   },
+   "site_id": {
+    "format": "uuid",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "get_content_actions",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "assumptions": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "basis": {
+    "type": "string"
+   },
+   "bucket_summary": {
+    "additionalProperties": false,
+    "properties": {
+     "decaying": {
+      "additionalProperties": false,
+      "properties": {
+       "clicks": {
+        "type": "number"
+       },
+       "count": {
+        "type": "number"
+       },
+       "revenue_jpy": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "count",
+       "revenue_jpy",
+       "clicks"
+      ],
+      "type": "object"
+     },
+     "dormant": {
+      "$ref": "#/properties/bucket_summary/properties/decaying"
+     },
+     "rising": {
+      "$ref": "#/properties/bucket_summary/properties/decaying"
+     },
+     "stable": {
+      "$ref": "#/properties/bucket_summary/properties/decaying"
+     },
+     "striking": {
+      "$ref": "#/properties/bucket_summary/properties/decaying"
+     }
+    },
+    "required": [
+     "decaying",
+     "striking",
+     "rising",
+     "dormant",
+     "stable"
+    ],
+    "type": "object"
+   },
+   "criteria": {
+    "additionalProperties": false,
+    "properties": {
+     "caveat_flags": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "comparison": {
+      "type": "string"
+     },
+     "dormant": {
+      "type": "string"
+     },
+     "expected_revenue_gain": {
+      "type": "string"
+     },
+     "expected_sessions_gain": {
+      "type": "string"
+     },
+     "landing_attribution": {
+      "type": "string"
+     },
+     "position_worsening": {
+      "type": "string"
+     },
+     "priority": {
+      "type": "string"
+     },
+     "provisional": {
+      "type": "boolean"
+     },
+     "significant_clicks_delta": {
+      "type": "string"
+     },
+     "striking_band": {
+      "additionalProperties": false,
+      "properties": {
+       "min_impressions": {
+        "type": "number"
+       },
+       "position_max": {
+        "type": "number"
+       },
+       "position_min": {
+        "type": "number"
+       },
+       "target_ctr": {
+        "type": "number"
+       },
+       "target_position": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "position_min",
+       "position_max",
+       "min_impressions",
+       "target_position",
+       "target_ctr"
+      ],
+      "type": "object"
+     },
+     "striking_clicks_below": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "provisional",
+     "comparison",
+     "significant_clicks_delta",
+     "position_worsening",
+     "striking_band",
+     "striking_clicks_below",
+     "dormant",
+     "landing_attribution",
+     "priority",
+     "expected_sessions_gain",
+     "expected_revenue_gain",
+     "caveat_flags"
+    ],
+    "type": "object"
+   },
+   "limitations": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "pages": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "action": {
+       "enum": [
+        "decaying",
+        "striking",
+        "rising",
+        "dormant",
+        "stable"
+       ],
+       "type": "string"
+      },
+      "ai_revenue_jpy": {
+       "type": "number"
+      },
+      "ai_sessions": {
+       "type": "number"
+      },
+      "ai_sources": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "caveats": {
+       "items": {
+        "enum": [
+         "geo_winning_suspect",
+         "zero_click_suspect",
+         "ai_cited"
+        ],
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "clicks_threshold": {
+       "type": "number"
+      },
+      "confidence": {
+       "enum": [
+        "high",
+        "low"
+       ],
+       "type": "string"
+      },
+      "cur_clicks": {
+       "type": "number"
+      },
+      "cur_impressions": {
+       "type": "number"
+      },
+      "cur_position": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "engaged": {
+       "type": "number"
+      },
+      "expected_revenue_gain": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "expected_sessions_gain": {
+       "type": "number"
+      },
+      "is_new": {
+       "type": "boolean"
+      },
+      "main_query_position": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "page": {
+       "type": "string"
+      },
+      "prev_clicks": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "prev_impressions": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "prev_position": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "revenue_jpy": {
+       "type": "number"
+      },
+      "sessions": {
+       "type": "number"
+      },
+      "striking_queries": {
+       "anyOf": [
+        {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "ctr": {
+            "type": "number"
+           },
+           "est_incremental_clicks": {
+            "type": "number"
+           },
+           "impressions": {
+            "type": "number"
+           },
+           "position": {
+            "type": "number"
+           },
+           "query": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "query",
+           "position",
+           "impressions",
+           "ctr",
+           "est_incremental_clicks"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "striking_query_count": {
+       "type": "number"
+      },
+      "striking_uplift_clicks": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "page",
+      "action",
+      "confidence",
+      "caveats",
+      "is_new",
+      "cur_clicks",
+      "cur_impressions",
+      "cur_position",
+      "prev_clicks",
+      "prev_impressions",
+      "prev_position",
+      "main_query_position",
+      "striking_uplift_clicks",
+      "striking_query_count",
+      "striking_queries",
+      "sessions",
+      "engaged",
+      "revenue_jpy",
+      "ai_sessions",
+      "ai_revenue_jpy",
+      "ai_sources",
+      "clicks_threshold",
+      "expected_sessions_gain",
+      "expected_revenue_gain"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "period": {
+    "additionalProperties": false,
+    "properties": {
+     "days": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "days"
+    ],
+    "type": "object"
+   },
+   "site_id": {
+    "type": "string"
+   },
+   "total_pages": {
+    "type": "number"
+   },
+   "truncated": {
+    "additionalProperties": false,
+    "properties": {
+     "guidance": {
+      "type": "string"
+     },
+     "omitted_pages": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "omitted_pages",
+     "guidance"
+    ],
+    "type": "object"
+   },
+   "warning": {
+    "type": "string"
+   },
+   "window": {
+    "additionalProperties": false,
+    "properties": {
+     "current": {
+      "additionalProperties": false,
+      "properties": {
+       "from": {
+        "type": "string"
+       },
+       "to": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "from",
+       "to"
+      ],
+      "type": "object"
+     },
+     "previous": {
+      "$ref": "#/properties/window/properties/current"
+     }
+    },
+    "required": [
+     "current",
+     "previous"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "site_id",
+   "period",
+   "window",
+   "basis",
+   "assumptions",
+   "limitations",
+   "criteria",
+   "bucket_summary",
+   "total_pages",
+   "pages"
+  ],
+  "type": "object"
+ },
+ "title": "Content actions (classify pages + playbook)"
+}
