@@ -1,0 +1,654 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Trace how two named things in the planning record connect, and report how specific that connection is. Give `from` and `to` for the shortest route between them; give `from` alone to rank what one actor connects to; give neither to rank the corpus's most specific connections. Endpoints are entity, meeting, or named-pattern slugs; list_entities, list_meetings and list_patterns discover them.\n\nRoutes run over the three layers where a shared node is a specific claim: meeting attendance transcribed from agendas and minutes (250 references across 78 meeting records; a meeting record holds a median of 3 entities and at most 12), peer claims authored on an entity dossier (169 links, 47 of them stated on both dossiers), and shared named patterns (60 references across 15 patterns; a pattern holds a median of 2 entities and at most 10). That substrate is 162 nodes and 479 links over 69 entities, in one connected component. Place, corridor, brief and watch links serve here as filters and citations rather than as routes: the us-27-south-lake node alone carries 118 links, so a route through it would hold for nearly every pair in the corpus.\n\nHop count is a result here rather than an input. Across the full frontmatter graph, 94.5% of entity pairs already sit within two steps and a three-step expansion reaches a median of 236 of 244 nodes, so depth returns the corpus rather than an answer. What discriminates is the degree of the WIDEST node a route passes through, and the ranking leads on it: a route is only as specific as its least specific waypoint. Two more measured properties travel with every row: how many equally-short routes exist (uniqueness runs 64% at two hops, 41% at three, 16% at four), and whether the two endpoints are minuted in disjoint jurisdictions, which 15 of 69 entities are positioned to be. `interior_degrees` carries every degree on the chain so you can re-rank on any of them, and `provenance` says whether the whole join rests on the meeting record, on a curator\u2019s hand, or on both.\n\nFilter with `evidence` to choose which layers may carry a hop, `crossing` to keep only pairs minuted in different jurisdictions, and `exclude_published` to keep only pairs the observatory\u2019s own briefs have not already put together. Every response reports how many of the 2,346 possible entity pairs the filters matched, splits them by provenance, and accounts for the rest, so a query that discriminated nothing says so in its own output. Note one interaction the response also states: two entities minuted in one room share that room\u2019s jurisdiction, so `crossing: \"jurisdiction\"` holds no two-hop minuted route, and the minuted routes that satisfy it run three hops or more.\n\nWhat it leaves undetermined, stated on every call: vote outcomes and dispositions, which live in meeting prose and item tables; direction and sequence, since a route is co-occurrence in a record; and the 345 of 423 meeting records not yet linked to an entity, where what the tool covers is what has been curated. In from and sweep modes, rows that share a chain of intermediaries collapse to one finding, which names the rest of its roster in `route_also_joins`. Pair with describe_entity for a node\u2019s full dossier, describe_meeting for the room itself, and semantic_search for prose.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "crossing": {
+    "default": "any",
+    "description": "\"any\" ranks every matching pair. \"jurisdiction\" keeps only pairs whose record-backed jurisdiction footprints are disjoint and both present, computed from the jurisdiction on each minuted meeting rather than from an authored place list.",
+    "enum": [
+     "any",
+     "jurisdiction"
+    ],
+    "type": "string"
+   },
+   "evidence": {
+    "default": [
+     "minuted",
+     "authored",
+     "named_pattern"
+    ],
+    "description": "Which layers may carry a hop. \"minuted\" = attendance transcribed from an agenda or minutes; \"authored\" = a peer claim stated on an entity dossier; \"named_pattern\" = two entities listed as exhibits of one named pattern. This is the substrate choice and the largest single lever on the answer: a restricted set fragments the graph (minuted alone is 6 components), and the response reports substrate.components and a fragmentation note rather than returning a bare no_path.",
+    "items": {
+     "enum": [
+      "minuted",
+      "authored",
+      "named_pattern"
+     ],
+     "type": "string"
+    },
+    "maxItems": 3,
+    "minItems": 1,
+    "type": "array",
+    "uniqueItems": true
+   },
+   "exclude_published": {
+    "default": false,
+    "description": "true keeps only the pairs the observatory's own briefs have yet to put together, tested against the union of an entity's appears_in_briefs and the briefs that name it.",
+    "type": "boolean"
+   },
+   "from": {
+    "description": "One endpoint slug, resolved in order against entities, meetings, then named patterns: the three vocabularies in which a shared node is a specific claim. No slug is shared between them on the deployed corpus, so a bare slug resolves unambiguously and needs no type prefix (e.g., \"tara-tedrow\", \"minneola-pz-2025-01\", \"self-storage-canary\"). Omit both endpoints to rank the whole corpus.",
+    "type": "string"
+   },
+   "limit": {
+    "default": 5,
+    "description": "How many connections to return. It caps connections; routes within one connection are shown five at a time in pair mode and one at a time in from and sweep modes, and `routes_shown` beside the exact `shortest_path_count` names how many. A value outside 1\u201325 is refused rather than clamped, so selectivity.returned always agrees with what you asked for.",
+    "maximum": 25,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "to": {
+    "description": "The other endpoint, drawn from the same three vocabularies as `from`. Supplying `to` without `from` is accepted and read as `from`, because the graph is undirected; the response echoes that as query.normalized_as.",
+    "type": "string"
+   }
+  },
+  "required": [],
+  "type": "object"
+ },
+ "name": "trace_connection",
+ "outputSchema": {
+  "properties": {
+   "calibration": {
+    "description": "Measured background rates for the chosen evidence layers: what to read a row against.",
+    "properties": {
+     "distance_histogram": {
+      "type": "object"
+     },
+     "max_shortest_path_count": {
+      "type": "number"
+     },
+     "note": {
+      "type": "string"
+     },
+     "unique_shortest_path_by_distance": {
+      "type": "object"
+     }
+    },
+    "type": "object"
+   },
+   "connections": {
+    "items": {
+     "properties": {
+      "crosses_jurisdiction": {
+       "description": "Both footprints are on from.jurisdictions_minuted and to.jurisdictions_minuted.",
+       "type": "boolean"
+      },
+      "date_span": {
+       "description": "Populated only when every hop on the representative route runs through a meeting record; otherwise carries a reason scoped to that route.",
+       "type": "object"
+      },
+      "evidence_used": {
+       "description": "The union of layers across ALL shortest routes between these two: the honest scope for a row that reports how many of them there are. The representative route\u2019s own layers are on its hops.",
+       "items": {
+        "enum": [
+         "minuted",
+         "authored",
+         "named_pattern"
+        ],
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "from": {
+       "description": "slug, kind, display_name, entity_class, canonical_role, url, jurisdictions_minuted[].",
+       "type": "object"
+      },
+      "hops": {
+       "type": "number"
+      },
+      "interior_degrees": {
+       "description": "Every interior node's degree on the representative route, in route order.",
+       "items": {
+        "type": "number"
+       },
+       "type": "array"
+      },
+      "provenance": {
+       "description": "Derived from evidence_used. \"record\" = every shortest route runs on transcribed meeting attendance; \"curated\" = the whole join is authored on a dossier or grouped into a pattern, which describe_entity and describe_pattern already return.",
+       "enum": [
+        "record",
+        "mixed",
+        "curated"
+       ],
+       "type": "string"
+      },
+      "published_together_in": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "route_also_joins": {
+       "description": "From and sweep modes: the other pairs this same chain of intermediaries joins. A node of degree 6 yields fifteen pairs, and they are one finding rather than fifteen rows.",
+       "properties": {
+        "count": {
+         "type": "number"
+        },
+        "pairs": {
+         "items": {
+          "properties": {
+           "from": {
+            "type": "string"
+           },
+           "to": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "from",
+           "to"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "count",
+        "pairs"
+       ],
+       "type": "object"
+      },
+      "routes": {
+       "items": {
+        "properties": {
+         "hops": {
+          "items": {
+           "properties": {
+            "basis": {
+             "description": "A sentence naming what kind of knowing this hop is: a record, an authored claim, or a curated grouping.",
+             "type": "string"
+            },
+            "detail": {
+             "type": "string"
+            },
+            "evidence": {
+             "enum": [
+              "minuted",
+              "authored",
+              "named_pattern"
+             ],
+             "type": "string"
+            },
+            "from": {
+             "type": "string"
+            },
+            "jurisdiction": {
+             "description": "Present on meeting hops: the room's own jurisdiction slug, so a caller sees where a crossing happens without the tool nominating a carrier.",
+             "type": "string"
+            },
+            "node_degree": {
+             "type": "number"
+            },
+            "to": {
+             "type": "string"
+            },
+            "url": {
+             "type": "string"
+            }
+           },
+           "required": [
+            "from",
+            "to",
+            "evidence",
+            "node_degree",
+            "url",
+            "detail",
+            "basis"
+           ],
+           "type": "object"
+          },
+          "type": "array"
+         }
+        },
+        "required": [
+         "hops"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "routes_shown": {
+       "description": "Routes displayed: five in pair mode, one in from and sweep modes. Read against shortest_path_count.",
+       "type": "number"
+      },
+      "shortest_path_count": {
+       "description": "Exact, independent of how many routes are shown.",
+       "type": "number"
+      },
+      "summary": {
+       "type": "string"
+      },
+      "to": {
+       "type": "object"
+      },
+      "undetermined": {
+       "description": "Read across all shortest routes, matching evidence_used. A row that reports eight routes and qualifies one would under-report what it leaves open.",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "widest_node": {
+       "description": "The WIDEST node the route passes through, named rather than scored. It is the primary ranking key, and exactly the narrowest such node any shortest route achieves. Computed by a dynamic program over the whole predecessor DAG, so it is exact however many routes are displayed. Null at one hop.",
+       "properties": {
+        "degree": {
+         "type": "number"
+        },
+        "degree_means": {
+         "type": "string"
+        },
+        "display_name": {
+         "type": "string"
+        },
+        "id": {
+         "type": "string"
+        },
+        "kind": {
+         "enum": [
+          "entity",
+          "meeting",
+          "pattern"
+         ],
+         "type": "string"
+        },
+        "slug": {
+         "type": "string"
+        },
+        "url": {
+         "type": "string"
+        }
+       },
+       "type": [
+        "object",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "from",
+      "to",
+      "hops",
+      "shortest_path_count",
+      "routes_shown",
+      "interior_degrees",
+      "evidence_used",
+      "provenance",
+      "crosses_jurisdiction",
+      "summary",
+      "routes",
+      "undetermined"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "coverage": {
+    "description": "What the corpus covers, plus what the graph covers: meetings linked to entities against meetings in corpus, jurisdictions linked against jurisdictions in corpus, and the per-jurisdiction breakdown.",
+    "type": "object"
+   },
+   "declared_direct": {
+    "description": "From and sweep modes: one-hop authored pairs, unscored, as slug pairs; describe_entity already returns each one in its dossier context.",
+    "items": {
+     "properties": {
+      "authored_on": {
+       "description": "The dossiers carrying the reference: one slug for a one-way claim, both for a reciprocal one.",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "crosses_jurisdiction": {
+       "type": "boolean"
+      },
+      "from": {
+       "description": "Entity slug.",
+       "type": "string"
+      },
+      "published_together_in": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "to": {
+       "description": "Entity slug.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "from",
+      "to",
+      "authored_on",
+      "crosses_jurisdiction",
+      "published_together_in"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "declared_direct_note": {
+    "description": "Present whenever declared_direct carries a row: the call that reads any of them in full.",
+    "type": "string"
+   },
+   "limits": {
+    "description": "Assembled per call. The coverage line is always first: absence in this tool is absence of curation.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "no_path": {
+    "description": "Pair mode only, when the endpoints are unreachable on the chosen layers. Null everywhere else, including in pair mode when a route exists.",
+    "properties": {
+     "components": {
+      "type": "number"
+     },
+     "evidence": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "fragmentation_note": {
+      "description": "Present when the chosen layers fragment the substrate; a full-substrate retry may join the two.",
+      "type": "string"
+     },
+     "from": {
+      "type": "object"
+     },
+     "note": {
+      "type": "string"
+     },
+     "to": {
+      "type": "object"
+     }
+    },
+    "required": [
+     "from",
+     "to",
+     "evidence",
+     "components",
+     "note"
+    ],
+    "type": [
+     "object",
+     "null"
+    ]
+   },
+   "query": {
+    "properties": {
+     "crossing": {
+      "enum": [
+       "any",
+       "jurisdiction"
+      ],
+      "type": "string"
+     },
+     "depth_parameter": {
+      "description": "Constant. Hop count is a result the query returns; endpoints and filters are what it takes.",
+      "type": "string"
+     },
+     "evidence": {
+      "items": {
+       "enum": [
+        "minuted",
+        "authored",
+        "named_pattern"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "exclude_published": {
+      "type": "boolean"
+     },
+     "from": {
+      "properties": {
+       "resolved_kind": {
+        "enum": [
+         "entity",
+         "meeting",
+         "pattern"
+        ],
+        "type": "string"
+       },
+       "slug": {
+        "type": "string"
+       }
+      },
+      "type": [
+       "object",
+       "null"
+      ]
+     },
+     "limit": {
+      "type": "number"
+     },
+     "mode": {
+      "description": "Set by arity: both endpoints, one, or neither. The scoring path is identical in all three.",
+      "enum": [
+       "pair",
+       "from",
+       "sweep"
+      ],
+      "type": "string"
+     },
+     "normalized_as": {
+      "description": "Present when `to` arrived without `from` and was read as `from`.",
+      "type": "string"
+     },
+     "resolution_note": {
+      "description": "Present when a supplied slug also names a document of another type.",
+      "type": "string"
+     },
+     "to": {
+      "properties": {
+       "resolved_kind": {
+        "enum": [
+         "entity",
+         "meeting",
+         "pattern"
+        ],
+        "type": "string"
+       },
+       "slug": {
+        "type": "string"
+       }
+      },
+      "type": [
+       "object",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "mode",
+     "evidence",
+     "crossing",
+     "exclude_published",
+     "limit",
+     "depth_parameter"
+    ],
+    "type": "object"
+   },
+   "ranking": {
+    "description": "The sort rule, verbatim, labelled a judgement call. Every integer behind it is in each row.",
+    "type": "string"
+   },
+   "selectivity": {
+    "description": "How much of the population the filters kept: the tool grading its own discrimination.",
+    "properties": {
+     "by_provenance": {
+      "description": "Matched pairs by how the join is known. A zero on `record` says a filter has excluded the evidentiary layer, which `crossing: \"jurisdiction\"` does at two hops.",
+      "properties": {
+       "curated": {
+        "type": "number"
+       },
+       "mixed": {
+        "type": "number"
+       },
+       "record": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "record",
+       "mixed",
+       "curated"
+      ],
+      "type": "object"
+     },
+     "declared_direct": {
+      "description": "Matched pairs that sit at one hop and moved to declared_direct.",
+      "type": "number"
+     },
+     "distinct_routes": {
+      "description": "Distinct chains of intermediaries among the matched pairs: findings behind pairs.",
+      "type": "number"
+     },
+     "filtered_out": {
+      "description": "Pairs a filter rejected. matched + declared_direct + unreachable + filtered_out === of_possible.",
+      "type": "number"
+     },
+     "matched": {
+      "description": "Pairs scored, filtered and ranked.",
+      "type": "number"
+     },
+     "of_possible": {
+      "description": "The candidate pairs this call's arity put in scope: one in pair mode, 68 from a named entity, 2,346 across the corpus.",
+      "type": "number"
+     },
+     "reading": {
+      "description": "Plain sentence naming the cause it can prove: an unreachable pair reads as unreachable, a filtered one names the filter that rejected it.",
+      "type": "string"
+     },
+     "returned": {
+      "description": "Rows returned, after the roster collapse and the cut at `limit`.",
+      "type": "number"
+     },
+     "unreachable": {
+      "description": "Pairs in separate components on the selected evidence layers. Attributing these to the filters would name the wrong cause.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "matched",
+     "of_possible",
+     "returned",
+     "declared_direct",
+     "unreachable",
+     "filtered_out",
+     "by_provenance",
+     "distinct_routes",
+     "reading"
+    ],
+    "type": "object"
+   },
+   "substrate": {
+    "description": "The graph the routes ran over, for the evidence layers this call selected.",
+    "properties": {
+     "by_kind": {
+      "properties": {
+       "entity": {
+        "type": "number"
+       },
+       "meeting": {
+        "type": "number"
+       },
+       "pattern": {
+        "type": "number"
+       }
+      },
+      "type": "object"
+     },
+     "components": {
+      "description": "Above 1, the chosen layers fragment the graph and a no_path is a property of that choice.",
+      "type": "number"
+     },
+     "entities_present": {
+      "type": "string"
+     },
+     "excluded_layers": {
+      "description": "The frontmatter arrays that serve as filters and citations here rather than as routes, each with the reason.",
+      "items": {
+       "properties": {
+        "name": {
+         "type": "string"
+        },
+        "reason": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "name",
+        "reason"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "fragmentation_note": {
+      "description": "Present when components > 1.",
+      "type": "string"
+     },
+     "layers": {
+      "description": "Per-layer reference counts and node-size profiles, measured on the artifact.",
+      "type": "object"
+     },
+     "links": {
+      "type": "number"
+     },
+     "nodes": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "nodes",
+     "links",
+     "components",
+     "entities_present",
+     "layers",
+     "excluded_layers"
+    ],
+    "type": "object"
+   },
+   "tie_note": {
+    "description": "A sentence, present when the cut at `limit` lands inside a band of connections that tie on widest-node degree, hop count and path count, naming the band, its size, and that order within it falls back to slug.",
+    "type": [
+     "string",
+     "null"
+    ]
+   }
+  },
+  "required": [
+   "query",
+   "substrate",
+   "selectivity",
+   "connections",
+   "ranking",
+   "calibration",
+   "coverage",
+   "limits"
+  ],
+  "type": "object"
+ },
+ "title": "Trace Connection"
+}

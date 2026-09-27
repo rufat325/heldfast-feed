@@ -1,0 +1,336 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Credit Card Payoff Calculator"
+ },
+ "description": "Calculation, not advice. Verify with a professional before acting. Calculate credit card payoff timeline with month-by-month amortization. Pick this for a payoff timeline across credit cards under one strategy, including windfalls or fixed payments; pick `compare_payoff_strategies` to compare avalanche against snowball, `calculate_loan_payoff` for a single installment loan, and `analyze_cash_advance` when one card's cash advance is the question. Supports dual APR segments (purchase + cash advance), two strategies (avalanche, snowball), fixed/dynamic payment modes, and an optional schedule of one-time windfalls (tax refund, bonus, inheritance) applied at specific months.\n\nReturns:\n\n- debt-free date, total interest, per-card payoff order\n- first_month_interest_ratio_frac (the first month's interest/payment fraction) and lifetime_interest_ratio_frac (whole-projection total_interest/total_paid fraction)\n- domain warnings emitted as warnings[].type (DEATH_SPIRAL, CA_TRAP, MIN_PAYMENT_TRAP, DAY_ZERO_COST, DEBT_GROWING, PROMO_CLIFF, PREDATORY_RATE, SPEND_EXCEEDS_PAYDOWN, PLAN_TERM_ELAPSED_WITH_BALANCE), and, separately, validation disclosures emitted as warnings[].code (MINIMUM_PAYMENT_NOT_BINDING on the default dynamic-budget path, MINIMUM_PAYMENT_NOT_BINDING_IN_BASELINE when fixed_payments = true; these two shapes coexist in the same warnings[] array but are distinguishable by which keys each entry carries)\n- when a plan exists (extra_monthly_payment > 0, windfalls present, or fixed_payments = true), a min_payments_only baseline block with interest_saved_vs_min_payments and months_saved_vs_min_payments quantifying the interest and time difference versus paying minimums only; when windfalls are also present the response additionally gains a baseline vs with_windfalls savings block\n\nThe response echoes strategy (canonical lowercase 'avalanche' | 'snowball', the strategy the plan was actually simulated under) at the top level.\n\nThe response includes `chart_hints` with rendering directives any client can use.\n\nTop-level `entered_starting_balance` echoes the caller's supplied balances by segment type (`total`, `purchase`, `cash_advance`, `balance_transfer`, `promotional`, `installment_plan`), before any fee, recurring spend, or interest posts; `total` is the sum of the other five. Top-level `total_purchase_segment_fees_paid` reports the portion of card fees (plan_fees_monthly plus annual_fee accruals) charged to the purchase segment across the projection, also present on every monthly_totals[] and analysis.buckets[] row.\n\nThese month counts are each a {status, value, explanation} object rather than a bare month count: months_to_payoff, min_payments_only.months, minimums_only_baseline.months, and, when windfalls are supplied, baseline.months and with_windfalls.months. status is \"defined\" with an integer value when that plan reaches a zero balance, and \"none\" with value null when it does not, in which case explanation says why. The per-card payoff month inside card_payoff_order[] does not use the {status, value, explanation} object. It is still a bare integer.",
+ "inputSchema": {
+  "properties": {
+   "apply_rate_cap": {
+    "default": null,
+    "description": "Whether to cap each card's APR at the regulatory ceiling before simulating. Optional; defaults to false when omitted.",
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "cards": {
+    "description": "Credit cards to pay off, 1 to 20. Required: omitting the field answers contract_error MISSING_REQUIRED_FIELD, while an explicit JSON null answers parse_error (\"cards is required and must be an array.\"); the two are not the same rejection. Every card may carry segments[]. Max 100 segments total across all cards in the request. Per-card, per-type caps: 1 purchase, 1 cash_advance, 5 balance_transfer, 1 promotional, 10 installment_plan.",
+    "items": {
+     "properties": {
+      "annual_fee": {
+       "description": "Annual fee in dollars, $0 to $1,000,000,000. Optional; defaults to 0. Charged at month 1 and every twelfth month after, while the card carries a balance.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "cash_advance_apr_pct": {
+       "description": "Cash advance APR as a percentage, greater than 0 and up to 100. Required when cash_advance_balance is greater than 0: cash advances have no promotional 0% product, so a 0% rate on a real advance balance is a data-entry error.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "cash_advance_balance": {
+       "description": "Cash advance balance in dollars, $0 to $1,000,000,000. Optional; defaults to 0 when omitted. A POSITIVE value alongside a non-empty segments[] is rejected, the same way purchase_balance is. An explicit 0 is accepted.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "minimum_payment": {
+       "description": "Minimum payment in dollars, $0 to $1,000,000,000 (optional, omit or set 0 to auto-calculate). Where it binds, the card is locked at max(minimum_payment, that card's issuer minimum computed at month 1), and that locked amount is paid every month. On calculate_cc_payoff it binds ONLY when fixed_payments = true; on the DEFAULT path (fixed_payments = false) it is NOT used, because the plan recomputes each card's issuer minimum from its current balance every month, and the response discloses that as MINIMUM_PAYMENT_NOT_BINDING. On compare_payoff_strategies there is no fixed_payments parameter and supplying one is rejected: the avalanche and snowball arms ALWAYS run locked, so the value DOES bind and moves both arms, while the minimum-payments-only baseline always recomputes and ignores it, disclosed as MINIMUM_PAYMENT_NOT_BINDING_IN_BASELINE.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "monthly_spend": {
+       "description": "Recurring monthly purchase amount charged to this card's purchase balance before interest accrues, $0 to $50,000 per month. Optional; defaults to 0. Use the segment-level monthly_spend instead when supplying segments[].",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "name": {
+       "description": "Card label, e.g. 'Chase Sapphire', 120 characters or fewer. Optional; a card without a name is auto-numbered ('Card 1', 'Card 2', and so on). Echoed into per-card results and warning text. A name over the cap is replaced in error field paths by a key built from its zero-based card index, written as '#0 (name over cap)', '#1 (name over cap)' and so on.",
+       "maxLength": 120,
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "plan_fees_monthly": {
+       "description": "Recurring monthly card fee in dollars, $0 to $1,000,000,000, e.g. a pay-over-time plan fee. Optional; defaults to 0. Charged every month while the card carries a balance.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "purchase_apr_pct": {
+       "description": "Purchase APR as a percentage, 0 to 100, e.g. 24.99 not 0.2499. Required when purchase_balance is greater than 0: an omitted APR would silently compute $0 interest.",
+       "maximum": 100,
+       "minimum": 0,
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "purchase_balance": {
+       "description": "Purchase balance in dollars, $0 to $1,000,000,000. Required unless segments[] carries at least one segment: an omitted purchase_balance would silently report a $0, 0-month payoff. Supplying a POSITIVE value alongside a non-empty segments[] is rejected, since the two would be competing sources for the same balance. An explicit 0 is accepted.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "segments": {
+       "description": "Per-segment breakdown of this card's balances. Optional; when it carries at least one segment it SUPERSEDES purchase_balance and cash_advance_balance, and a POSITIVE value in either of those is rejected. An empty segments[] is treated as absent, so purchase_balance is then required. At most 100 segments across the whole request. Per card, per type: 1 purchase, 1 cash_advance, 5 balance_transfer, 1 promotional, 10 installment_plan. Each item carries its own type, balance, rate and payment priority; see the type field on the item for the per-type field matrix.",
+       "items": {
+        "properties": {
+         "apr_pct": {
+          "default": null,
+          "description": "Annual percentage rate for this segment, 0 to 100, e.g. 24.99 not 0.2499. Required when balance is greater than 0 on purchase, cash_advance, balance_transfer and promotional. On cash_advance it must be greater than 0 whenever a balance is carried. Must be 0 on installment_plan, which uses monthly_fee instead, so omitting it there is the correct shape.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "balance": {
+          "description": "Segment balance in dollars, $0 to $1,000,000,000. REQUIRED on every segment type: an omitted balance would silently report a $0, 0-month payoff, so it is rejected instead. An explicit 0 is valid, for example a paid-off balance_transfer segment kept for schedule continuity.",
+          "type": "number"
+         },
+         "extra_payment_order": {
+          "default": null,
+          "description": "Extra-payment tie-break priority, 0 or more, where 0 means this segment never receives extra payment. Optional on every type, and the default for installment_plan. Only breaks a tie between segments sharing the exact same current APR, since the Credit CARD Act (TILA \u00a7164(b), 15 U.S.C. \u00a71666c(b)) / 12 CFR 1026.53(a) always pays the highest-current-APR segment first regardless of this value.",
+          "type": [
+           "integer",
+           "null"
+          ]
+         },
+         "merchant_name": {
+          "default": null,
+          "description": "Label for an installment plan's merchant, 120 characters or fewer. Optional on installment_plan, ignored on every other type.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "min_payment_order": {
+          "default": null,
+          "description": "Minimum-payment tie-break priority, 1 or more. Optional on every type. The minimum first pays any installment_plan's locked plan_payment_due in full, then the lowest-current-APR segment; this value only breaks a tie between segments sharing both the same current APR and the same installment-plan status.",
+          "type": [
+           "integer",
+           "null"
+          ]
+         },
+         "monthly_fee": {
+          "default": null,
+          "description": "Fixed fee charged each month while an installment plan's term is active, $0 or more and no greater than plan_payment_due. Optional on installment_plan. On every other type a positive value is rejected with FIELD_NOT_ALLOWED_HERE, while 0 and a negative value are accepted and dropped.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "monthly_spend": {
+          "default": null,
+          "description": "Recurring monthly purchase amount posted to this segment before interest accrues, $0 to $50,000 per month. Optional on purchase. A negative value is rejected as NEGATIVE_BALANCE on every type. On every type other than purchase a positive value is rejected with FIELD_NOT_ALLOWED_HERE, since those balances do not accept new purchases; an explicit 0 is accepted.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "plan_payment_due": {
+          "default": null,
+          "description": "Locked monthly payment for an installment plan, principal plus monthly_fee. Required on installment_plan, greater than $0, at least monthly_fee, and no more than $1,000,000,000. On every other type a positive value is rejected with FIELD_NOT_ALLOWED_HERE, while 0 and a negative value are accepted and dropped.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "promo_expires_month": {
+          "default": null,
+          "description": "Month at which apr_pct flips to revert_apr_pct, 1 to 480. Required on balance_transfer and promotional. Ignored on purchase, cash_advance and installment_plan.",
+          "type": [
+           "integer",
+           "null"
+          ]
+         },
+         "remaining_payments": {
+          "default": null,
+          "description": "Payments left in an installment plan's stated term, 0 or more. Optional on installment_plan, ignored on every other type. 0 means the term has ALREADY ended and is valid with any balance, including a positive residual. From 1 up, the balance must be clearable within the stated term and must not be clearable a month early.",
+          "type": [
+           "integer",
+           "null"
+          ]
+         },
+         "revert_apr_pct": {
+          "default": null,
+          "description": "Rate this segment reverts to once its promo expires, 0 to 100, and at least apr_pct. Required on balance_transfer and promotional. Ignored on purchase and cash_advance. Rejected on installment_plan with FIELD_NOT_ALLOWED_HERE: an expired plan's residual keeps its existing rate rather than repricing.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "stop_spend_month": {
+          "default": null,
+          "description": "Month index at which recurring spend stops, 0 or more. Read on purchase only, and range checked on every type. Omit to spend for the whole projection.",
+          "type": [
+           "integer",
+           "null"
+          ]
+         },
+         "type": {
+          "description": "Segment type. REQUIRED on every segment: omitting it is rejected. Per-type field matrix. Every field below is classified for every segment type: REQUIRED (omitting it is rejected), OPTIONAL (accepted either way and read), IGNORED (accepted and never read for this type, though a value can still fail the field's own range check), or REJECTED (supplying a disallowed value is an error; the field's own rule below says exactly which values are disallowed). Value rules are stated separately from applicability, because a field can be accepted on a type and still be restricted there. The validators are the authority; this matrix describes them.\n- type: REQUIRED on every type. Values: one of purchase, cash_advance, balance_transfer, promotional, installment_plan.\n- balance: REQUIRED on every type. Values: $0 to $1,000,000,000; above $50,000 returns a HIGH_CARD_BALANCE warning, not an error.\n- apr_pct: REQUIRED on purchase, cash_advance, balance_transfer, promotional; OPTIONAL on installment_plan. Values: 0 to 100 as a percentage, e.g. 24.99 not 0.2499. The REQUIRED classification above applies when balance is greater than 0; a zero-balance segment may omit it. Must be greater than 0 on cash_advance carrying a balance. Must equal 0 on installment_plan, where omitting it is the correct shape.\n- revert_apr_pct: REQUIRED on balance_transfer, promotional; IGNORED on purchase, cash_advance; REJECTED on installment_plan. Values: 0 to 100, and at least apr_pct. Rejected on installment_plan with FIELD_NOT_ALLOWED_HERE: an expired plan's residual keeps its existing rate.\n- promo_expires_month: REQUIRED on balance_transfer, promotional; IGNORED on purchase, cash_advance, installment_plan. Values: 1 to 480.\n- monthly_fee: OPTIONAL on installment_plan; REJECTED on purchase, cash_advance, balance_transfer, promotional. Values: $0 or more, and no greater than plan_payment_due, on installment_plan. On every other type a POSITIVE value is rejected with FIELD_NOT_ALLOWED_HERE; 0 and a negative value are accepted and dropped there.\n- plan_payment_due: REQUIRED on installment_plan; REJECTED on purchase, cash_advance, balance_transfer, promotional. Values: greater than $0, at least monthly_fee, and no more than $1,000,000,000, on installment_plan. On every other type a POSITIVE value is rejected with FIELD_NOT_ALLOWED_HERE; 0 and a negative value are accepted and dropped there.\n- remaining_payments: OPTIONAL on installment_plan; IGNORED on purchase, cash_advance, balance_transfer, promotional. Values: 0 or more. 0 means the stated term has ALREADY ended and is valid with any balance. From 1 up, balance must be clearable within the stated term.\n- min_payment_order: OPTIONAL on every type. Values: 1 or more; breaks a tie only between segments sharing both the same current APR and the same installment-plan status.\n- extra_payment_order: OPTIONAL on every type. Values: 0 or more; 0 means skip. Breaks a tie only between segments sharing the exact same current APR.\n- merchant_name: OPTIONAL on installment_plan; IGNORED on purchase, cash_advance, balance_transfer, promotional. Values: 120 characters or fewer.\n- monthly_spend: OPTIONAL on purchase; REJECTED on cash_advance, balance_transfer, promotional, installment_plan. Values: $0 to $50,000 per month. A negative value is rejected as NEGATIVE_BALANCE on every type, purchase included. On every type other than purchase a POSITIVE value is rejected with FIELD_NOT_ALLOWED_HERE; an explicit 0 is accepted.\n- stop_spend_month: OPTIONAL on purchase; IGNORED on cash_advance, balance_transfer, promotional, installment_plan. Values: 0 or more; range checked on every type, read only on purchase.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "balance"
+        ],
+        "type": "object"
+       },
+       "type": [
+        "array",
+        "null"
+       ]
+      },
+      "stop_spend_month": {
+       "description": "Month index at which this card's recurring spend stops, 0 or more. Optional; omit to spend for the whole projection.",
+       "type": [
+        "integer",
+        "null"
+       ]
+      }
+     },
+     "type": "object"
+    },
+    "maxItems": 20,
+    "type": "array"
+   },
+   "chart_title": {
+    "default": null,
+    "description": "Override for the chart title. Optional; must not contain an em dash or en dash. Max 120 characters.",
+    "maxLength": 120,
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "extra_monthly_payment": {
+    "default": null,
+    "description": "Extra monthly payment in dollars, $0 to $1,000,000,000, applied on top of the required minimums. Optional; defaults to 0 when omitted.",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "fixed_payments": {
+    "default": null,
+    "description": "Whether to hold each card's payment constant for the whole payoff. Optional; defaults to false when omitted. When true, each card's payment is locked at max(cards[].minimum_payment, that card's issuer minimum computed at month 1), and the total monthly budget (those locked amounts plus extra_monthly_payment) is held constant for the whole payoff, so once a card is paid off its freed-up payment rolls forward onto the remaining cards. This is the ONLY mode in which cards[].minimum_payment affects calculate_cc_payoff's result; compare_payoff_strategies has no fixed_payments parameter and binds minimum_payment on both of its strategy arms regardless.",
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "full_schedule": {
+    "default": null,
+    "description": "Whether to return the full per-card month-by-month schedule. Optional; defaults to false when omitted. The per-card monthly_schedule is capped at 1000 rows total across cards and months, so later months are omitted on a long multi-card payoff; the portfolio-level monthly_totals series is always complete and is the one to read for the whole timeline.",
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "include_card_timeline": {
+    "default": null,
+    "description": "Whether to add the card_timeline block, a per-card view of when each card clears. Optional; defaults to false when omitted.",
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "output": {
+    "description": "Valid values: 'summary' (default), 'inline'. summary returns a compact response with a data_preview block; inline returns the full payload.",
+    "enum": [
+     "summary",
+     "inline",
+     null
+    ],
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "per_segment": {
+    "default": null,
+    "description": "Whether each schedule row carries its per-segment breakdown. Optional; defaults to true when omitted.",
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "strategy": {
+    "default": null,
+    "description": "Payoff order: 'avalanche' pays the highest APR first, 'snowball' the smallest balance first. Optional; defaults to 'avalanche' when omitted. Matched case-insensitively, and the response echoes the canonical lowercase form actually simulated.",
+    "enum": [
+     "avalanche",
+     "snowball",
+     null
+    ],
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "windfalls": {
+    "default": null,
+    "description": "One-time principal payments, at most 12, e.g. a tax refund or a year-end bonus. Optional; a JSON null is treated as omitted. When non-empty the response gains baseline, with_windfalls, months_saved_vs_baseline, interest_saved_vs_baseline, windfalls_applied[] and windfalls_unused[]; an empty array returns the same shape as omitting it.",
+    "items": {
+     "properties": {
+      "amount": {
+       "description": "Dollar amount of the windfall, greater than 0. Required per entry.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "label": {
+       "description": "Optional label for this windfall, e.g. 'Tax refund' or 'Year-end bonus'. Max 120 characters.",
+       "maxLength": 120,
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "month": {
+       "description": "Month index the windfall is applied, 0 or more. 0 means applied before month 1's interest; N >= 1 applies at the end of calendar month N. Required per entry.",
+       "type": [
+        "integer",
+        "null"
+       ]
+      }
+     },
+     "type": [
+      "object",
+      "null"
+     ]
+    },
+    "maxItems": 12,
+    "type": [
+     "array",
+     "null"
+    ]
+   }
+  },
+  "required": [
+   "cards"
+  ],
+  "type": "object"
+ },
+ "name": "calculate_cc_payoff",
+ "title": "Credit Card Payoff Calculator"
+}
