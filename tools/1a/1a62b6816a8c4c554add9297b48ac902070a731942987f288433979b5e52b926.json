@@ -1,0 +1,163 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Import Portfolio Holdings"
+ },
+ "description": "Store the structured holdings explicitly entered by the user in their FinBridge portfolio. Uploaded files, screenshots, chat history and extracted file content are not supported sources for this connector. Accepts listed stocks (KR/US/TW/JP) as well as cash, crypto (BTC etc.) and physical assets (gold): stocks are matched against the database, crypto and gold (PAXG) get live ccxt quotes, cash and physical assets are stored at the given value. For ETFs or foreign products not in the database, pass value directly. If the user specifies an asset class, pass asset_class as well (cash|bond|physical|growth|dividend|crypto|other; Korean labels \ud604\uae08|\ucc44\uad8c|\ud604\ubb3c|\uc131\uc7a5\uc8fc|\ubc30\ub2f9\uc8fc|\uac00\uc0c1\uc790\uc0b0|\uae30\ud0c0 are accepted). Registered listed stocks are also added to the watchlist automatically. Use when: the user explicitly enters what they hold and wants it stored for get_portfolio. There is no per-holding edit or delete tool: to change or remove holdings, re-import the complete corrected list with replace=true (replace=false only adds/updates the rows given). Not this tool for: the watchlist (manage_watchlist \u2014 companies followed, no quantities), valuing a company (get_valuation), or reading what is already stored (get_portfolio).\n\nIMPORTANT \u2014 read the response before telling the user you are done:\n1. Confirmation gate: if the user already has a stored portfolio, this call returns `preview:true` with a `changes` diff (added/removed/changed) and does NOT save anything, unless you pass confirm=true. Show the diff to the user \u2014 call out `changes.removed` especially: if the submission was only part of their holdings, those positions will look fully sold. Only pass confirm=true after the user has seen and accepted the diff (skip this if `get_portfolio` was empty to begin with \u2014 there is nothing to compare against).\n2. Missing fields: each saved row reports `missing_fields` (commonly `acquired_on`, since brokerage statements rarely include it) and unresolved symbols appear in `needs_input` \u2014 ambiguous names/codes list `candidates` (do not guess one), unmatched symbols need a ticker/code or a `value`. Rows with missing fields ARE saved (never block on incompleteness) \u2014 ask the user for the missing pieces and call this tool again for just those rows to fill them in.\n3. Cash: check the `cash` field. If `status` is `not_asked`, the stored portfolio has no cash balance on file (this is different from a confirmed zero) \u2014 ask the user for their cash balance (amount or % of the portfolio) and its currency, then import it as one more holding: `{symbol:'\ud604\uae08', value, currency, asset_class:'\ud604\uae08'}`. Without it, equity weights in get_portfolio are overstated.\n4. Always show the user the per-row summary (name/qty/avg_price recognized) before treating the import as authoritative \u2014 a misread quantity produces a wrong return. If something was saved wrong, undo it with restore_portfolio_snapshot (defaults to the snapshot right before this one).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "confirm": {
+    "description": "Set true to apply after the user has reviewed the `changes` preview from a prior call with the same holdings/replace. Required whenever a portfolio already exists and this submission would change it; not needed for a first import into an empty portfolio.",
+    "type": "boolean"
+   },
+   "holdings": {
+    "description": "Structured holdings entered by the user. Each item accepts exactly: symbol (required), qty, avg_price, return_pct, asset_class, currency, value, acquired_on, price_symbol, unit, price_scale. Other keys (e.g. quantity, cost, price, shares) are rejected with an error naming the key \u2014 map them to qty / avg_price / value before calling.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "acquired_on": {
+       "description": "Purchase date (YYYY-MM-DD), if the user gave one. Brokerage statements usually omit this \u2014 it is fine to leave it out and ask later.",
+       "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+       "type": "string"
+      },
+      "asset_class": {
+       "description": "Asset class supplied by the user. Values are stored codes: \ud604\uae08 (cash) | \ucc44\uad8c (bonds) | \ud604\ubb3c (commodities) | \uc131\uc7a5\uc8fc (growth equity) | \ubc30\ub2f9\uc8fc (dividend equity) | \uac00\uc0c1\uc790\uc0b0 (crypto) | \uae30\ud0c0 (other).",
+       "type": "string"
+      },
+      "avg_price": {
+       "description": "Average purchase price supplied by the user",
+       "type": "number"
+      },
+      "currency": {
+       "description": "Display currency. Defaults to USD for crypto and US tickers, KRW otherwise. Always ask when cash is mixed KRW/USD.",
+       "enum": [
+        "KRW",
+        "USD"
+       ],
+       "type": "string"
+      },
+      "price_scale": {
+       "description": "Explicit price conversion factor; takes precedence over `unit`. For a dividend-reinvesting token (TLTON) tracked against the real ETF: real price / token price.",
+       "exclusiveMinimum": 0,
+       "type": "number"
+      },
+      "price_symbol": {
+       "description": "Symbol to price this holding with, when it differs from `symbol`. An 'exchange:symbol' prefix is allowed (spot gold -> 'PAXG', TLT -> 'gateio:TLTON'). Omit to look it up from `symbol`.",
+       "type": "string"
+      },
+      "qty": {
+       "description": "Quantity explicitly supplied by the user. Fractions are allowed (crypto).",
+       "type": "number"
+      },
+      "return_pct": {
+       "description": "Reference return % supplied by the user",
+       "type": "number"
+      },
+      "symbol": {
+       "description": "Stock code, ticker, company name or asset name \u2014 e.g. '005930', 'AAPL', '\uc0bc\uc131\uc804\uc790', 'BTC', 'TLT', '\ud604\uae08' (cash), '\uae08(\ud604\ubb3c)' (spot gold)",
+       "type": "string"
+      },
+      "unit": {
+       "description": "Unit the quantity is in. Use 'g' when pricing a gram holding with a per-ounce symbol such as PAXG (the price is scaled by 1/31.1035).",
+       "enum": [
+        "g",
+        "oz"
+       ],
+       "type": "string"
+      },
+      "value": {
+       "description": "Market value \u2014 use this for cash and for anything we cannot attach a price to",
+       "type": "number"
+      }
+     },
+     "required": [
+      "symbol"
+     ],
+     "type": "object"
+    },
+    "maxItems": 60,
+    "minItems": 1,
+    "type": "array"
+   },
+   "replace": {
+    "description": "true = wipe the existing portfolio (stocks + assets) and replace it; default false = merge",
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "holdings"
+  ],
+  "type": "object"
+ },
+ "name": "import_portfolio",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "cash": {
+    "additionalProperties": true,
+    "properties": {},
+    "type": "object"
+   },
+   "changes": {
+    "additionalProperties": true,
+    "properties": {},
+    "type": "object"
+   },
+   "error": {
+    "type": "string"
+   },
+   "holdings": {
+    "items": {
+     "additionalProperties": true,
+     "properties": {},
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "imported": {
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "needs_input": {
+    "items": {
+     "additionalProperties": true,
+     "properties": {},
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "notes": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "preview": {
+    "type": "boolean"
+   },
+   "snapshot": {
+    "additionalProperties": true,
+    "properties": {},
+    "type": "object"
+   },
+   "unmatched": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Import Portfolio Holdings"
+}
