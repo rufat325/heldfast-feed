@@ -1,8 +1,8 @@
 # MCP server tool changes
 
-Last change observed 2026-09-27T12:12:20+00:00. Built by `research/feed/watch.py` on the `main` branch. Watching 9409 npm servers from the official MCP registry (154 daily, the rest weekly) and 18576 hosted endpoints (daily).
+Last change observed 2026-09-27T12:32:26+00:00. Built by `research/feed/watch.py` on the `main` branch. Watching 9409 npm servers from the official MCP registry (154 daily, the rest weekly) and 18576 hosted endpoints (daily).
 
-11861 changes to a tool definition: 342 npm releases (96 observed live, 246 from the [churn study](https://github.com/rufat325/heldfast/blob/main/docs/CHURN.md)) and 11519 readings of hosted servers that found their tools changed; 8 where `heldfast wrap --drift graded` would refuse something. [Per operator, and by kind of change](#per-operator).
+11871 changes to a tool definition: 342 npm releases (96 observed live, 246 from the [churn study](https://github.com/rufat325/heldfast/blob/main/docs/CHURN.md)) and 11529 readings of hosted servers that found their tools changed; 9 where `heldfast wrap --drift graded` would refuse something. [Per operator, and by kind of change](#per-operator).
 
 Subscribe: [feed.xml](feed.xml) (Atom) or [feed.json](feed.json). Every event, with the words that moved: [events/](events).
 
@@ -12,6 +12,16 @@ Each day's commit is anchored in Bitcoin with OpenTimestamps: [checkpoints/](che
 
 | published | server | release | tools | grade |
 |---|---|---|---|---|
+| 2026-09-27 | `remote/se.sistaminuten/travel-search` | 2026-09-27T120949381978 -> 2026-09-27T123227188781 | 1 changed | quiet |
+| 2026-09-27 | `remote/no.restplass/travel-search` | 2026-09-27T121157865593 -> 2026-09-27T123151936152 | 1 changed | quiet |
+| 2026-09-27 | `remote/dk.afbudsrejser/travel-search` | 2026-09-27T121139321284 -> 2026-09-27T123133238824 | 1 changed | quiet |
+| 2026-09-27 | `remote/io.github.rccola990-cloud/x402-agent-store` | 2026-09-27T055156362632 -> 2026-09-27T123047177343 | 15 changed | review |
+| 2026-09-27 | `remote/fi.akkilahdot/travel-search` | 2026-09-27T121222018818 -> 2026-09-27T123025860978 | 1 changed | quiet |
+| 2026-09-27 | `remote/app.sallim/korea-realty` | 2026-09-27T121011898111 -> 2026-09-27T123008016036 | 1 changed | quiet |
+| 2026-09-27 | `remote/io.github.socialloopai/socialloop-mcp.1` | 2026-09-27T121126621324 -> 2026-09-27T122921057598 | 1 changed | quiet |
+| 2026-09-27 | `remote/com.hireahelper/mcp` | 2026-09-27T072522159081 -> 2026-09-27T122641790473 | 16 added | quiet |
+| 2026-09-27 | `remote/cloud.theprotocol/registry` | 2026-09-24T115815768089 -> 2026-09-27T122338300072 | 32 changed | quiet |
+| 2026-09-27 | `remote/app.agentbit/mcp` | 2026-09-27T110202291568 -> 2026-09-27T122001056872 | 1 changed | quiet |
 | 2026-09-27 | `remote/fi.akkilahdot/travel-search` | 2026-09-27T114538656141 -> 2026-09-27T121222018818 | 1 changed | quiet |
 | 2026-09-27 | `remote/no.restplass/travel-search` | 2026-09-27T113235843857 -> 2026-09-27T121157865593 | 1 changed | quiet |
 | 2026-09-27 | `remote/dk.afbudsrejser/travel-search` | 2026-09-27T113217089744 -> 2026-09-27T121139321284 | 1 changed | quiet |
@@ -62,20 +72,10 @@ Each day's commit is anchored in Bitcoin with OpenTimestamps: [checkpoints/](che
 | 2026-09-27 | `remote/io.github.toshihiroshishido/revenuescope-mcp` | 2026-09-27T070104507147 -> 2026-09-27T110858802819 | 4 changed, 1 added | quiet |
 | 2026-09-27 | `remote/io.companygraph/mental-model` | 2026-09-27T103433449815 -> 2026-09-27T110746651162 | 1 changed | quiet |
 | 2026-09-27 | `remote/ch.blust/mental-model` | 2026-09-27T105035462810 -> 2026-09-27T110740919168 | 1 changed | quiet |
-| 2026-09-27 | `remote/io.github.si-imtiaz/leadquasar` | 2026-09-27T104954171157 -> 2026-09-27T110715646848 | 2 changed | quiet |
-| 2026-09-27 | `remote/com.thisisdelightful/games-research-starter-pack` | 2026-09-25T120159846589 -> 2026-09-27T110608783713 | 1 changed | quiet |
-| 2026-09-27 | `remote/io.datascoop/datascoop` | 2026-09-23T162358919503 -> 2026-09-27T110507118478 | 1 changed | quiet |
-| 2026-09-27 | `remote/com.googleapis.compute/mcp` | 2026-09-27T071810536729 -> 2026-09-27T110451807745 | 10 changed | quiet |
-| 2026-09-27 | `remote/io.github.closelookventure/closelook-intelligence` | 2026-09-23T160325816552 -> 2026-09-27T110450557433 | 26 changed (every tool) | quiet |
-| 2026-09-27 | `remote/io.github.odaiin/assetfare-bridge` | 2026-09-27T102931328860 -> 2026-09-27T110246925232 | 2 changed | quiet |
-| 2026-09-27 | `remote/build.exascale/osint` | 2026-09-23T162208031579 -> 2026-09-27T110225260588 | 1 changed, 2 added | quiet |
-| 2026-09-27 | `remote/io.github.odaiin/assetfare` | 2026-09-27T102929299656 -> 2026-09-27T110219700960 | 2 changed | quiet |
-| 2026-09-27 | `remote/app.agentbit/mcp` | 2026-09-27T103005104995 -> 2026-09-27T110202291568 | 1 changed | quiet |
-| 2026-09-27 | `remote/io.github.onetapstudiogames/1f3d9` | 2026-09-26T113236768415 -> 2026-09-27T110038637995 | 1 changed | quiet |
 
 ## Per operator
 
-A few operators account for most of the changes, and many changes move only a number or an order: 8701 substantive, 3087 that changed only numbers (a catalogue counter ticking, a date), 73 that only reordered a list. A number can still matter -- a price is one -- so this sorts the count, it excuses nothing. Grouped by hosted servers by registrable domain under the Public Suffix List (2026-09-24_13-26-36_UTC), private section included; npm servers by package. Approximate: it merges different customers of one host the list does not name, and splits an operator who uses several domains. Every event: [stats.json](stats.json).
+A few operators account for most of the changes, and many changes move only a number or an order: 8706 substantive, 3088 that changed only numbers (a catalogue counter ticking, a date), 77 that only reordered a list. A number can still matter -- a price is one -- so this sorts the count, it excuses nothing. Grouped by hosted servers by registrable domain under the Public Suffix List (2026-09-24_13-26-36_UTC), private section included; npm servers by package. Approximate: it merges different customers of one host the list does not name, and splits an operator who uses several domains. Every event: [stats.json](stats.json).
 
 | operator | changes | substantive | numbers only | reordered only |
 |---|---|---|---|---|
@@ -84,11 +84,11 @@ A few operators account for most of the changes, and many changes move only a nu
 | `a2awire.com` | 424 | 424 | 0 | 0 |
 | `caseyjhand.com` | 55 | 55 | 0 | 0 |
 | `daedalmap.com` | 47 | 47 | 0 | 0 |
-| `sistaminuten.se` | 20 | 2 | 0 | 18 |
-| `afbudsrejser.dk` | 19 | 2 | 0 | 17 |
-| `akkilahdot.fi` | 19 | 2 | 0 | 17 |
-| `restplass.no` | 19 | 2 | 0 | 17 |
-| `socialloop.ai` | 19 | 19 | 0 | 0 |
+| `sistaminuten.se` | 21 | 2 | 0 | 19 |
+| `afbudsrejser.dk` | 20 | 2 | 0 | 18 |
+| `akkilahdot.fi` | 20 | 2 | 0 | 18 |
+| `restplass.no` | 20 | 2 | 0 | 18 |
+| `socialloop.ai` | 20 | 20 | 0 | 0 |
 | `assetfare.dev` | 18 | 18 | 0 | 0 |
 | `dayze.com` | 18 | 18 | 0 | 0 |
-| 924 other operators | 1866 | 1750 | 112 | 4 |
+| 924 other operators | 1871 | 1754 | 113 | 4 |
