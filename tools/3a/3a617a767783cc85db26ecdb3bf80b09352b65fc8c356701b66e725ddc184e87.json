@@ -1,0 +1,182 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Editing quantification across a plate (one control, many wells)"
+ },
+ "description": "Quantify a whole plate of edited samples against ONE untreated control trace and return a single sortable table \u2014 the plate-scale form of sanger_indel_spectrum, base_edit_quant and sanger_knockin_quant, chosen with `mode`. Each sample gives one row keyed by its id, carrying the headline number for that mode (edited fraction / editing at the target base / intended knock-in percentage), the fit-quality numbers behind it (R\u00b2, or the background n and noise floor for base mode), and fitAdequate \u2014 the single-sample tool's own gate verdict on that row, so the plate cannot drift from the per-well answer. Failure is isolated per well: a sample whose read is short, mismatched or unfittable becomes a failed ROW with its error message and the other 95 still come back, while an error about the control trace, the mode or the work ceilings throws, because it is wrong for every row. Duplicate sample ids are suffixed (against the whole plate, so the suffix never lands on another well's name) rather than merged. Arguments are strict: an argument belonging to another mode, an unknown argument, an out-of-range limit, and an `offset` override (which is a property of one pair of reads, not of a plate) are all rejected rather than ignored or clamped, because at plate scale a substituted setting rewrites every row identically and nothing in the table looks odd. Returns the rows in input order, a tally, and a CSV. Comparing two wells' percentages is only meaningful when both rows are fitAdequate, which is why the plate summary is computed over those rows alone. PREDICTED, NOT MEASURED. None is published for this implementation, and being a batch does not soften that: each row is exactly the claim the corresponding single-sample tool makes. What every row instead reports is what it rests on \u2014 R\u00b2 for the indel and knock-in modes, the background n, sd and noise floor for base mode \u2014 plus fitAdequate, which is the single-sample tool's OWN gate verdict on that row rather than a threshold re-invented here. Recovery of known synthetic mixtures is deliberately NOT offered as validation: it tests the arithmetic and the plate plumbing, not whether the model fits a real capillary trace, and for a knock-in with novel inserted bases it is circular, because a synthetic trace is built from the same idealised peaks the basis assumes. Quoting it would be the mistake rbs_predict made when it shipped a calibration residual as held-out skill. Valid for: One control read and a set of edited reads that are all the SAME amplicon, chemistry and primer as that control, with each read extending well past the edit site. COMPARING TWO WELLS' PERCENTAGES IS ONLY MEANINGFUL WHEN BOTH ROWS ARE fitAdequate: a percentage from a badly fitting well is not a smaller number than one from a well that fitted, it is a different kind of statement, and the plate summary here is therefore computed over the adequate rows only. Ranking wells also assumes they differ only in the variable under test \u2014 the same control is subtracted from all of them, so a well whose read started 30 bases later or whose reaction was dirty carries that difference into its number. Mode-specific limits carry over unchanged: indel mode is blind to substitutions, base mode is blind to indels and its percentages run low by roughly the crosstalk fraction, and knock-in mode cannot separate an intended pure deletion from an NHEJ deletion of the same length at the same site.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "altAllele": {
+    "description": "knockin mode: the bases installed in their place.",
+    "residues": "nt",
+    "type": "string"
+   },
+   "controlBases": {
+    "description": "Base calls of the ONE untreated control read (raw or FASTA).",
+    "residues": "nt",
+    "type": "string"
+   },
+   "controlChannels": {
+    "description": "Per-base [A, C, G, T] intensities of the control read, one row per called base, read at that base's peak location (trace arrays are indexed by scan, not by base). Raw peak heights: every intensity must be >= 0, because negatives are clamped to zero during normalization and a baseline-subtracted trace would silently lose its minor peaks and read as unedited.",
+    "items": {
+     "items": {
+      "minimum": 0,
+      "type": "number"
+     },
+     "type": "array"
+    },
+    "maxItems": 3000,
+    "type": "array"
+   },
+   "cutPosition": {
+    "description": "indel mode (required): 1-based position of the expected cut, in CONTROL read coordinates. knockin mode (optional): 1-based CONTROL position where UNINTENDED indels start \u2014 the nuclease cut or the PE nick; defaults to the edit start.",
+    "type": "number"
+   },
+   "deletedLength": {
+    "description": "knockin mode: how many bases are deleted (deletion only).",
+    "type": "number"
+   },
+   "editKind": {
+    "description": "knockin mode (required): shape of the intended edit. \"substitution\" replaces bases one for one; \"insertion\" adds novel bases and replaces none; \"deletion\" removes bases and adds none; \"replacement\" is the general case where the lengths differ.",
+    "enum": [
+     "substitution",
+     "insertion",
+     "deletion",
+     "replacement"
+    ],
+    "type": "string"
+   },
+   "editPosition": {
+    "description": "knockin mode (required): 1-based CONTROL position of the first base the edit replaces. An insertion replaces nothing, so there it is the base the insert lands immediately BEFORE \u2014 one MORE than the VCF/HGVS anchor.",
+    "type": "number"
+   },
+   "editor": {
+    "description": "base mode: base editor id (be3, be4max, abe7.10, abe8e) \u2014 fixes the converted bases and the activity window in protospacer coordinates. Requires \"protospacer\". Mutually exclusive with windowStart/windowEnd/from/to.",
+    "enum": [
+     "be3",
+     "be4max",
+     "abe7.10",
+     "abe8e"
+    ],
+    "type": "string"
+   },
+   "from": {
+    "description": "base mode: the base the editor converts, as READ on the control strand.",
+    "residues": "nt",
+    "type": "string"
+   },
+   "guard": {
+    "default": 3,
+    "description": "indel mode: bases skipped immediately after the cut, where the trace is least reliable. A whole number >= 0; a negative value is rejected, not clamped to 0.",
+    "type": "number"
+   },
+   "insertedSeq": {
+    "description": "knockin mode: the novel bases inserted (insertion only).",
+    "residues": "nt",
+    "type": "string"
+   },
+   "maxIndel": {
+    "default": 10,
+    "description": "indel and knockin modes: largest indel to fit, in bp \u2014 a whole number, 1-20. Out of range is rejected, not clamped.",
+    "type": "number"
+   },
+   "mode": {
+    "description": "Which quantifier to run on every well. \"indel\" = sanger_indel_spectrum (NHEJ efficiency and the indel spectrum; needs cutPosition; blind to substitutions). \"base\" = base_edit_quant (CBE/ABE conversion; needs an editor id + protospacer, or an explicit window with from/to; blind to indels). \"knockin\" = sanger_knockin_quant (a specific intended edit against its byproducts; needs editKind + editPosition). Arguments belonging to another mode are rejected, not ignored.",
+    "enum": [
+     "indel",
+     "base",
+     "knockin"
+    ],
+    "type": "string"
+   },
+   "protospacer": {
+    "description": "base mode: the 20-nt spacer, located in the CONTROL read (either strand; must match exactly once).",
+    "residues": "nt",
+    "type": "string"
+   },
+   "refAllele": {
+    "description": "knockin mode: the control bases the edit replaces (substitution and replacement). Checked against the control read once, before any well is fitted.",
+    "residues": "nt",
+    "type": "string"
+   },
+   "samples": {
+    "description": "The plate's edited wells, in the order you want them tabulated. Up to 384 samples (96 is the natural plate) and 400,000 trace positions across the whole call, control included \u2014 that is already an 8-10 MB request body, so split a plate of untrimmed reads rather than sending one call.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "bases": {
+       "description": "Base calls of this well's read (raw or FASTA).",
+       "type": "string"
+      },
+      "channels": {
+       "description": "Per-base [A, C, G, T] intensities for this well, same convention as the control, and non-negative for the same reason.",
+       "items": {
+        "items": {
+         "minimum": 0,
+         "type": "number"
+        },
+        "type": "array"
+       },
+       "type": "array"
+      },
+      "id": {
+       "description": "Well or sample name \u2014 this keys the row. A number is tolerated and read as its digits. Duplicates are suffixed (\"A01#2\", stepping past any name already in use), never merged; an empty or absent id becomes sample_<n>.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "bases",
+      "channels"
+     ],
+     "type": "object"
+    },
+    "maxItems": 384,
+    "type": "array"
+   },
+   "targetPosition": {
+    "description": "base mode: 1-based CONTROL position of the intended edit. Give it for a plate. Without it each well's headline is its OWN most-edited significant position, so two rows can be reporting two different bases and the column is not one measurement.",
+    "type": "number"
+   },
+   "targetProtospacerPosition": {
+    "description": "base mode: 1-based protospacer position of the intended edit (PAM-distal = 1). Editor mode only.",
+    "type": "number"
+   },
+   "to": {
+    "description": "base mode: the base it converts to, as READ on the control strand.",
+    "residues": "nt",
+    "type": "string"
+   },
+   "windowEnd": {
+    "description": "base mode: explicit window end, 1-based inclusive. Window length is capped at 40.",
+    "type": "number"
+   },
+   "windowLength": {
+    "default": 70,
+    "description": "indel and knockin modes: bases downstream used for the decomposition \u2014 a whole number, 20-300. Out of range is rejected, not clamped.",
+    "type": "number"
+   },
+   "windowStart": {
+    "description": "base mode: explicit window start, 1-based in CONTROL coordinates. Requires windowEnd, from and to.",
+    "type": "number"
+   },
+   "zThreshold": {
+    "default": 3,
+    "description": "base mode: significance threshold in standard deviations of each well's own background (1-10; out of range is rejected, not clamped). Raising it raises the reported noise floor with it.",
+    "type": "number"
+   }
+  },
+  "required": [
+   "mode",
+   "controlBases",
+   "controlChannels",
+   "samples"
+  ],
+  "type": "object"
+ },
+ "name": "editing_plate_quantify",
+ "title": "Editing quantification across a plate (one control, many wells)"
+}
