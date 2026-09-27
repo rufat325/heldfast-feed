@@ -1,8 +1,8 @@
 # MCP server tool changes
 
-Last change observed 2026-09-27T13:30:38+00:00. Built by `research/feed/watch.py` on the `main` branch. Watching 9409 npm servers from the official MCP registry (154 daily, the rest weekly) and 18576 hosted endpoints (daily).
+Last change observed 2026-09-27T13:53:17+00:00. Built by `research/feed/watch.py` on the `main` branch. Watching 9409 npm servers from the official MCP registry (154 daily, the rest weekly) and 18576 hosted endpoints (daily).
 
-11917 changes to a tool definition: 344 npm releases (98 observed live, 246 from the [churn study](https://github.com/rufat325/heldfast/blob/main/docs/CHURN.md)) and 11573 readings of hosted servers that found their tools changed; 13 where `heldfast wrap --drift graded` would refuse something. [Per operator, and by kind of change](#per-operator).
+11932 changes to a tool definition: 344 npm releases (98 observed live, 246 from the [churn study](https://github.com/rufat325/heldfast/blob/main/docs/CHURN.md)) and 11588 readings of hosted servers that found their tools changed; 14 where `heldfast wrap --drift graded` would refuse something. [Per operator, and by kind of change](#per-operator).
 
 Subscribe: [feed.xml](feed.xml) (Atom) or [feed.json](feed.json). Every event, with the words that moved: [events/](events).
 
@@ -12,6 +12,21 @@ Each day's commit is anchored in Bitcoin with OpenTimestamps: [checkpoints/](che
 
 | published | server | release | tools | grade |
 |---|---|---|---|---|
+| 2026-09-27 | `remote/se.sistaminuten/travel-search` | 2026-09-27T133039319428 -> 2026-09-27T135318591309 | 1 changed | quiet |
+| 2026-09-27 | `remote/fi.akkilahdot/travel-search` | 2026-09-27T133028597521 -> 2026-09-27T135304183076 | 1 changed | quiet |
+| 2026-09-27 | `remote/no.restplass/travel-search` | 2026-09-27T133036233122 -> 2026-09-27T135246196721 | 1 changed | quiet |
+| 2026-09-27 | `remote/dk.afbudsrejser/travel-search` | 2026-09-27T133019734356 -> 2026-09-27T135225833754 | 1 changed | quiet |
+| 2026-09-27 | `remote/io.github.socialloopai/socialloop-mcp.1` | 2026-09-27T132946275936 -> 2026-09-27T135221095547 | 1 changed | quiet |
+| 2026-09-27 | `remote/com.plainfreight/quotes` | 2026-09-27T131029209670 -> 2026-09-27T135130876555 | 1 changed, 2 added | quiet |
+| 2026-09-27 | `remote/com.handsforagents/hands` | 2026-09-27T105101970572 -> 2026-09-27T134951805436 | 1 changed | quiet |
+| 2026-09-27 | `remote/com.shotpulled/shotpulled` | 2026-09-27T065735485706 -> 2026-09-27T134941206292 | 4 changed | quiet |
+| 2026-09-27 | `remote/app.apiguru/amazon-data` | 2026-09-23T160640955921 -> 2026-09-27T134852961420 | 10 changed | review |
+| 2026-09-27 | `remote/net.isitdns/isitdns` | 2026-09-27T072321809023 -> 2026-09-27T134814565652 | 1 changed | quiet |
+| 2026-09-27 | `remote/io.github.tettertotter/fundinglandscape` | 2026-09-27T130553572341 -> 2026-09-27T134704635186 | 2 changed | quiet |
+| 2026-09-27 | `remote/com.dayze/life-context.1` | 2026-09-27T103211717320 -> 2026-09-27T134635419672 | 1 changed, 1 added | quiet |
+| 2026-09-27 | `remote/com.dayze/life-context` | 2026-09-27T103211955779 -> 2026-09-27T134635037313 | 1 changed, 1 added | quiet |
+| 2026-09-27 | `remote/app.agentbit/mcp` | 2026-09-27T130217907053 -> 2026-09-27T134327015148 | 1 changed | quiet |
+| 2026-09-27 | `remote/io.github.davidmosiah/delx-protocol` | 2026-09-27T065128231820 -> 2026-09-27T134318028030 | 12 changed | quiet |
 | 2026-09-27 | `remote/se.sistaminuten/travel-search` | 2026-09-27T131221333188 -> 2026-09-27T133039319428 | 1 changed | quiet |
 | 2026-09-27 | `remote/no.restplass/travel-search` | 2026-09-27T131150197887 -> 2026-09-27T133036233122 | 1 changed | quiet |
 | 2026-09-27 | `remote/fi.akkilahdot/travel-search` | 2026-09-27T131235426008 -> 2026-09-27T133028597521 | 1 changed | quiet |
@@ -57,25 +72,10 @@ Each day's commit is anchored in Bitcoin with OpenTimestamps: [checkpoints/](che
 | 2026-09-27 | `remote/xyz.apexfaucet/apex-x1` | 2026-09-27T055141203693 -> 2026-09-27T123951923734 | 10 added | review |
 | 2026-09-27 | `remote/app.agentbit/mcp` | 2026-09-27T122001056872 -> 2026-09-27T123930336384 | 1 changed | quiet |
 | 2026-09-27 | `umtri-mcp` | 1.3.2 -> 1.3.3 | 1 changed | quiet |
-| 2026-09-27 | `remote/se.sistaminuten/travel-search` | 2026-09-27T120949381978 -> 2026-09-27T123227188781 | 1 changed | quiet |
-| 2026-09-27 | `remote/no.restplass/travel-search` | 2026-09-27T121157865593 -> 2026-09-27T123151936152 | 1 changed | quiet |
-| 2026-09-27 | `remote/dk.afbudsrejser/travel-search` | 2026-09-27T121139321284 -> 2026-09-27T123133238824 | 1 changed | quiet |
-| 2026-09-27 | `remote/io.github.rccola990-cloud/x402-agent-store` | 2026-09-27T055156362632 -> 2026-09-27T123047177343 | 15 changed | review |
-| 2026-09-27 | `remote/fi.akkilahdot/travel-search` | 2026-09-27T121222018818 -> 2026-09-27T123025860978 | 1 changed | quiet |
-| 2026-09-27 | `remote/app.sallim/korea-realty` | 2026-09-27T121011898111 -> 2026-09-27T123008016036 | 1 changed | quiet |
-| 2026-09-27 | `remote/io.github.socialloopai/socialloop-mcp.1` | 2026-09-27T121126621324 -> 2026-09-27T122921057598 | 1 changed | quiet |
-| 2026-09-27 | `remote/com.hireahelper/mcp` | 2026-09-27T072522159081 -> 2026-09-27T122641790473 | 16 added | quiet |
-| 2026-09-27 | `parseapi-mcp` | 1.7.0 -> 1.7.1 | 70 changed (every tool) | quiet |
-| 2026-09-27 | `remote/cloud.theprotocol/registry` | 2026-09-24T115815768089 -> 2026-09-27T122338300072 | 32 changed | quiet |
-| 2026-09-27 | `remote/app.agentbit/mcp` | 2026-09-27T110202291568 -> 2026-09-27T122001056872 | 1 changed | quiet |
-| 2026-09-27 | `remote/fi.akkilahdot/travel-search` | 2026-09-27T114538656141 -> 2026-09-27T121222018818 | 1 changed | quiet |
-| 2026-09-27 | `remote/no.restplass/travel-search` | 2026-09-27T113235843857 -> 2026-09-27T121157865593 | 1 changed | quiet |
-| 2026-09-27 | `remote/dk.afbudsrejser/travel-search` | 2026-09-27T113217089744 -> 2026-09-27T121139321284 | 1 changed | quiet |
-| 2026-09-27 | `remote/io.github.socialloopai/socialloop-mcp.1` | 2026-09-27T114445125418 -> 2026-09-27T121126621324 | 1 changed | quiet |
 
 ## Per operator
 
-A few operators account for most of the changes, and many changes move only a number or an order: 8737 substantive, 3091 that changed only numbers (a catalogue counter ticking, a date), 89 that only reordered a list. A number can still matter -- a price is one -- so this sorts the count, it excuses nothing. Grouped by hosted servers by registrable domain under the Public Suffix List (2026-09-24_13-26-36_UTC), private section included; npm servers by package. Approximate: it merges different customers of one host the list does not name, and splits an operator who uses several domains. Every event: [stats.json](stats.json).
+A few operators account for most of the changes, and many changes move only a number or an order: 8747 substantive, 3092 that changed only numbers (a catalogue counter ticking, a date), 93 that only reordered a list. A number can still matter -- a price is one -- so this sorts the count, it excuses nothing. Grouped by hosted servers by registrable domain under the Public Suffix List (2026-09-24_13-26-36_UTC), private section included; npm servers by package. Approximate: it merges different customers of one host the list does not name, and splits an operator who uses several domains. Every event: [stats.json](stats.json).
 
 | operator | changes | substantive | numbers only | reordered only |
 |---|---|---|---|---|
@@ -84,11 +84,11 @@ A few operators account for most of the changes, and many changes move only a nu
 | `a2awire.com` | 424 | 424 | 0 | 0 |
 | `caseyjhand.com` | 55 | 55 | 0 | 0 |
 | `daedalmap.com` | 47 | 47 | 0 | 0 |
-| `sistaminuten.se` | 24 | 2 | 0 | 22 |
-| `afbudsrejser.dk` | 23 | 2 | 0 | 21 |
-| `akkilahdot.fi` | 23 | 2 | 0 | 21 |
-| `restplass.no` | 23 | 2 | 0 | 21 |
-| `socialloop.ai` | 23 | 23 | 0 | 0 |
+| `sistaminuten.se` | 25 | 2 | 0 | 23 |
+| `afbudsrejser.dk` | 24 | 2 | 0 | 22 |
+| `akkilahdot.fi` | 24 | 2 | 0 | 22 |
+| `restplass.no` | 24 | 2 | 0 | 22 |
+| `socialloop.ai` | 24 | 24 | 0 | 0 |
 | `assetfare.dev` | 20 | 20 | 0 | 0 |
-| `dayze.com` | 18 | 18 | 0 | 0 |
-| 931 other operators | 1900 | 1780 | 116 | 4 |
+| `dayze.com` | 20 | 20 | 0 | 0 |
+| 932 other operators | 1908 | 1787 | 117 | 4 |
