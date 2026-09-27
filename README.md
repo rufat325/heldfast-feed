@@ -1,17 +1,37 @@
 # MCP server tool changes
 
-Last change observed 2026-09-27T10:55:02+00:00. Built by `research/feed/watch.py` on the `main` branch. Watching 9409 npm servers from the official MCP registry (154 daily, the rest weekly) and 18576 hosted endpoints (daily).
+Last change observed 2026-09-27T11:12:31+00:00. Built by `research/feed/watch.py` on the `main` branch. Watching 9409 npm servers from the official MCP registry (154 daily, the rest weekly) and 18576 hosted endpoints (daily).
 
-11801 changes to a tool definition: 341 npm releases (95 observed live, 246 from the [churn study](https://github.com/rufat325/heldfast/blob/main/docs/CHURN.md)) and 11460 readings of hosted servers that found their tools changed; 8 where `heldfast wrap --drift graded` would refuse something.
+11821 changes to a tool definition: 341 npm releases (95 observed live, 246 from the [churn study](https://github.com/rufat325/heldfast/blob/main/docs/CHURN.md)) and 11480 readings of hosted servers that found their tools changed; 8 where `heldfast wrap --drift graded` would refuse something.
 
 Subscribe: [feed.xml](feed.xml) (Atom) or [feed.json](feed.json). Every event, with the words that moved: [events/](events).
 
 Each day's commit is anchored in Bitcoin with OpenTimestamps: [checkpoints/](checkpoints), and how to check one in [TRANSPARENCY.md](https://github.com/rufat325/heldfast/blob/main/docs/TRANSPARENCY.md#checkpoints).
 
-`quiet`: a graded pin forwards every changed tool (new tools still need approval). `review`: a change introduced an agent-directed instruction, hidden character, credential path or look-alike letter. Review means read it, not that it is hostile.
+`quiet`: a graded pin forwards every changed tool (new tools still need approval). `review`: a change introduced an agent-directed instruction, hidden character, credential path or look-alike letter, or, from 2026-09-27, a price the previous version did not state. Events before that date were graded without prices and are kept as they were graded. Review means read it, not that it is hostile.
 
 | published | server | release | tools | grade |
 |---|---|---|---|---|
+| 2026-09-27 | `remote/no.restplass/travel-search` | 2026-09-27T105330730752 -> 2026-09-27T111233244543 | 1 changed | quiet |
+| 2026-09-27 | `remote/se.sistaminuten/travel-search` | 2026-09-27T105503526461 -> 2026-09-27T111228858531 | 1 changed | quiet |
+| 2026-09-27 | `remote/dk.afbudsrejser/travel-search` | 2026-09-27T105315316322 -> 2026-09-27T111215250704 | 1 changed | quiet |
+| 2026-09-27 | `remote/fi.akkilahdot/travel-search` | 2026-09-27T105415349612 -> 2026-09-27T111140568608 | 1 changed | quiet |
+| 2026-09-27 | `remote/io.github.socialloopai/socialloop-mcp.1` | 2026-09-27T105330519591 -> 2026-09-27T111058411751 | 1 changed | quiet |
+| 2026-09-27 | `remote/ai.sendraven/mcp` | 2026-09-23T162806721720 -> 2026-09-27T110926583510 | 28 changed | quiet |
+| 2026-09-27 | `remote/com.tkawen/intelligence-gateway` | 2026-09-27T072355599213 -> 2026-09-27T110917455481 | 1 changed | quiet |
+| 2026-09-27 | `remote/io.github.toshihiroshishido/revenuescope-mcp` | 2026-09-27T070104507147 -> 2026-09-27T110858802819 | 4 changed, 1 added | quiet |
+| 2026-09-27 | `remote/io.companygraph/mental-model` | 2026-09-27T103433449815 -> 2026-09-27T110746651162 | 1 changed | quiet |
+| 2026-09-27 | `remote/ch.blust/mental-model` | 2026-09-27T105035462810 -> 2026-09-27T110740919168 | 1 changed | quiet |
+| 2026-09-27 | `remote/io.github.si-imtiaz/leadquasar` | 2026-09-27T104954171157 -> 2026-09-27T110715646848 | 2 changed | quiet |
+| 2026-09-27 | `remote/com.thisisdelightful/games-research-starter-pack` | 2026-09-25T120159846589 -> 2026-09-27T110608783713 | 1 changed | quiet |
+| 2026-09-27 | `remote/io.datascoop/datascoop` | 2026-09-23T162358919503 -> 2026-09-27T110507118478 | 1 changed | quiet |
+| 2026-09-27 | `remote/com.googleapis.compute/mcp` | 2026-09-27T071810536729 -> 2026-09-27T110451807745 | 10 changed | quiet |
+| 2026-09-27 | `remote/io.github.closelookventure/closelook-intelligence` | 2026-09-23T160325816552 -> 2026-09-27T110450557433 | 26 changed (every tool) | quiet |
+| 2026-09-27 | `remote/io.github.odaiin/assetfare-bridge` | 2026-09-27T102931328860 -> 2026-09-27T110246925232 | 2 changed | quiet |
+| 2026-09-27 | `remote/build.exascale/osint` | 2026-09-23T162208031579 -> 2026-09-27T110225260588 | 1 changed, 2 added | quiet |
+| 2026-09-27 | `remote/io.github.odaiin/assetfare` | 2026-09-27T102929299656 -> 2026-09-27T110219700960 | 2 changed | quiet |
+| 2026-09-27 | `remote/app.agentbit/mcp` | 2026-09-27T103005104995 -> 2026-09-27T110202291568 | 1 changed | quiet |
+| 2026-09-27 | `remote/io.github.onetapstudiogames/1f3d9` | 2026-09-26T113236768415 -> 2026-09-27T110038637995 | 1 changed | quiet |
 | 2026-09-27 | `remote/se.sistaminuten/travel-search` | 2026-09-27T072925971995 -> 2026-09-27T105503526461 | 1 changed | quiet |
 | 2026-09-27 | `remote/com.blitzreels/blitzreels` | 2026-09-26T045429420413 -> 2026-09-27T105449152814 | 4 changed | quiet |
 | 2026-09-27 | `remote/com.zinvyl/marketplace` | 2026-09-24T120516307990 -> 2026-09-27T105441795272 | 3 changed | quiet |
@@ -52,23 +72,3 @@ Each day's commit is anchored in Bitcoin with OpenTimestamps: [checkpoints/](che
 | 2026-09-27 | `remote/com.freqblog/music-metadata` | 2026-09-27T065800378189 -> 2026-09-27T103451682759 | 2 changed | quiet |
 | 2026-09-27 | `remote/io.companygraph/mental-model` | 2026-09-27T065746042918 -> 2026-09-27T103433449815 | 1 changed | quiet |
 | 2026-09-27 | `remote/com.agenttrafficlab/atl` | 2026-09-27T065728075174 -> 2026-09-27T103411373079 | 3 changed (every tool) | quiet |
-| 2026-09-27 | `remote/io.github.tcador/787daily` | 2026-09-23T160511434715 -> 2026-09-27T103408092041 | 1 changed | quiet |
-| 2026-09-27 | `remote/dev.jobspipe/mcp.1` | 2026-09-23T160451403481 -> 2026-09-27T103335816928 | 1 changed | quiet |
-| 2026-09-27 | `remote/com.llmotions.farm/sonnet-5-agent` | 2026-09-23T162419601746 -> 2026-09-27T103324901531 | 1 changed | quiet |
-| 2026-09-27 | `remote/cloud.dchub/datacenter-power-grid-fiber` | 2026-09-26T044840978580 -> 2026-09-27T103305856214 | 3 changed | quiet |
-| 2026-09-27 | `remote/io.github.CSOAI-ORG/gspc` | 2026-09-26T132435439224 -> 2026-09-27T103254692685 | 1 changed | quiet |
-| 2026-09-27 | `remote/io.github.shujahmhd/foundaree` | 2026-09-25T120158089789 -> 2026-09-27T103249853213 | 3 changed | quiet |
-| 2026-09-27 | `remote/io.github.tettertotter/fundinglandscape` | 2026-09-27T072155625546 -> 2026-09-27T103244029495 | 3 changed | quiet |
-| 2026-09-27 | `remote/io.github.afredenslund/fredenslund-workshop-tools` | 2026-09-26T113721119584 -> 2026-09-27T103224066550 | 1 changed | quiet |
-| 2026-09-27 | `remote/com.dayze/life-context.1` | 2026-09-27T065538163158 -> 2026-09-27T103211717320 | 20 changed, 2 added | quiet |
-| 2026-09-27 | `remote/cloud.dchub/mcp-server` | 2026-09-26T044736929434 -> 2026-09-27T103212125225 | 3 changed | quiet |
-| 2026-09-27 | `remote/com.dayze/life-context` | 2026-09-27T065537913904 -> 2026-09-27T103211955779 | 20 changed, 2 added | quiet |
-| 2026-09-27 | `remote/io.github.asaraog/mcp-cricket` | 2026-09-27T065338671209 -> 2026-09-27T103205647000 | 1 changed, 1 added | quiet |
-| 2026-09-27 | `remote/io.github.whiteknightonhorse/apibase` | 2026-09-27T055035818024 -> 2026-09-27T103158007599 | 2 removed | quiet |
-| 2026-09-27 | `remote/com.prereason/mcp` | 2026-09-27T071702103363 -> 2026-09-27T103145064076 | 2 changed | quiet |
-| 2026-09-27 | `remote/io.github.re-fagiano/bloodyhopes-campfire` | 2026-09-23T160416063828 -> 2026-09-27T103139820905 | 1 changed | quiet |
-| 2026-09-27 | `remote/ai.timeplex/booking` | 2026-09-26T044745049919 -> 2026-09-27T103118398644 | 1 changed | quiet |
-| 2026-09-27 | `remote/eu.sirenic/sirenic` | 2026-09-27T055144884403 -> 2026-09-27T103114549386 | 6 changed | quiet |
-| 2026-09-27 | `remote/io.pingroom/pingroom` | 2026-09-23T162313505110 -> 2026-09-27T103107994704 | 1 changed | quiet |
-| 2026-09-27 | `remote/io.github.gosadu/loophole-tape` | 2026-09-27T055033074065 -> 2026-09-27T103035361772 | 9 changed | quiet |
-| 2026-09-27 | `remote/app.agentbit/mcp` | 2026-09-27T055032605410 -> 2026-09-27T103005104995 | 1 changed | quiet |
