@@ -1,0 +1,174 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Run a single-statement SELECT against DataCanvas dataframes registered by treasury_query_dataset, treasury_get_debt, treasury_get_interest_rates, and treasury_get_exchange_rates. Read-only: writes, DDL, DROP, COPY, PRAGMA, ATTACH, and external-file table functions are rejected. System catalogs (information_schema, pg_catalog, sqlite_master, duckdb_*) are denied at the bridge layer. All Treasury dataframe columns are VARCHAR \u2014 CAST to DECIMAL or DATE for arithmetic and date comparisons. Use treasury_dataframe_describe to list available table names and column schemas before querying.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "preview": {
+    "description": "Rows in the immediate response. Defaults to row_limit and may not exceed it. Set lower when using register_as.",
+    "maximum": 10000,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "register_as": {
+    "description": "Persist the result as a new dataframe under this exact name, to chain analyses. The name is used verbatim \u2014 any name works, and a df_ prefix keeps it consistent with the tables the data tools mint. Echoed back in registered_as.",
+    "type": "string"
+   },
+   "row_limit": {
+    "default": 1000,
+    "description": "Hard cap on rows the query may produce. Default 1000, max 10000. A query matching more rows than this stops at the cap and row_count_capped comes back true \u2014 raise it, or use register_as to materialize the whole result.",
+    "maximum": 10000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "sql": {
+    "description": "Single-statement SELECT against df_<id> tables. All values in Treasury dataframes are VARCHAR (strings) per the API contract \u2014 CAST to DECIMAL or DATE for arithmetic and date comparisons. Example: SELECT record_date, CAST(tot_pub_debt_out_amt AS DECIMAL) AS debt FROM df_xxxxx ORDER BY record_date DESC LIMIT 10.",
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "sql"
+  ],
+  "type": "object"
+ },
+ "name": "treasury_dataframe_query",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "columns",
+     "row_count",
+     "row_count_capped",
+     "rows"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cap": {
+    "description": "The row cap that was applied \u2014 preview when supplied, otherwise row_limit.",
+    "type": "number"
+   },
+   "columns": {
+    "description": "Column names in projection order.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `canvas_unavailable`: CANVAS_PROVIDER_TYPE is not set to duckdb. `system_catalog_access`: SQL references a denied DuckDB system catalog (information_schema, pg_catalog, sqlite_master, duckdb_*). `invalid_sql`: SQL is not a SELECT, contains DDL/DML, or uses disallowed table functions. `missing_table`: A df_<id> table named in the SQL is not on the canvas \u2014 its TTL expired, it was dropped, or it was never registered. `invalid_query_bounds`: preview exceeds row_limit, or row_limit exceeds the row ceiling this server allows. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "canvas_unavailable",
+         "system_catalog_access",
+         "invalid_sql",
+         "missing_table",
+         "invalid_query_bounds"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "expires_at": {
+    "description": "ISO 8601 expiry timestamp for the newly registered dataframe, when applicable.",
+    "type": "string"
+   },
+   "notice": {
+    "description": "Guidance when the query returned no rows, or when results were capped by preview or row_limit.",
+    "type": "string"
+   },
+   "registered_as": {
+    "description": "Set when register_as was supplied and the new dataframe was materialized.",
+    "type": "string"
+   },
+   "row_count": {
+    "description": "Rows the query produced, up to row_limit. Exceeds rows.length when preview returned fewer. Read with row_count_capped: when that is true this number is row_limit itself, and the size of the full result is not in this response.",
+    "type": "number"
+   },
+   "row_count_capped": {
+    "description": "True when the query matched more rows than row_limit, so row_count is that cap rather than a total. False means row_count is exact \u2014 including when it happens to equal row_limit.",
+    "type": "boolean"
+   },
+   "rows": {
+    "description": "Materialized rows, bounded by preview / row_limit.",
+    "items": {
+     "additionalProperties": {},
+     "propertyNames": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "shown": {
+    "description": "Number of rows returned in this response.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when the returned rows were capped below the full result set.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Query Treasury Dataframes"
+}

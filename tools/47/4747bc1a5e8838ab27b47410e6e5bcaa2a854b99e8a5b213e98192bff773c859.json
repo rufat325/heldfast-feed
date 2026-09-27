@@ -1,0 +1,215 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Official Treasury reporting exchange rates for ~165 countries \u2014 the rates US federal agencies are required to use when converting foreign currency to USD for official reporting. Published quarterly (March 31, June 30, Sep 30, Dec 31); mode \"latest\" returns the most recently published quarter. Rate is expressed as foreign currency units per 1 USD (e.g., a Japan-Yen rate of 159.41 means 1 USD = 159.41 JPY). These are NOT market exchange rates and are not suitable for financial transaction pricing. Mode \"series\" stages the result as a DataCanvas table when canvas_id is set or the range matches more than 500 rows \u2014 read the table's column schema with treasury_dataframe_describe, then run SQL over it with treasury_dataframe_query.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "canvas_id": {
+    "description": "Set any non-empty value to stage mode=series results as a DataCanvas table for SQL analysis \u2014 the value only requests staging; the server picks the table name. Staging also happens on its own when a series matches more than 500 rows, which multi-year multi-country pulls do (~19,000 rows for the full history). The assigned name (df_XXXXX_XXXXX) comes back in the output canvas_id; pass it to treasury_dataframe_describe, then treasury_dataframe_query. Requires CANVAS_PROVIDER_TYPE=duckdb.",
+    "type": "string"
+   },
+   "countries": {
+    "description": "Filter to specific countries by exact country name (e.g., [\"Japan\", \"Germany\", \"France\"]). Case-sensitive, matches the \"country\" field. Omit for every country in the quarter (~165).",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "end_date": {
+    "description": "ISO 8601 end date for mode=series.",
+    "type": "string"
+   },
+   "mode": {
+    "default": "latest",
+    "description": "\"latest\" returns the most recently published quarter's rates. \"series\" returns a date range of quarterly reports.",
+    "enum": [
+     "latest",
+     "series"
+    ],
+    "type": "string"
+   },
+   "start_date": {
+    "description": "ISO 8601 start date for mode=series. Rates are published end-of-quarter (March 31, June 30, Sep 30, Dec 31).",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "treasury_get_exchange_rates",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "as_of_date",
+     "effective_date",
+     "mixed_record_dates",
+     "rates",
+     "total_records",
+     "note"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "as_of_date": {
+    "description": "Most recent quarter-end record_date among the returned rows (YYYY-MM-DD). Not necessarily a date every row shares \u2014 check mixed_record_dates.",
+    "type": "string"
+   },
+   "canvas_expires_at": {
+    "description": "ISO 8601 expiry for the canvas dataframe.",
+    "type": "string"
+   },
+   "canvas_id": {
+    "description": "DuckDB table name (df_XXXXX_XXXXX) holding the staged series. Pass it to treasury_dataframe_describe for the column schema, then use it as the FROM target in treasury_dataframe_query SQL. Absent when nothing was staged.",
+    "type": "string"
+   },
+   "cap": {
+    "description": "The preview cap applied to the inline rates array.",
+    "type": "number"
+   },
+   "effective_date": {
+    "description": "Effective date of the as_of_date row (YYYY-MM-DD). Every row carries its own effective_date; this one does not describe the rest.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `country_not_found`: One or more requested countries have no records \u2014 API returns HTTP 200 with empty data[]; total-count is 0 or fewer countries were returned than requested. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "country_not_found"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "mixed_record_dates": {
+    "description": "True when the retrieved rows were not all published on as_of_date \u2014 including rows past the inline preview. Read each row's record_date rather than applying the top-level date to the set.",
+    "type": "boolean"
+   },
+   "note": {
+    "description": "Contextual note reminding that these are official reporting rates, not market rates.",
+    "type": "string"
+   },
+   "notice": {
+    "description": "Guidance when a requested country matched no records, when the inline series is a preview, when the series was staged as a DataCanvas table, or when the returned rows were published in more than one quarter.",
+    "type": "string"
+   },
+   "rates": {
+    "description": "Exchange rates for the requested countries/quarter, newest first. Whole in mode=latest \u2014 a quarter is a bounded set. In mode=series an inline preview of at most 20 rows; compare its length against retrieved_records to detect the cap, and reach the rest through canvas_id when one is returned.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One exchange rate record.",
+     "properties": {
+      "country": {
+       "description": "Country name.",
+       "type": "string"
+      },
+      "country_currency_desc": {
+       "description": "\"Country-Currency\" combined label (e.g., \"Japan-Yen\"). Use for in= filter values.",
+       "type": "string"
+      },
+      "currency": {
+       "description": "Currency name.",
+       "type": "string"
+      },
+      "effective_date": {
+       "description": "Date this rate takes effect (YYYY-MM-DD). Later than record_date when Treasury amends a rate mid-quarter, in which case the quarter carries more than one row for the country.",
+       "type": "string"
+      },
+      "exchange_rate": {
+       "description": "Foreign currency units per 1 USD. A value of 159.41 for Japan-Yen means 1 USD = 159.41 JPY.",
+       "type": "string"
+      },
+      "record_date": {
+       "description": "Quarter-end record date this rate was published under (YYYY-MM-DD).",
+       "type": "string"
+      }
+     },
+     "required": [
+      "country",
+      "currency",
+      "country_currency_desc",
+      "exchange_rate",
+      "record_date",
+      "effective_date"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "retrieved_records": {
+    "description": "Rows actually fetched for mode=series across every page, and the row count of the canvas table when one was registered. Never larger than total_records.",
+    "type": "number"
+   },
+   "shown": {
+    "description": "Rate rows returned inline.",
+    "type": "number"
+   },
+   "total_records": {
+    "description": "In mode=latest, the number of rows in rates. In mode=series, the full upstream match \u2014 larger than rates.length whenever the preview cap applied, and larger than retrieved_records when paging stopped first.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when the inline rates array holds fewer rows than were retrieved.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Get Treasury Exchange Rates"
+}

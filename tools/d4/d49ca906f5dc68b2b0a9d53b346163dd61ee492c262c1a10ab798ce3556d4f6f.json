@@ -1,0 +1,388 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "The flagship compound\u2194target bioactivity bridge: measurements for a molecule (target deconvolution / selectivity), a target (lead finding), or both together (how potently one compound hits one target). Supply at least one of molecule_chembl_id (from chembl_search_molecules) or target_chembl_id (from chembl_search_targets) \u2014 supplying both narrows to that compound\u2013target pair, supplying neither is an error. Filter by standard_type (IC50/Ki/EC50/\u2026), minimum potency pchembl_value_min, assay_type, and organism. Not every measurement has a derivable pchembl_value, so potency_view picks which side of that split you get: the default \"potency_ranked\" returns the measurements that have one, most potent first (ChEMBL sorts the rest first otherwise, which is why they are not merged), and \"null_potency\" returns exactly the measurements that have none. totalCount is the honest full match count across both views either way. Mixing measurement types (IC50 vs Ki) is a scientific error \u2014 set standard_type to compare like with like. A popular target carries tens of thousands of rows: results spill to a DataCanvas table (call chembl_dataframe_describe for its columns, then chembl_dataframe_query for honest aggregates across the staged set), while an inline preview answers the immediate question. Each view stages its own table (bioactivities / bioactivities_null_potency), so running both against one canvas_id lets a UNION ALL rebuild the full set. The staged table is capped at CHEMBL_MAX_SPILL_ROWS; when the cap is hit, truncated is true and the table is a bounded slice, not the complete view. The inline rows are always capped at limit, so compare that against totalCount before treating them as the whole answer. Spilling the rest requires CANVAS_PROVIDER_TYPE=duckdb; without it the inline preview is all there is.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "assay_type": {
+    "description": "Restrict to an assay type code: \"B\" (binding), \"F\" (functional), \"A\" (ADMET), \"T\" (toxicity).",
+    "type": "string"
+   },
+   "canvas_id": {
+    "description": "Optional canvas ID from a prior call to reuse the same canvas. Each potency_view re-stages its own table, so a second query of the SAME view REPLACES (overwrites) its prior rows \u2014 it does not append \u2014 while the other view's table is left intact, which is what lets both coexist on one canvas. Omit to mint a fresh canvas.",
+    "pattern": "^[A-Za-z0-9_-]{10}$",
+    "type": "string"
+   },
+   "limit": {
+    "description": "Maximum rows in the inline preview. Defaults to the server default (25). The full set still spills to the canvas.",
+    "maximum": 1000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "molecule_chembl_id": {
+    "description": "ChEMBL molecule ID (from chembl_search_molecules), e.g. \"CHEMBL941\". Supply this, target_chembl_id, or both \u2014 both narrows to that compound\u2013target pair.",
+    "type": "string"
+   },
+   "organism": {
+    "description": "Restrict to a target organism, e.g. \"Homo sapiens\" (case-insensitive exact match).",
+    "type": "string"
+   },
+   "pchembl_value_min": {
+    "description": "Minimum pchembl_value (\u2212log10 molar potency), e.g. 7 keeps sub-100 nM activities. Only valid on the potency_ranked view \u2014 the null_potency rows have no pchembl_value to compare against.",
+    "type": "number"
+   },
+   "potency_view": {
+    "default": "potency_ranked",
+    "description": "Which side of the pchembl_value presence split to retrieve. \"potency_ranked\" (default) returns the measurements that have a derivable pchembl_value, most potent first. \"null_potency\" returns exactly the measurements that have none \u2014 the rows the ranked view excludes, otherwise unreachable. The two partition the match set and stage to separate canvas tables.",
+    "enum": [
+     "potency_ranked",
+     "null_potency"
+    ],
+    "type": "string"
+   },
+   "standard_type": {
+    "description": "Restrict to one measurement type, e.g. \"IC50\", \"Ki\", \"EC50\". Set this to compare potencies validly.",
+    "type": "string"
+   },
+   "target_chembl_id": {
+    "description": "ChEMBL target ID (from chembl_search_targets), e.g. \"CHEMBL203\". Supply this, molecule_chembl_id, or both \u2014 both narrows to that compound\u2013target pair.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "chembl_get_bioactivities",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "activities",
+     "totalCount",
+     "potency_view",
+     "spilled",
+     "canvas_id",
+     "table_name",
+     "staged_row_count",
+     "truncated",
+     "canvasDisabled",
+     "appliedFilters"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "activities": {
+    "description": "Bioactivity rows for the selected potency_view \u2014 the inline preview, or the full view when it fit without spilling.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One bioactivity measurement linking a compound, target, and assay.",
+     "properties": {
+      "activity_id": {
+       "description": "ChEMBL activity row ID.",
+       "type": "number"
+      },
+      "assay_chembl_id": {
+       "description": "ChEMBL assay ID \u2014 pass to chembl_get_assay for provenance.",
+       "type": "string"
+      },
+      "assay_description": {
+       "description": "Assay description text. Null when absent.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "assay_type": {
+       "description": "Assay type code: B=binding, F=functional, A=ADMET, T=toxicity, P=physicochemical, U=unclassified. Null when absent.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "molecule_chembl_id": {
+       "description": "ChEMBL molecule ID of the measured compound.",
+       "type": "string"
+      },
+      "molecule_pref_name": {
+       "description": "Compound preferred name. Null for many research compounds.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "pchembl_value": {
+       "description": "\u2212log10(molar potency); the rank field. Null when underivable (non-standard type, censored relation).",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "relation": {
+       "description": "Original relation string from upstream.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "standard_relation": {
+       "description": "Standardized relation, e.g. \"=\", \">\", \"<\". Null when absent.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "standard_type": {
+       "description": "Standardized activity type, e.g. \"IC50\", \"Ki\", \"EC50\" \u2014 the comparability key. Null when absent.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "standard_units": {
+       "description": "Standardized units, e.g. \"nM\". Null when absent.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "standard_value": {
+       "description": "Standardized value in standard_units. Null when the measurement is missing \u2014 never 0.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "target_chembl_id": {
+       "description": "ChEMBL target ID the compound was measured against.",
+       "type": "string"
+      },
+      "target_organism": {
+       "description": "Target organism, e.g. \"Homo sapiens\". Null when unspecified.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "target_pref_name": {
+       "description": "Target preferred name. Null when unnamed.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "type": {
+       "description": "Original (pre-standardization) activity type string from upstream.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "units": {
+       "description": "Original units string from upstream.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "value": {
+       "description": "Original value string from upstream \u2014 not coerced.",
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "activity_id",
+      "molecule_chembl_id",
+      "molecule_pref_name",
+      "target_chembl_id",
+      "target_pref_name",
+      "target_organism",
+      "assay_chembl_id",
+      "assay_type",
+      "assay_description",
+      "standard_type",
+      "standard_relation",
+      "standard_value",
+      "standard_units",
+      "pchembl_value",
+      "type",
+      "value",
+      "units",
+      "relation"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "appliedFilters": {
+    "additionalProperties": false,
+    "description": "Filters as the server parsed them.",
+    "properties": {
+     "assay_type": {
+      "description": "The assay_type filter applied, or null.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "organism": {
+      "description": "The organism filter applied, or null.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "pchembl_value_min": {
+      "description": "The pchembl_value_min filter applied, or null.",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "scope": {
+      "description": "Which IDs scoped the query: the molecule, the target, or both when it narrowed to a compound\u2013target pair.",
+      "type": "string"
+     },
+     "standard_type": {
+      "description": "The standard_type filter applied, or null.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "scope",
+     "standard_type",
+     "pchembl_value_min",
+     "assay_type",
+     "organism"
+    ],
+    "type": "object"
+   },
+   "canvasDisabled": {
+    "description": "True when CANVAS_PROVIDER_TYPE is not duckdb, so large sets could not spill \u2014 the inline rows are a capped preview, not the full set.",
+    "type": "boolean"
+   },
+   "canvas_id": {
+    "description": "Canvas ID holding the staged table \u2014 pass to chembl_dataframe_describe to list its columns, then to chembl_dataframe_query to run SQL over them. Null when canvas is disabled or nothing spilled.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `not_found`: ChEMBL has no record for the requested identifier or structure. `rate_limited`: ChEMBL rate-limits the upstream request. `missing_filter`: Neither molecule_chembl_id nor target_chembl_id was supplied, so the query had nothing to scope to. `contradictory_potency_filter`: pchembl_value_min was supplied alongside potency_view \"null_potency\", whose rows have no pchembl_value for the floor to compare against \u2014 the combination can only ever match zero measurements. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "not_found",
+         "rate_limited",
+         "missing_filter",
+         "contradictory_potency_filter"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Guidance when no measurements matched, or how to SQL the spilled set.",
+    "type": "string"
+   },
+   "potency_view": {
+    "description": "Which view these rows came from: \"potency_ranked\" = measurements with a derivable pchembl_value; \"null_potency\" = measurements with none. Re-call with the other value to reach the rest of totalCount.",
+    "enum": [
+     "potency_ranked",
+     "null_potency"
+    ],
+    "type": "string"
+   },
+   "spilled": {
+    "description": "True when the view exceeded the preview and was staged on the canvas.",
+    "type": "boolean"
+   },
+   "staged_row_count": {
+    "description": "Rows actually registered on the canvas table. Null when nothing spilled. Below the view total when truncated is true.",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "table_name": {
+    "description": "Canvas table name holding the staged rowset, and the FROM target for chembl_dataframe_query SQL \u2014 \"bioactivities\" for potency_ranked, \"bioactivities_null_potency\" for null_potency. Null when not spilled.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "totalCount": {
+    "description": "Total matching measurements upstream \u2014 the honest full count spanning BOTH potency views, before any preview cap. The staged/preview rows are the selected view of this.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when the CHEMBL_MAX_SPILL_ROWS cap was hit before the upstream view was exhausted \u2014 the staged table is a bounded slice, NOT the complete view, so aggregates over it are a sample. Narrow the filters to bring the view under the cap.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "chembl-get-bioactivities"
+}

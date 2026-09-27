@@ -1,0 +1,191 @@
+{
+ "_meta": {
+  "fastmcp": {
+   "tags": []
+  }
+ },
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Create Escrow Vault"
+ },
+ "description": "Create an XRPL escrow vault. Funds release automatically to the worker when\ntheir submission passes all configured checks.\n\nBuyers can require NFT ownership, an atomic NFT Delivery-vs-Payment swap, domain\nverification, or W3C Verifiable Credentials before a PASS releases escrow \u2014 set the\nrelevant proof-gate params below.\n\nTwo release modes:\n- AI audit (default): worker submits text/files; AI referee scores against task_description.\n- Proof-gate only (require_ai_audit=False): payment releases when all configured proof\n  gates pass (require_nft_proof / required_nft_issuer / nft_dvp / required_domain /\n  required_vc_issuer_did). No AI call. Requires at least one proof gate.\n\nWhite-label / headless integration:\n- Pass callback_url to receive webhook POSTs on all state changes. AgentTrust operates\n  as a silent settlement rail; your platform handles all user-facing surfaces.\n- Pass metadata (JSON string) to attach your own reference IDs (invoice_id, po_number,\n  tenant_id) \u2014 they are echoed back in every webhook payload.\n\nTypical flow after job board negotiation:\n  1. award_job() returns the worker's address and agreed price\n  2. Pay $0.10 protocol fee (XRP or RLUSD) to rmcSrkpZ2i2kuvtCPeTVetee9SixP4djR\n  3. Call this tool with worker_address from step 1\n  4. Use returned condition in an XRPL EscrowCreate transaction (sign with your wallet)\n  5. Call confirm_escrow_transaction() with the EscrowCreate tx hash\n\nReturns:\n    escrow_id, condition (for EscrowCreate tx), cancel_after_human.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "amount_rlusd": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Amount of RLUSD to lock in escrow. Required when currency is RLUSD."
+   },
+   "amount_xrp": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Amount of XRP to lock in escrow. Required when currency is XRP. Minimum: 0.000001 XRP (1 drop \u2014 XRPL EscrowCreate minimum). Practically, ensure the bounty exceeds the $0.10 protocol fee."
+   },
+   "buyer_address": {
+    "description": "XRPL wallet address (r...) of the buyer.",
+    "type": "string"
+   },
+   "buyer_name": {
+    "description": "Name or identifier of the buyer posting the job.",
+    "type": "string"
+   },
+   "callback_url": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "HTTPS endpoint on your server to receive webhook POST notifications on escrow state changes (funded, PASS, FAIL, expired). Use this for white-label integrations where you handle all user-facing surfaces yourself \u2014 emails, status pages, UI \u2014 and AgentTrust operates invisibly as the settlement rail. Payload: {escrow_id, event, verdict, timestamp, metadata}."
+   },
+   "cancel_after_hrs": {
+    "default": 168,
+    "description": "Hours until the buyer can reclaim funds if the worker does not deliver. Default 168 = 7 days.",
+    "type": "integer"
+   },
+   "category": {
+    "default": "default",
+    "description": "Marketplace category for this job. One of: default, creative, code, data, data_analysis, bug_bounty, legal, supply_chain.",
+    "enum": [
+     "default",
+     "creative",
+     "code",
+     "data",
+     "data_analysis",
+     "bug_bounty",
+     "legal",
+     "supply_chain"
+    ],
+    "type": "string"
+   },
+   "currency": {
+    "default": "XRP",
+    "description": "Currency to lock. Use \"XRP\" (no trustline needed) or \"RLUSD\" (USD-pegged stablecoin).",
+    "type": "string"
+   },
+   "escrow_id": {
+    "description": "Unique receipt code for this vault, e.g. AT-7X9K-2MQ4. Used to reference the vault in subsequent calls.",
+    "type": "string"
+   },
+   "fee_hash": {
+    "default": "",
+    "description": "64-character hex transaction hash of the $0.10 payment (XRP/RLUSD) to rmcSrkpZ2i2kuvtCPeTVetee9SixP4djR. Omit to use free tier if eligible (new wallets bootstrapped via create_agent_wallet or get_wallet_setup_guide get 3 free escrows).",
+    "type": "string"
+   },
+   "max_submissions": {
+    "default": 3,
+    "description": "Number of work submission attempts the worker is allowed before the vault is locked. Default 3 (included in the $0.10 creation fee). Each slot above 3 costs an extra $0.05 at creation time (e.g. max_submissions=5 \u2192 $0.10 + 2\u00d7$0.05 = $0.20). Range 1\u201310.",
+    "type": "integer"
+   },
+   "metadata": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Optional JSON string of key/value pairs to attach to this escrow and echo back in every webhook payload. Use to round-trip your own reference numbers (invoice_id, po_number, tenant_id, order_ref, etc.) without storing them on AgentTrust's side. Example: '{\"invoice_id\": \"INV-2026-0042\", \"po_number\": \"PO-9981\"}'."
+   },
+   "nft_dvp": {
+    "default": false,
+    "description": "Atomic NFT swap: worker must transfer a specific NFT to the buyer before payment releases. On PASS the vault enters PASS_AWAITING_NFT; worker then registers their NFTokenCreateOffer via POST /escrow/{id}/nft-offer and payment auto-releases when buyer accepts. Mutually exclusive with require_nft_proof.",
+    "type": "boolean"
+   },
+   "project_label": {
+    "default": "",
+    "description": "Optional human-readable label for the job, shown in the marketplace.",
+    "type": "string"
+   },
+   "proof_policy": {
+    "default": "ALL",
+    "description": "When multiple proof gates are set: 'ALL' (default) requires every gate to pass; 'ANY' requires at least one gate to pass.",
+    "enum": [
+     "ALL",
+     "ANY"
+    ],
+    "type": "string"
+   },
+   "require_ai_audit": {
+    "default": true,
+    "description": "Default True. Set False to release payment on proof gates alone \u2014 no AI call, no Gemini token spend. Requires at least one proof gate (require_nft_proof, required_nft_issuer, required_domain, or required_vc_issuer_did). Use for machine-verifiable deliverables: NFT delivery, domain verification, W3C credentials.",
+    "type": "boolean"
+   },
+   "require_consensus": {
+    "default": false,
+    "description": "Require consensus between Gemini Flash AND Gemini Pro before a PASS is issued. Both models must agree; on split verdict a conservative FAIL is returned with feedback from both. Fee: $0.25 (vs $0.10 standard). Ignored when require_ai_audit=False.",
+    "type": "boolean"
+   },
+   "require_nft_proof": {
+    "default": false,
+    "description": "Worker must own an NFT from any verified issuer (or from required_nft_issuer if set) to receive payment. Set required_nft_issuer to restrict to a specific issuer wallet.",
+    "type": "boolean"
+   },
+   "required_domain": {
+    "default": "",
+    "description": "Worker must have their XRPL wallet domain field pointing to this domain (verified via xrp-ledger.toml). Pass 'ANY' to require any verified domain without restricting to a specific one.",
+    "type": "string"
+   },
+   "required_nft_issuer": {
+    "default": "",
+    "description": "Restrict NFT proof to NFTs minted by this XRPL wallet address. Also implicitly sets require_nft_proof=True. Leave blank to accept NFTs from any trusted issuer.",
+    "type": "string"
+   },
+   "required_vc_issuer_did": {
+    "default": "",
+    "description": "Worker must present a W3C Verifiable Credential JWT issued by this DID (e.g. did:web:issuer.example.com). Used for accreditation, certifications, or KYB checks.",
+    "type": "string"
+   },
+   "required_vc_type": {
+    "default": "",
+    "description": "If set alongside required_vc_issuer_did, the VC must also have this credential type (e.g. 'CertifiedDeveloper'). Leave blank to accept any credential type from the issuer.",
+    "type": "string"
+   },
+   "task_description": {
+    "description": "Detailed specification the worker must fulfil to be paid. Be precise \u2014 the AI referee evaluates against this.",
+    "type": "string"
+   },
+   "worker_address": {
+    "description": "XRPL wallet address (r...) of the worker who will receive payment on approval. Use the address returned by award_job().",
+    "type": "string"
+   }
+  },
+  "required": [
+   "escrow_id",
+   "task_description",
+   "buyer_name",
+   "buyer_address",
+   "worker_address"
+  ],
+  "type": "object"
+ },
+ "name": "create_escrow_vault",
+ "outputSchema": {
+  "additionalProperties": true,
+  "type": "object"
+ },
+ "title": "Create Escrow Vault"
+}

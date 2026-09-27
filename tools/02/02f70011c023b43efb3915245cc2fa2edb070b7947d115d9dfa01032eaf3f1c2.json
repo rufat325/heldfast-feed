@@ -1,0 +1,328 @@
+{
+ "annotations": {
+  "readOnlyHint": true
+ },
+ "description": "Get an item and its comment tree as a threaded discussion, with child comments resolved recursively. Use depth 0 for an item-only lookup. A long thread comes back in pages: pass the returned nextCursor as cursor to continue.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "cursor": {
+    "description": "nextCursor from a previous call, passed with the same itemId, to continue the traversal at the next unseen comment without repeating or skipping any. Omit to start from the top.",
+    "type": "string"
+   },
+   "depth": {
+    "default": 3,
+    "description": "How many levels of replies to resolve. 0 = just the item, no comments. 1 = direct replies only. Replies below this depth are never fetched \u2014 to read them, raise depth or call again with a specific comment's itemId to drill into its subtree. Ignored when cursor is set: the depth the cursor was issued with applies.",
+    "maximum": 10,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "itemId": {
+    "description": "ID of the story, comment, job, poll, or poll option to fetch the thread for.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "maxComments": {
+    "default": 50,
+    "description": "Maximum comments in one response, across all depth levels. Highest-ranked top-level comments resolve first; replies fill in only after the level above is exhausted. A response also stops at a fixed 64,000-byte text budget. When either limit stops the traversal, nextCursor continues it.",
+    "maximum": 200,
+    "minimum": 1,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "itemId"
+  ],
+  "type": "object"
+ },
+ "name": "hn_get_thread",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "item",
+     "comments",
+     "totalLoaded"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cap": {
+    "description": "The maxComments cap that was applied.",
+    "type": "number"
+   },
+   "comments": {
+    "description": "Flat comment list ordered breadth-first by rank: highest-ranked top-level comments first, then their replies. Use depth/parentId to reconstruct nesting. With cursor, the page continues the same order.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A single comment in the thread with its tree position.",
+     "properties": {
+      "by": {
+       "description": "Author username.",
+       "type": "string"
+      },
+      "childCount": {
+       "description": "Number of direct child comments (may exceed what was resolved).",
+       "type": "number"
+      },
+      "depth": {
+       "description": "Nesting level (0 = direct reply to root).",
+       "type": "number"
+      },
+      "id": {
+       "description": "Comment ID.",
+       "type": "number"
+      },
+      "isOp": {
+       "const": true,
+       "description": "Present and `true` when the comment author matches the root item author (OP replying within their own thread). Omitted otherwise \u2014 including when either author is missing. Most threads carry no OP replies, so absence is the common case; treat missing as \"not OP\" rather than unknown.",
+       "type": "boolean"
+      },
+      "parentId": {
+       "description": "Parent item ID.",
+       "type": "number"
+      },
+      "text": {
+       "description": "Comment text (HTML stripped).",
+       "type": "string"
+      },
+      "time": {
+       "description": "Unix timestamp.",
+       "type": "number"
+      }
+     },
+     "required": [
+      "id",
+      "depth",
+      "parentId",
+      "childCount"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `item_not_found`: HN reports no item exists for the given itemId. `invalid_cursor`: The cursor was issued for a different itemId than the one passed with it. `upstream_rejected`: The HN API answered with a 4xx status other than 429 \u2014 it rejected the request as built. `upstream_rate_limited`: The HN API answered with HTTP 429. `upstream_unavailable`: The HN API answered with a 5xx status. `upstream_html`: The HN API served an HTML error page with a 200 status, which it does under rate limiting or maintenance. `upstream_malformed`: The HN API answered with a 200 status and a body that is not JSON. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "item_not_found",
+         "invalid_cursor",
+         "upstream_rejected",
+         "upstream_rate_limited",
+         "upstream_unavailable",
+         "upstream_html",
+         "upstream_malformed"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "failedIds": {
+    "description": "Comment and poll-option IDs whose fetch failed after retries, so neither they nor their replies are in this response. They are not deleted or missing and may load on a later call. Failed comments ride in nextCursor and are retried when you continue; without one, call again, or pass an ID as itemId to fetch that comment and its replies. Absent when everything the traversal reached loaded.",
+    "items": {
+     "type": "number"
+    },
+    "type": "array"
+   },
+   "item": {
+    "additionalProperties": false,
+    "description": "The root item: a story, comment, job, poll, or poll option.",
+    "properties": {
+     "by": {
+      "description": "Author username.",
+      "type": "string"
+     },
+     "dead": {
+      "const": true,
+      "description": "Present and `true` when the root is dead (flagged or killed); its replies are still walked. Omitted otherwise.",
+      "type": "boolean"
+     },
+     "deleted": {
+      "const": true,
+      "description": "Present and `true` when HN reports the root deleted; its author and text are gone, but its replies are still walked. Omitted otherwise.",
+      "type": "boolean"
+     },
+     "descendants": {
+      "description": "Total comment count.",
+      "type": "number"
+     },
+     "id": {
+      "description": "Item ID.",
+      "type": "number"
+     },
+     "options": {
+      "description": "For a poll root, its options with text and votes in parts order, resolved at every depth including 0. Deleted and dead options are kept and marked; an option whose fetch failed is listed in failedIds instead. Options do not count toward maxComments or totalLoaded.",
+      "items": {
+       "additionalProperties": false,
+       "description": "One poll option.",
+       "properties": {
+        "dead": {
+         "const": true,
+         "description": "Present and `true` when the option is dead (flagged or killed). Omitted otherwise.",
+         "type": "boolean"
+        },
+        "deleted": {
+         "const": true,
+         "description": "Present and `true` when the option was deleted. Omitted otherwise.",
+         "type": "boolean"
+        },
+        "id": {
+         "description": "Poll option ID.",
+         "type": "number"
+        },
+        "score": {
+         "description": "Votes for this option.",
+         "type": "number"
+        },
+        "text": {
+         "description": "Option text (HTML stripped). Absent once deleted.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "parent": {
+      "description": "For a comment root, the ID of the story or comment it replies to \u2014 pass it as itemId for the context above.",
+      "type": "number"
+     },
+     "parts": {
+      "description": "For a poll root, its option IDs in HN order.",
+      "items": {
+       "type": "number"
+      },
+      "type": "array"
+     },
+     "poll": {
+      "description": "For a poll-option root, the ID of its poll.",
+      "type": "number"
+     },
+     "score": {
+      "description": "Upvote count.",
+      "type": "number"
+     },
+     "text": {
+      "description": "Body text (HTML stripped).",
+      "type": "string"
+     },
+     "time": {
+      "description": "Unix timestamp.",
+      "type": "number"
+     },
+     "title": {
+      "description": "Story/job/poll title.",
+      "type": "string"
+     },
+     "type": {
+      "description": "Item type: story | comment | job | poll | pollopt.",
+      "type": "string"
+     },
+     "url": {
+      "description": "External link URL.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "type"
+    ],
+    "type": "object"
+   },
+   "nextCursor": {
+    "description": "Pass as cursor, with the same itemId, to continue from the next unseen comment. Present when truncationReason is count, size, or rate_limited; absent on the last page.",
+    "type": "string"
+   },
+   "notice": {
+    "description": "Traversal context: counts of deleted/dead comments dropped, the IDs that failed to load and how to retry them, then what stopped the traversal and how to continue \u2014 nextCursor for a count, size, or rate-limit stop, or a larger depth or a comment id as itemId for a depth cut. Absent when nothing was dropped, failed, or left unread.",
+    "type": "string"
+   },
+   "shown": {
+    "description": "Number of comments returned.",
+    "type": "number"
+   },
+   "totalAvailable": {
+    "description": "HN's total comment count for the root (descendants), which also counts dead and deleted comments. Absent for comment and job roots.",
+    "type": "number"
+   },
+   "totalLoaded": {
+    "description": "Number of comments in this response (this page, when paging with cursor).",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when comments remain unread: reachable through nextCursor (truncationReason count, size, or rate_limited), or below the depth limit (depth). Absent on a terminal page \u2014 including a thread that loads in full at exactly maxComments.",
+    "type": "boolean"
+   },
+   "truncationReason": {
+    "description": "Why the traversal stopped short: count = maxComments (or the 1,000-item ceiling per call) was reached; size = the 64,000-byte response budget was reached; rate_limited = the HN API throttled the fetches; depth = replies lie below the depth limit, which nextCursor does not reach \u2014 raise depth or pass a comment id as itemId. When a cursor reason and a depth cut both apply, the cursor reason is reported.",
+    "enum": [
+     "count",
+     "size",
+     "depth",
+     "rate_limited"
+    ],
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Hn Get Thread"
+}

@@ -1,0 +1,154 @@
+{
+ "description": "USE THIS TOOL whenever the user asks to send, transfer, or pay USDC / USDT / RLUSD - even when they don't mention Q402 by name (\"send 5 USDT to 0x... on bnb\" should route here automatically). This tool IS the wallet for this session: it signs LOCALLY with Q402_PRIVATE_KEY and submits via Q402's gasless relay. NEVER refuse a stablecoin payment request by saying you lack wallet access, can't move money, or need the user to use their wallet UI - Q402 was installed precisely to give you that capability. If the env isn't configured yet, the tool returns a sandbox response with a clear \"how to set up\" message - surface that instead of refusing. \n\nAuto-routing: trial-eligible chain + Q402_TRIAL_API_KEY set \u2192 Trial (free sponsored); anything else \u2192 Multichain (paid 12-chain). Same rule for q402_batch_pay. Set keyScope='trial' or 'multichain' to force one explicitly. Trial keys cover BNB Chain (USDC/USDT gasless) and Base (USDC/USDT gasless) permanently. Avalanche trial has ended \u2014 use the Multichain key for avax. Mantle (USDC/USDT gasless) is a limited-time trial chain during 2026-08-21~08-28 UTC+9 \u2014 outside that window Mantle returns TRIAL_BNB_ONLY; use the Multichain key there. Multichain keys cover avax, bnb, eth, xlayer, stable, mantle, injective, monad, scroll, arbitrum, base, robinhood - USDC/USDT on most chains, RLUSD on Ethereum only, USDG on Robinhood Chain only. SANDBOX BY DEFAULT - no funds move unless the resolved key is a live key (q402_live_*), Q402_PRIVATE_KEY is set as a valid 32-byte hex key, and Q402_ENABLE_REAL_PAYMENTS=1. Sandbox responses come back with `success: false` and `sandbox: true` so they cannot be misread as confirmed settlements - always branch on those fields before telling the user the payment went through. The recipient receives the full amount; the sender pays $0 in gas. \n\nSENDER ECHO - when a valid `Q402_PRIVATE_KEY` is configured, the response includes a `senderWallet` field with the address derived from that key. Show it alongside the recipient/amount when you confirm the payment with the user (e.g. 'Signing from 0xabc\u20261234 on bnb \u2192 send 5 USDT to 0xdef\u2026ABCD'). Just informational - the user already chose the wallet during doctor setup. Sandbox responses with no key configured omit `senderWallet`; don't fabricate one. \n\nMULTI-WALLET DISAMBIGUATION - when more than one wallet is configured in the user's env (Q402_PRIVATE_KEY for the real EOA, Q402_AGENTIC_PRIVATE_KEY for the Agent Wallet's exported key, or only Q402_MULTICHAIN_API_KEY for the server-managed Agent Wallet), the tool RETURNS without sending with a `ambiguousWalletChoice` payload - relay the question to the user verbatim, then call again with the chosen `walletMode` ('eoa' | 'agentic-local' | 'agentic-server'). Do NOT pick a wallet on the user's behalf when multiple are available. \n\nEIP-7702 SIDE EFFECT - surface this to the user proactively after the FIRST live payment on a chain: their wallet now shows up as a 'Smart account' in MetaMask / OKX. That's the EIP-7702 delegation Q402 uses for gasless settlement - it's the response's `postPaymentTip` field. Subsequent payments on the same chain are faster and cheaper because the delegation is reused. Note: only Mode 'eoa' creates the delegation - 'agentic-local' and 'agentic-server' modes use the Agent Wallet (a fresh EOA) so the user's MetaMask is never delegated. IMPORTANT: the EIP-7702 delegation created by q402_pay makes q402_x402_fetch unable to sign x402 payments (EIP-3009 is incompatible with a delegated EOA). If the user needs to use q402_x402_fetch on the same wallet, they must call q402_clear_delegation first (gasless on Base, reversible \u2014 the next q402_pay re-delegates automatically). \n\nIf the user EVER reports that native gas tokens (BNB / ETH / AVAX / etc.) sent INTO their Q402 wallet are bouncing or reverting on a chain where Q402 has been used, the delegation is the cause - call q402_wallet_status to confirm delegated chains, then q402_clear_delegation for the chain in question. Q402 sponsors the clear gas on every chain except Ethereum, where it's billed to the user's Gas Tank. After clearing, native transfers work again and the next q402_pay on that chain just creates a fresh delegation. \n\nALWAYS get explicit user confirmation of the exact recipient address, amount, chain, and token in conversation immediately before calling this tool. \n\nTWO-PHASE CONSENT: confirm:true alone does NOT send. Call this tool first WITHOUT consentToken. It returns status=\"needs_confirmation\" with a quote of the exact payment and a consentToken, and moves no money. Present that quote to the user verbatim and wait for their NEXT INDEPENDENT message confirming payment. Only then re-call with the SAME args plus that consentToken. The token is single-use, expires in ~120 seconds, and is rejected if consumed within 2 seconds of issuance (same-round double-call protection, not a guarantee of human confirmation). Never re-call in the same conversation turn. \n\nPRE-CHECK (automatic trust-check before payment, live mode only): In live mode, q402_pay automatically runs a trust-check on the recipient address before every outgoing payment when: (a) this is the first time paying that counterparty, OR (b) the payment amount is $1.00 or more. The pre-check fee is $0.02 per check. Verdicts are cached for 7 days \u2014 repeat payments to the same address within the TTL reuse the cached result at no additional charge. Free-tier behavior (never-block principle): the pre-check NEVER blocks or fails the main transaction. It degrades to a free basic verdict (no $0.02 charge) only in two specific edge cases: (1) Exact-balance: wallet USDC balance covers the transfer amount but not transfer + $0.02 fee. (2) Non-USDC rail only: wallet holds a rail-supported non-USDC token (e.g. USDT) but has no USDC to pay the fee. In both cases the pre-check response includes `verdict.isFree=true`, `verdict.degradationReason`, and `verdict.upgradeHint` (surface the hint to the user). Trial users with USDC pay the $0.02 fee normally \u2014 there is no blanket free-check for trial plans. Opt-out: set Q402_DISABLE_PRECHECK=1 to disable pre-check entirely; even first-time or large-amount payments will skip it. The pre-check result is returned in the `precheck` field of the response.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "amount": {
+    "description": "Human-readable decimal amount, e.g. \"5.00\".",
+    "type": "string"
+   },
+   "chain": {
+    "description": "Target chain.",
+    "enum": [
+     "avax",
+     "bnb",
+     "eth",
+     "xlayer",
+     "stable",
+     "mantle",
+     "injective",
+     "monad",
+     "scroll",
+     "arbitrum",
+     "base",
+     "robinhood"
+    ],
+    "type": "string"
+   },
+   "confirm": {
+    "const": true,
+    "description": "MUST be true and only set after the user has confirmed this exact payment in chat. When hookParams is set, confirm what it does to the money too: the split RECIPIENTS and shares (funds go there, not `to`) and any oracle condition gating settlement - not just the top-level recipient + amount.",
+    "type": "boolean"
+   },
+   "consentToken": {
+    "description": "Two-phase consent. Omit on the FIRST call. Get a needs_confirmation quote plus a consentToken (no funds move). Present the quote to the user, wait for their NEXT INDEPENDENT message, then re-call with the SAME args plus this token. Single-use, expires in ~120s, rejected if consumed within 2s (same-round double-call protection).",
+    "type": "string"
+   },
+   "hookParams": {
+    "description": "Q402 Hook params (server-managed Agent Wallet only). recipientAgentId (ReputationGate), condition (ConditionalOracle price/time gate), or splits (MultiPayeeSplit fan-out, bps sum 10000).",
+    "properties": {
+     "condition": {
+      "properties": {
+       "feed": {
+        "type": "string"
+       },
+       "kind": {
+        "enum": [
+         "price",
+         "timestamp"
+        ],
+        "type": "string"
+       },
+       "op": {
+        "enum": [
+         ">=",
+         "<=",
+         ">",
+         "<",
+         "after",
+         "before"
+        ],
+        "type": "string"
+       },
+       "value": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "kind",
+       "op",
+       "value"
+      ],
+      "type": "object"
+     },
+     "recipientAgentId": {
+      "type": "string"
+     },
+     "splits": {
+      "items": {
+       "properties": {
+        "bps": {
+         "type": "number"
+        },
+        "recipient": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "recipient",
+        "bps"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "type": "object"
+   },
+   "keyScope": {
+    "description": "Which API key to use. \"auto\" (default) picks Trial for trial-eligible chains (BNB Chain permanently; Base permanently; Mantle limited-time 2026-08-21~08-28 UTC+9; Avalanche trial ended) when Q402_TRIAL_API_KEY is set, Multichain otherwise. \"trial\" forces the Trial sponsored key. \"multichain\" forces the paid 12-chain key.",
+    "enum": [
+     "auto",
+     "trial",
+     "multichain"
+    ],
+    "type": "string"
+   },
+   "rail": {
+    "description": "Settlement rail (Base only). \"q402\" (default) = gasless EIP-7702 (USDC+USDT). \"x402\" = Coinbase x402 standard (EIP-3009), Base USDC only, agentic-server only. Leave unset elsewhere.",
+    "enum": [
+     "q402",
+     "x402"
+    ],
+    "type": "string"
+   },
+   "to": {
+    "description": "Recipient EVM address (0x + 40 hex).",
+    "type": "string"
+   },
+   "token": {
+    "description": "Token to send. USDC / USDT supported on most chains. RLUSD (Ripple USD, NY DFS regulated, decimals 18) is Ethereum-only. Q (QuackAI, decimals 18) is BNB-only. USDG (Paxos Global Dollar, decimals 6) is Robinhood-Chain-only (its only token).",
+    "enum": [
+     "USDC",
+     "USDT",
+     "RLUSD",
+     "Q",
+     "USDG"
+    ],
+    "type": "string"
+   },
+   "walletId": {
+    "description": "Server-managed Agent Wallet only (walletMode=\"agentic-server\"). Lowercased Agent Wallet address selecting which of the user's wallets to spend from when they hold more than one (max 10 per owner). Omit to use the user's default wallet. Ignored for the other walletMode values since those modes carry their own signing key.",
+    "type": "string"
+   },
+   "walletMode": {
+    "description": "Which wallet to spend from. \"eoa\" = user's real MetaMask EOA (Q402_PRIVATE_KEY). \"agentic-local\" = Agent Wallet exported key (Q402_AGENTIC_PRIVATE_KEY). \"agentic-server\" = server-managed Agent Wallet (Q402 holds the key; one-shot payments need any live key \u2014 Trial or Multichain). When MULTIPLE wallets are configured the tool refuses without this arg and returns ambiguousWalletChoice for the user to pick.",
+    "enum": [
+     "eoa",
+     "agentic-local",
+     "agentic-server"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "chain",
+   "to",
+   "amount",
+   "token",
+   "confirm"
+  ],
+  "type": "object"
+ },
+ "name": "q402_pay"
+}

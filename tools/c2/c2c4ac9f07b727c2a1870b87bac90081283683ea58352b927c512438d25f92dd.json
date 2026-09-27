@@ -1,0 +1,263 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Crosswalk a US medical code or drug across systems and within a hierarchy. Hierarchy directions: `parents` and `children` walk a code's prefix hierarchy one level per call \u2014 immediate parent/children only (depth-1); call iteratively for the full ancestor or descendant path (ICD-10-CM/HCPCS; ICD-10-PCS codes have no prefix parent, and RxNorm concepts no code hierarchy). A resolvable source with no edge in the requested direction is a successful empty result with a notice, not an error. A source code string that also exists in another bundled system carries `alsoInSystems` naming it, since only the resolved system's hierarchy was walked. Drug directions (RxNorm): `name_to_rxcui` (drug name \u2192 RXCUI), `ndc_to_rxcui` and `rxcui_to_ndc` (NDC \u2194 RXCUI; NDCs accepted hyphenated in an FDA segment configuration \u2014 4-4-2, 5-3-2, 5-4-1, or the 11-digit 5-4-2 \u2014 or as bare 10/11 digits; `ndc_to_rxcui` names the product it decoded to), `rxcui_to_ingredients` and `rxcui_to_brands` (RXCUI \u2192 ingredient/brand RXCUIs, each with the target's RxNorm name and its `conceptType` \u2014 read that before counting a combination product's ingredients). Drug-class directions (RxClass): `rxcui_to_classes` (RXCUI \u2192 its classes: pharmacologic class, mechanism of action, physiologic effect, pharmacokinetics, therapeutic category, chemical structure, the diseases it may treat, prevent, diagnose, or induce or is contraindicated with, VA class, DEA controlled-substance schedule, CDC vaccine code; a drug product also carries its ingredients' classes, naming the ingredient in `via`, while DEA schedules are recorded only on drug products and VA classes almost only there, so map a product for those) and `class_to_rxcuis` (class ID \u2192 its direct member RXCUIs, each with its RxNorm name and `conceptType`). Each class hit carries `classType`, `source` (the RxClass source asserting it), and `relation` \u2014 a `ci_` relation is a contraindication, not an indication; narrow either direction with `classType`. Every result carries `source` provenance (which system or edge answered) so a chained call (e.g. into openfda with a resolved NDC) uses the right identifier. The `children`, `name_to_rxcui`, `rxcui_to_ndc`, `rxcui_to_classes`, and `class_to_rxcuis` directions can return large sets and paginate: a `nextCursor` in the response is passed back as `cursor` (with an optional `limit` page size) to walk the full set. A field the direction does not use is rejected with `field_not_applicable`: `limit` and `cursor` on the point directions, `classType` outside the class directions, and a `system` other than RXNORM on the drug and class directions.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "classType": {
+    "description": "For rxcui_to_classes and class_to_rxcuis only: keep only classes of this RxClass type \u2014 EPC (FDA established pharmacologic class), MOA (mechanism of action), PE (physiologic effect), PK (pharmacokinetics), TC (therapeutic category), CHEM (chemical structure), DISEASE (diseases the drug may treat, prevent, diagnose, or induce, or is contraindicated with), VA (VA drug class, recorded almost only on drug products), SCHEDULE (DEA controlled-substance schedule, recorded on drug products only), CVX (CDC vaccine code). Omit for every type. Rejected on every other direction.",
+    "enum": [
+     "EPC",
+     "MOA",
+     "PE",
+     "PK",
+     "TC",
+     "CHEM",
+     "DISEASE",
+     "VA",
+     "SCHEDULE",
+     "CVX"
+    ],
+    "type": "string"
+   },
+   "cursor": {
+    "description": "Opaque continuation token from a previous response's `nextCursor`, for the paginated directions only (children, name_to_rxcui, rxcui_to_ndc, rxcui_to_classes, class_to_rxcuis). Omit for the first page; an empty string counts as omitted. A non-empty cursor on any other direction is rejected.",
+    "type": "string"
+   },
+   "direction": {
+    "description": "What to map to. parents/children return the immediate parent or children only (depth-1) \u2014 call iteratively to walk a full path; the rxcui/ndc/name directions are RxNorm drug crosswalks; rxcui_to_classes and class_to_rxcuis are RxClass drug-class crosswalks.",
+    "enum": [
+     "parents",
+     "children",
+     "name_to_rxcui",
+     "ndc_to_rxcui",
+     "rxcui_to_ndc",
+     "rxcui_to_ingredients",
+     "rxcui_to_brands",
+     "rxcui_to_classes",
+     "class_to_rxcuis"
+    ],
+    "type": "string"
+   },
+   "from": {
+    "description": "The source value: a code (for parents/children), a drug name, an NDC, an RXCUI, or an RxClass class ID (for class_to_rxcuis). Must not be blank or whitespace-only.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "limit": {
+    "description": "Max results per page, for the paginated directions only (children, name_to_rxcui, rxcui_to_ndc, rxcui_to_classes, class_to_rxcuis). Defaults to MEDCODE_MAX_RESULTS (50), ceiling 200. Rejected on every other direction.",
+    "maximum": 200,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "system": {
+    "description": "For parents/children, force the source code into this system. Omit to auto-detect. The drug and class directions resolve in RxNorm and accept only \"RXNORM\" (no effect); any other value there is rejected.",
+    "enum": [
+     "ICD10CM",
+     "ICD10PCS",
+     "HCPCS",
+     "RXNORM"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "from",
+   "direction"
+  ],
+  "type": "object"
+ },
+ "name": "medcode_map_codes",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "from",
+     "direction",
+     "resolvedSystem",
+     "hits"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "alsoInSystems": {
+    "description": "Other bundled systems holding the same `from` code string, present only when there is at least one (hierarchy directions only \u2014 a drug name, NDC, or RXCUI is not system-scoped). The hits above were walked in `resolvedSystem` alone; the code is a DIFFERENT code with a different hierarchy in each system listed here \u2014 \"B00\" is the ICD-10-CM category \"Herpesviral [herpes simplex] infections\" and also the ICD-10-PCS table row \"Imaging, Central Nervous System, Plain Radiography\". Re-call with `system` set to one of these values to walk it there.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "cap": {
+    "description": "Paginated directions only: the page size that was applied.",
+    "type": "number"
+   },
+   "direction": {
+    "description": "The mapping direction that was applied.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `field_not_applicable`: A `system`, `classType`, `limit`, or `cursor` was sent on a direction that does not use it. `no_mapping`: The source value did not resolve to any bundled code, drug, or class. `direction_unavailable`: A drug-crosswalk direction was requested but this build carries no RxNorm tables, or a class direction was requested but it carries no RxClass class layer. `ambiguous_system`: The source code is present in more than one system and no `system` was given. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "field_not_applicable",
+         "no_mapping",
+         "direction_unavailable",
+         "ambiguous_system"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "from": {
+    "description": "The source value, echoed back.",
+    "type": "string"
+   },
+   "hits": {
+    "description": "Crosswalk results, each tagged with the edge that produced it.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One crosswalk result tagged with the edge that produced it.",
+     "properties": {
+      "classType": {
+       "description": "The RxClass class type, on `rxcui_to_classes` and `class_to_rxcuis` hits only \u2014 the values the `classType` input takes.",
+       "enum": [
+        "EPC",
+        "MOA",
+        "PE",
+        "PK",
+        "TC",
+        "CHEM",
+        "DISEASE",
+        "VA",
+        "SCHEDULE",
+        "CVX"
+       ],
+       "type": "string"
+      },
+      "conceptType": {
+       "description": "The target concept's RxNorm type, present on `rxcui_to_ingredients`, `rxcui_to_brands`, and `class_to_rxcuis` hits only. A class member may be any drug concept: an ingredient type below, or a drug product \u2014 \"SCD\"/\"SBD\" (clinical/branded drug) or \"GPCK\"/\"BPCK\" (generic/branded pack). Otherwise \"IN\" (ingredient), \"PIN\" (precise ingredient \u2014 a specific salt, ester, or isomer of an ingredient), \"MIN\" (multiple ingredients \u2014 a concept naming a combination, never a substance within it), or \"BN\" (brand name). Ingredient hits mix the first three, so the hit count is not the substance count: a \"MIN\" hit is the grouping concept and never counts, and a \"PIN\" names a form of a substance rather than an extra one \u2014 usually alongside the \"IN\" it refines, though two \"PIN\" esters can share a single \"IN\". Counting the \"IN\" hits is the closest reading, and under-counts those shared cases.",
+       "type": "string"
+      },
+      "description": {
+       "description": "Description of the target when available: the code description for hierarchy hits, the official RxNorm name for the `name_to_rxcui`, `ndc_to_rxcui`, `rxcui_to_ingredients`, `rxcui_to_brands`, and `class_to_rxcuis` drug concepts, and the class name for `rxcui_to_classes`. Absent for `rxcui_to_ndc`, whose targets are package identifiers with no description of their own.",
+       "type": "string"
+      },
+      "relation": {
+       "description": "The RxClass relationship between the drug and the class, on `rxcui_to_classes` and `class_to_rxcuis` hits only: has_epc, has_moa, has_pe, has_pk, site_of_metabolism, has_tc, has_ingredient / has_chemical_structure / has_active_metabolites (CHEM), may_treat / may_prevent / may_diagnose / induces (DISEASE), has_vaclass / has_vaclass_extended, has_schedule, isa_cvx. A `ci_` relation (ci_with, ci_moa, ci_pe, ci_chemclass) is a contraindication: the drug is contraindicated with that disease or class \u2014 never an indication, and never class membership.",
+       "type": "string"
+      },
+      "source": {
+       "description": "Which system or relationship edge produced this hit (e.g. \"ICD10CM\", \"has_ingredient\", \"NDC\"). On the class directions, the RxClass source asserting the drug\u2013class edge: \"MEDRT\" (VA MED-RT), \"FDASPL\" (FDA structured product labels), \"FMTSME\" (Federal Medication Terminologies), \"VA\" (VA National Formulary classes), \"RXNORM\" (DEA schedules as RxNorm records them), or \"CDC\" (CVX vaccine codes).",
+       "type": "string"
+      },
+      "system": {
+       "description": "The code system of the target value, or null when the target is not a system code (an NDC, or an RxClass class ID).",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "value": {
+       "description": "The mapped target value (a code, RXCUI, NDC, or RxClass class ID).",
+       "type": "string"
+      },
+      "via": {
+       "description": "On `rxcui_to_classes` hits only: the ingredient RXCUI a drug product inherits this class through \u2014 RxClass attaches most classes to ingredients. Absent when the class attaches to the source RXCUI itself. When several ingredients carry the same class, names an ingredient (\"IN\") over its precise ingredient (\"PIN\"), then the lowest RXCUI.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "source",
+      "system",
+      "value"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "nextCursor": {
+    "description": "Paginated directions only: opaque token to pass back as `cursor` for the next page. Present only when more results exist beyond this page.",
+    "type": "string"
+   },
+   "notice": {
+    "description": "Guidance whenever a resolvable source returns no hits, naming which of the two causes applies: it has no edge in the requested direction (a top-level code has no parent; a leaf has no children; ICD-10-PCS codes have no prefix parent; RxNorm concepts have no code hierarchy; no bundled class, or none of the requested `classType`, covers the RXCUI; a class has no direct member), or the `cursor` starts past the last page of a direction that does have results.",
+    "type": "string"
+   },
+   "resolvedSystem": {
+    "description": "The system the source resolved in, or null when not system-scoped.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "shown": {
+    "description": "Paginated directions only: number of hits returned on this page.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "Paginated directions (children, name_to_rxcui, rxcui_to_ndc, rxcui_to_classes, class_to_rxcuis) only: true when more results exist beyond this page.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Map Medical Codes"
+}

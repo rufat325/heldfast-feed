@@ -1,0 +1,768 @@
+{
+ "description": "Atomically combine additions, updates and removals on ONE page. Checks the final graph, so a coordinated move or edge replacement needs no intermediate saves. Read IDs and revision with mmap_read first. Cross-page deletion is excluded.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "expectedRevision": {
+    "description": "Revision from mmap_read; absent requires a new page. A stale revision returns CONFLICT.",
+    "pattern": "^(?:[a-f0-9]{64}|absent)$",
+    "type": "string"
+   },
+   "operations": {
+    "items": {
+     "anyOf": [
+      {
+       "additionalProperties": false,
+       "properties": {
+        "data": {
+         "additionalProperties": false,
+         "properties": {
+          "context": {
+           "additionalProperties": false,
+           "properties": {
+            "next": {
+             "description": "Next actions for resuming this effort",
+             "maxLength": 2000,
+             "minLength": 1,
+             "pattern": "^[^\\u0000-\\u0008\\u000b-\\u001f\\u007f-\\u009f]*$",
+             "type": "string"
+            },
+            "summary": {
+             "description": "Concise purpose and confirmed decisions",
+             "maxLength": 2000,
+             "minLength": 1,
+             "pattern": "^[^\\u0000-\\u0008\\u000b-\\u001f\\u007f-\\u009f]*$",
+             "type": "string"
+            }
+           },
+           "type": "object"
+          },
+          "edges": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "from": {
+              "description": "the node that USES the other (must live on a higher layer)",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "label": {
+              "description": "what flows along the edge",
+              "maxLength": 80,
+              "minLength": 1,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "type": "string"
+             },
+             "to": {
+              "description": "the node being used (must live on a strictly lower layer)",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             }
+            },
+            "required": [
+             "from",
+             "to"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "groups": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "id": {
+              "description": "stable kebab-case identifier of the group",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "label": {
+              "description": "subsystem name shown at the far zoom",
+              "maxLength": 60,
+              "minLength": 1,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "type": "string"
+             },
+             "layer": {
+              "description": "band this group clusters; members must live on the same band",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             }
+            },
+            "required": [
+             "id",
+             "label",
+             "layer"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "kind": {
+           "description": "diagram kind. dev (default) = the live progress ledger with status skins. The rest are documentation diagrams rendered neutrally: architecture (layered components; also fits call graphs and module dependencies), dataflow (source\u2192transform\u2192sink, stages as layers), behavior-tree (root on top, leaves at the bottom; also fits mind maps and WBS), sequence (classic call/return: rank = time step with rank 0 = EARLIEST, drawn top-down; declare lanes as participants and make every call AND every return its own event node in the acting participant's lane, edges labeled with the message). State machines are unsupported: cycles cannot enter a Mellos map.",
+           "enum": [
+            "dev",
+            "architecture",
+            "dataflow",
+            "behavior-tree",
+            "sequence"
+           ],
+           "type": "string"
+          },
+          "lanes": {
+           "description": "vertical columns crossing all bands; declaration order = left-to-right",
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "id": {
+              "description": "stable kebab-case identifier of the lane",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "label": {
+              "description": "column name, e.g. a sequence participant",
+              "maxLength": 60,
+              "minLength": 1,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "type": "string"
+             }
+            },
+            "required": [
+             "id",
+             "label"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "layers": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "id": {
+              "description": "stable kebab-case identifier of the band",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "name": {
+              "description": "display name of the band",
+              "maxLength": 60,
+              "minLength": 1,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "type": "string"
+             },
+             "rank": {
+              "description": "an integer in 0..99, 0 = bottom / most primitive; must be unique among the map's bands",
+              "maximum": 99,
+              "minimum": 0,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "id",
+             "name",
+             "rank"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "nodes": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "detail": {
+              "description": "design notes shown in the pane detail panel: responsibility, contract, key decisions",
+              "maxLength": 600,
+              "minLength": 1,
+              "pattern": "^[^\\u0000-\\u0008\\u000b-\\u001f\\u007f-\\u009f]*$",
+              "type": "string"
+             },
+             "evidence": {
+              "description": "how an already-verified node was verified; for regressed: what broke. Declaring a node straight to done needs it as much as updating one does.",
+              "maxLength": 200,
+              "minLength": 1,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "type": "string"
+             },
+             "group": {
+              "description": "same-band group this node belongs to",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "id": {
+              "description": "stable kebab-case identifier of the node",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "kind": {
+              "description": "node kind rendered as a glyph prefix. Known: selector | sequence | parallel | decorator | condition | action (behavior trees); source | transform | sink (dataflow); service | db | queue | ui (architecture). Unknown kinds are kept and shown in the detail panel.",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "label": {
+              "description": "display label inside the box",
+              "maxLength": 60,
+              "minLength": 1,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "type": "string"
+             },
+             "lane": {
+              "description": "lane (column) this node belongs to",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "layer": {
+              "description": "id of the band this node lives in",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "sources": {
+              "description": "Optional source files and verified SHA256 baselines. mmap_read changes checks them without rescanning the repository.",
+              "items": {
+               "additionalProperties": false,
+               "properties": {
+                "path": {
+                 "maxLength": 1024,
+                 "type": "string"
+                },
+                "sha256": {
+                 "pattern": "^[a-f0-9]{64}$",
+                 "type": "string"
+                }
+               },
+               "required": [
+                "path"
+               ],
+               "type": "object"
+              },
+              "maxItems": 100,
+              "type": "array"
+             },
+             "status": {
+              "description": "defaults to planned. planned = ghost on the map; in-progress = spinner; done = verified; regressed = was done, now broken",
+              "enum": [
+               "planned",
+               "in-progress",
+               "done",
+               "regressed"
+              ],
+              "type": "string"
+             },
+             "submap": {
+              "description": "page slug of this node's child map \u2014 the pane badges the node \u229e and double-click dives in. Declare the child page separately. Create a sub-map only when the node's internals genuinely deserve their own picture; most nodes need none.",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             }
+            },
+            "required": [
+             "id",
+             "label",
+             "layer"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "title": {
+           "anyOf": [
+            {
+             "description": "map title, e.g. the feature being built; null removes it",
+             "maxLength": 120,
+             "minLength": 1,
+             "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ],
+           "description": "map title, e.g. the feature being built; null removes it"
+          }
+         },
+         "type": "object"
+        },
+        "op": {
+         "const": "declare",
+         "type": "string"
+        }
+       },
+       "required": [
+        "op",
+        "data"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "data": {
+         "additionalProperties": false,
+         "properties": {
+          "context": {
+           "anyOf": [
+            {
+             "additionalProperties": false,
+             "properties": {
+              "next": {
+               "description": "Next actions for resuming this effort",
+               "maxLength": 2000,
+               "minLength": 1,
+               "pattern": "^[^\\u0000-\\u0008\\u000b-\\u001f\\u007f-\\u009f]*$",
+               "type": "string"
+              },
+              "summary": {
+               "description": "Concise purpose and confirmed decisions",
+               "maxLength": 2000,
+               "minLength": 1,
+               "pattern": "^[^\\u0000-\\u0008\\u000b-\\u001f\\u007f-\\u009f]*$",
+               "type": "string"
+              }
+             },
+             "type": "object"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "edges": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "from": {
+              "description": "the node that USES the other (must live on a higher layer)",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "label": {
+              "anyOf": [
+               {
+                "description": "New edge label; null clears",
+                "maxLength": 80,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
+                "type": "string"
+               },
+               {
+                "type": "null"
+               }
+              ],
+              "description": "New edge label; null clears"
+             },
+             "newFrom": {
+              "description": "replacement consumer",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "newTo": {
+              "description": "replacement dependency",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "to": {
+              "description": "the node being used (must live on a strictly lower layer)",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             }
+            },
+            "required": [
+             "from",
+             "to"
+            ],
+            "type": "object"
+           },
+           "minItems": 1,
+           "type": "array"
+          },
+          "groups": {
+           "description": "relabel or move a group; final membership must match its layer",
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "id": {
+              "description": "id of the group to revise",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "label": {
+              "description": "new subsystem name",
+              "maxLength": 60,
+              "minLength": 1,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "type": "string"
+             },
+             "layer": {
+              "description": "new layer; move members in the same batch",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             }
+            },
+            "required": [
+             "id"
+            ],
+            "type": "object"
+           },
+           "minItems": 1,
+           "type": "array"
+          },
+          "kind": {
+           "description": "diagram kind. dev (default) = the live progress ledger with status skins. The rest are documentation diagrams rendered neutrally: architecture (layered components; also fits call graphs and module dependencies), dataflow (source\u2192transform\u2192sink, stages as layers), behavior-tree (root on top, leaves at the bottom; also fits mind maps and WBS), sequence (classic call/return: rank = time step with rank 0 = EARLIEST, drawn top-down; declare lanes as participants and make every call AND every return its own event node in the acting participant's lane, edges labeled with the message). State machines are unsupported: cycles cannot enter a Mellos map.",
+           "enum": [
+            "dev",
+            "architecture",
+            "dataflow",
+            "behavior-tree",
+            "sequence"
+           ],
+           "type": "string"
+          },
+          "laneOrder": {
+           "description": "Every lane exactly once, in display order.",
+           "items": {
+            "description": "existing lane id",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+            "type": "string"
+           },
+           "maxItems": 100,
+           "type": "array"
+          },
+          "lanes": {
+           "description": "relabel existing lanes; order and membership are untouched",
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "id": {
+              "description": "id of the lane to relabel",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "label": {
+              "description": "new column name",
+              "maxLength": 60,
+              "minLength": 1,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "type": "string"
+             }
+            },
+            "required": [
+             "id",
+             "label"
+            ],
+            "type": "object"
+           },
+           "minItems": 1,
+           "type": "array"
+          },
+          "layers": {
+           "description": "rename and/or re-rank existing bands; an item must carry a name, a rank, or both",
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "id": {
+              "description": "id of the band to revise",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "name": {
+              "description": "new display name of the band",
+              "maxLength": 60,
+              "minLength": 1,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "type": "string"
+             },
+             "rank": {
+              "description": "an integer in 0..99, 0 = bottom / most primitive; must be unique among the map's bands",
+              "maximum": 99,
+              "minimum": 0,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "id"
+            ],
+            "type": "object"
+           },
+           "minItems": 1,
+           "type": "array"
+          },
+          "title": {
+           "anyOf": [
+            {
+             "description": "Map title; null clears",
+             "maxLength": 120,
+             "minLength": 1,
+             "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ],
+           "description": "Map title; null clears"
+          },
+          "updates": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "detail": {
+              "anyOf": [
+               {
+                "description": "design notes shown in the pane detail panel: responsibility, contract, key decisions; null clears them",
+                "maxLength": 600,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u0008\\u000b-\\u001f\\u007f-\\u009f]*$",
+                "type": "string"
+               },
+               {
+                "type": "null"
+               }
+              ],
+              "description": "design notes shown in the pane detail panel: responsibility, contract, key decisions; null clears them"
+             },
+             "evidence": {
+              "anyOf": [
+               {
+                "description": "for done: how it was verified; for regressed: what broke; null clears it",
+                "maxLength": 200,
+                "minLength": 1,
+                "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
+                "type": "string"
+               },
+               {
+                "type": "null"
+               }
+              ],
+              "description": "for done: how it was verified; for regressed: what broke; null clears it"
+             },
+             "group": {
+              "anyOf": [
+               {
+                "description": "join this same-band group; null leaves the current group",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                "type": "string"
+               },
+               {
+                "type": "null"
+               }
+              ],
+              "description": "join this same-band group; null leaves the current group"
+             },
+             "id": {
+              "description": "id of the node to update",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "kind": {
+              "anyOf": [
+               {
+                "description": "node kind rendered as a glyph prefix. Known: selector | sequence | parallel | decorator | condition | action (behavior trees); source | transform | sink (dataflow); service | db | queue | ui (architecture). Unknown kinds are kept and shown in the detail panel.",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                "type": "string"
+               },
+               {
+                "type": "null"
+               }
+              ],
+              "description": "node kind rendered as a glyph prefix. Known: selector | sequence | parallel | decorator | condition | action (behavior trees); source | transform | sink (dataflow); service | db | queue | ui (architecture). Unknown kinds are kept and shown in the detail panel."
+             },
+             "label": {
+              "description": "new display label inside the box",
+              "maxLength": 60,
+              "minLength": 1,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$",
+              "type": "string"
+             },
+             "lane": {
+              "anyOf": [
+               {
+                "description": "join this lane; null leaves the current lane",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                "type": "string"
+               },
+               {
+                "type": "null"
+               }
+              ],
+              "description": "join this lane; null leaves the current lane"
+             },
+             "layer": {
+              "description": "move the node to this band; applied before this item's other fields, so a node can move and join a group on the new band in one item. Every edge touching it must still point strictly downward, and a grouped node may only move to its group's band.",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "sources": {
+              "anyOf": [
+               {
+                "description": "Optional source files and verified SHA256 baselines. mmap_read changes checks them without rescanning the repository.",
+                "items": {
+                 "additionalProperties": false,
+                 "properties": {
+                  "path": {
+                   "maxLength": 1024,
+                   "type": "string"
+                  },
+                  "sha256": {
+                   "pattern": "^[a-f0-9]{64}$",
+                   "type": "string"
+                  }
+                 },
+                 "required": [
+                  "path"
+                 ],
+                 "type": "object"
+                },
+                "maxItems": 100,
+                "type": "array"
+               },
+               {
+                "type": "null"
+               }
+              ],
+              "description": "Optional source files and verified SHA256 baselines. mmap_read changes checks them without rescanning the repository."
+             },
+             "status": {
+              "description": "the status to record. planned = ghost on the map; in-progress = spinner; done = verified; regressed = was done, now broken",
+              "enum": [
+               "planned",
+               "in-progress",
+               "done",
+               "regressed"
+              ],
+              "type": "string"
+             },
+             "submap": {
+              "anyOf": [
+               {
+                "description": "link a child map page by slug; null unlinks it",
+                "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+                "type": "string"
+               },
+               {
+                "type": "null"
+               }
+              ],
+              "description": "link a child map page by slug; null unlinks it"
+             }
+            },
+            "required": [
+             "id"
+            ],
+            "type": "object"
+           },
+           "minItems": 1,
+           "type": "array"
+          }
+         },
+         "type": "object"
+        },
+        "op": {
+         "const": "update",
+         "type": "string"
+        }
+       },
+       "required": [
+        "op",
+        "data"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "data": {
+         "additionalProperties": false,
+         "properties": {
+          "edges": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "from": {
+              "description": "the node that USES the other (must live on a higher layer)",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             },
+             "to": {
+              "description": "the node being used (must live on a strictly lower layer)",
+              "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+              "type": "string"
+             }
+            },
+            "required": [
+             "from",
+             "to"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "groups": {
+           "items": {
+            "description": "id of the group to remove; members stay, merely ungrouped",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "lanes": {
+           "items": {
+            "description": "id of the lane to remove; members stay, merely off-lane",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "layers": {
+           "items": {
+            "description": "id of the band to remove; it must hold no nodes and no groups",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "nodes": {
+           "items": {
+            "description": "id of the node to remove, with every edge touching it",
+            "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+            "type": "string"
+           },
+           "type": "array"
+          }
+         },
+         "type": "object"
+        },
+        "op": {
+         "const": "remove",
+         "type": "string"
+        }
+       },
+       "required": [
+        "op",
+        "data"
+       ],
+       "type": "object"
+      }
+     ]
+    },
+    "maxItems": 100,
+    "minItems": 1,
+    "type": "array"
+   },
+   "page": {
+    "description": "page (parallel map) this call targets; omit for the default page. A new conversation is not a new effort. Read existing pages with mmap_read first; reuse the same page for continued work. Create a new page only for a distinct effort.",
+    "pattern": "^[a-z0-9][a-z0-9-]{0,63}$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "operations"
+  ],
+  "type": "object"
+ },
+ "name": "mmap_batch",
+ "title": "Commit a single-page transaction"
+}

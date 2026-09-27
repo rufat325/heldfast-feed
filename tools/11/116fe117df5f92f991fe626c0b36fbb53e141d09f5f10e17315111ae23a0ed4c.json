@@ -1,0 +1,633 @@
+{
+ "annotations": {
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Site KPI summary"
+ },
+ "description": "Return the full headline summary for a site and period in ONE call: the 5 KPIs (revenue, sessions, RPS, AOV, CVR) PLUS two engagement KPIs (avg_duration = average dwell time in seconds, bounce_rate = % single-page-exit sessions) each with value AND the period-over-period change vs the previous equal-length window, PLUS a daily revenue/sessions/conversions trend, PLUS ad-spend availability (connected_channels, ad_spend_data_status, ad_spend_channels_in_period) and the Path A/B recommendation. avg_duration/bounce_rate are useful for sites with no revenue yet (engagement view). scroll_depth is the average scroll depth (%), taken per session as its deepest point then averaged; its change is a percentage-point delta. IMPORTANT: its denominator differs from avg_duration/bounce_rate \u2014 depth only covers sessions whose exit beacon landed, and sessions without one are excluded rather than counted as 0. scroll_depth is null when the window holds no depth signal at all (0% would read as 'read shallowly' when the truth is 'not measured'); depth has only been collected since 2026-06-15, so longer windows are partial. Pass optional country (ISO2, e.g. 'JP') and/or device ('mobile'/'desktop'/'tablet') to scope the session-derived KPIs and trend to that segment (omit = all); ROAS stays site-wide (ad spend has no country/device dimension). This is what the dashboard's KPI cards + revenue-trend chart show, merged with the site's ad-spend context. Call this first when a user asks 'how is my site doing?'. site_id is OPTIONAL when OAuth-authenticated (server falls back to the primary site). Default period is the last 30 days; pass period='today'/'7d'/'90d' or a raw day count (1-365). To match the dashboard exactly, pass start_date and end_date (YYYY-MM-DD, calendar dates in the SITE's analysis time zone, both inclusive; end_date may be today) and optionally compare_start_date/compare_end_date (default: the equal-length range right before start_date); when given they replace period, period.timezone reports the site time zone, and kpis.roas is null (see notes) because the dashboard does not provide ad-attributed ROAS. change is a percentage for revenue/sessions/RPS/AOV/avg_duration and an absolute percentage-point delta for CVR and bounce_rate. For period='today' the comparison is today-so-far vs the SAME elapsed window yesterday (e.g. midnight\u2192now vs midnight\u2192same-time-yesterday), so 'previous' can read below yesterday's full-day total \u2014 that is expected, not a discrepancy. EXCEPTION: kpis.roas.previous uses the full prior JST calendar day because spend is daily-grained; previous_period.source_boundaries and period_boundary_definitions disclose that different window. ad_spend_data_status / ad_spend_channels_in_period reflect spend data ACTUALLY present in the period (consistent with get_channel_breakdown); path_recommendation reflects whether the requested period holds any channel with spend>0 (Path B = ad spend connected), the same definition the other tools use. kpis.roas is the SITE-WIDE ROAS (RS-measured revenue \u00f7 ad spend over channels that have spend \u2014 \u03a3revenue \u00f7 \u03a3spend, the same definition as the dashboard's overall ROAS; the spend-weighted aggregate of get_breakdown's per-channel ROAS) with value/previous/change (\u524d\u671f\u6bd4 from a current + previous 2-window computation); it is null on Path A / when the period has no ad spend (ROAS is undefined with zero spend), so render it only when present. When the PREVIOUS window has no spend, roas.previous and roas.change are null (unknown baseline, not 0.00x) \u2014 treat that as 'no prior-period comparison', never as a drop from zero.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "compare_end_date": {
+    "$ref": "#/properties/start_date"
+   },
+   "compare_start_date": {
+    "$ref": "#/properties/start_date"
+   },
+   "country": {
+    "maxLength": 2,
+    "minLength": 2,
+    "type": "string"
+   },
+   "device": {
+    "enum": [
+     "mobile",
+     "desktop",
+     "tablet"
+    ],
+    "type": "string"
+   },
+   "end_date": {
+    "$ref": "#/properties/start_date"
+   },
+   "period": {
+    "anyOf": [
+     {
+      "const": "today",
+      "type": "string"
+     },
+     {
+      "const": "7d",
+      "type": "string"
+     },
+     {
+      "const": "30d",
+      "type": "string"
+     },
+     {
+      "const": "90d",
+      "type": "string"
+     },
+     {
+      "maximum": 365,
+      "minimum": 1,
+      "type": "integer"
+     }
+    ],
+    "default": "30d"
+   },
+   "site_id": {
+    "format": "uuid",
+    "type": "string"
+   },
+   "start_date": {
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "get_summary",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "ad_spend_channels_in_period": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "ad_spend_data_status": {
+    "enum": [
+     "connected",
+     "pending",
+     "none"
+    ],
+    "type": "string"
+   },
+   "ad_spend_rows_in_period": {
+    "type": "number"
+   },
+   "basis": {
+    "type": "string"
+   },
+   "connected_channels": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "data_freshness": {
+    "additionalProperties": false,
+    "properties": {
+     "bot_classification_delay_definitions": {
+      "additionalProperties": false,
+      "properties": {
+       "burst_cluster_fallback": {
+        "type": "string"
+       },
+       "burst_cluster_primary": {
+        "type": "string"
+       },
+       "single_page_zero_dwell": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "burst_cluster_primary",
+       "burst_cluster_fallback",
+       "single_page_zero_dwell"
+      ],
+      "type": "object"
+     },
+     "bot_classification_delay_minutes_max_by_rule": {
+      "additionalProperties": false,
+      "properties": {
+       "burst_cluster_fallback": {
+        "const": 480,
+        "type": "number"
+       },
+       "burst_cluster_primary": {
+        "const": 20,
+        "type": "number"
+       },
+       "single_page_zero_dwell": {
+        "const": 480,
+        "type": "number"
+       }
+      },
+      "required": [
+       "burst_cluster_primary",
+       "burst_cluster_fallback",
+       "single_page_zero_dwell"
+      ],
+      "type": "object"
+     },
+     "delay_bounds_assume_scheduled_jobs_operational": {
+      "const": true,
+      "type": "boolean"
+     },
+     "generated_at": {
+      "format": "date-time",
+      "type": "string"
+     },
+     "may_change_because": {
+      "items": {
+       "enum": [
+        "live_ingestion",
+        "open_window",
+        "moving_window",
+        "delayed_bot_classification"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "provisional": {
+      "const": true,
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "generated_at",
+     "provisional",
+     "may_change_because",
+     "bot_classification_delay_minutes_max_by_rule",
+     "bot_classification_delay_definitions",
+     "delay_bounds_assume_scheduled_jobs_operational"
+    ],
+    "type": "object"
+   },
+   "kpis": {
+    "additionalProperties": false,
+    "properties": {
+     "aov": {
+      "$ref": "#/properties/kpis/properties/revenue"
+     },
+     "avg_duration": {
+      "$ref": "#/properties/kpis/properties/revenue"
+     },
+     "avg_duration_depth_basis": {
+      "anyOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "change": {
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "previous": {
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "value": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "value",
+         "previous",
+         "change"
+        ],
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "bounce_rate": {
+      "$ref": "#/properties/kpis/properties/revenue"
+     },
+     "cvr": {
+      "$ref": "#/properties/kpis/properties/revenue"
+     },
+     "median_duration_depth_basis": {
+      "anyOf": [
+       {
+        "$ref": "#/properties/kpis/properties/avg_duration_depth_basis/anyOf/0"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "median_scroll_depth": {
+      "anyOf": [
+       {
+        "$ref": "#/properties/kpis/properties/avg_duration_depth_basis/anyOf/0"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "revenue": {
+      "additionalProperties": false,
+      "properties": {
+       "change": {
+        "type": "number"
+       },
+       "previous": {
+        "type": "number"
+       },
+       "value": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "value",
+       "previous",
+       "change"
+      ],
+      "type": "object"
+     },
+     "roas": {
+      "anyOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "change": {
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "previous": {
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "value": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "value",
+         "previous",
+         "change"
+        ],
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "rps": {
+      "$ref": "#/properties/kpis/properties/revenue"
+     },
+     "scroll_depth": {
+      "anyOf": [
+       {
+        "$ref": "#/properties/kpis/properties/revenue"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "sessions": {
+      "$ref": "#/properties/kpis/properties/revenue"
+     }
+    },
+    "required": [
+     "revenue",
+     "sessions",
+     "rps",
+     "aov",
+     "cvr",
+     "avg_duration",
+     "bounce_rate",
+     "scroll_depth",
+     "avg_duration_depth_basis",
+     "median_duration_depth_basis",
+     "median_scroll_depth",
+     "roas"
+    ],
+    "type": "object"
+   },
+   "notes": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "path_recommendation": {
+    "enum": [
+     "A",
+     "B"
+    ],
+    "type": "string"
+   },
+   "period": {
+    "additionalProperties": false,
+    "properties": {
+     "calendar_dates_touched": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "days": {
+      "type": "number"
+     },
+     "duration_hours": {
+      "type": "number"
+     },
+     "end": {
+      "type": "string"
+     },
+     "reference_bounds": {
+      "const": "start_inclusive_end_exclusive",
+      "type": "string"
+     },
+     "reference_end_at": {
+      "format": "date-time",
+      "type": "string"
+     },
+     "reference_start_at": {
+      "format": "date-time",
+      "type": "string"
+     },
+     "source_alignment": {
+      "enum": [
+       "exact",
+       "mixed"
+      ],
+      "type": "string"
+     },
+     "source_boundaries": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "applies_to": {
+         "items": {
+          "type": "string"
+         },
+         "minItems": 1,
+         "type": "array"
+        },
+        "boundary": {
+         "enum": [
+          "reference_timestamp_window",
+          "database_statement_time_window",
+          "jst_calendar_dates_from_reference_start",
+          "jst_calendar_dates_from_database_window_start",
+          "jst_calendar_dates_inclusive",
+          "account_registry_not_period_scoped",
+          "derived_previous_daily_window",
+          "derived_from_current_and_previous",
+          "defined_per_output_item"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "applies_to",
+        "boundary"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "start": {
+      "type": "string"
+     },
+     "timezone": {
+      "type": "string"
+     },
+     "window_type": {
+      "enum": [
+       "rolling",
+       "calendar_to_date",
+       "comparison",
+       "calendar_range"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "start",
+     "end",
+     "days",
+     "reference_start_at",
+     "reference_end_at",
+     "window_type",
+     "reference_bounds",
+     "timezone",
+     "duration_hours",
+     "calendar_dates_touched",
+     "source_alignment",
+     "source_boundaries"
+    ],
+    "type": "object"
+   },
+   "period_boundary_definitions": {
+    "additionalProperties": false,
+    "properties": {
+     "account_registry_not_period_scoped": {
+      "type": "string"
+     },
+     "database_statement_time_window": {
+      "type": "string"
+     },
+     "defined_per_output_item": {
+      "type": "string"
+     },
+     "derived_from_current_and_previous": {
+      "type": "string"
+     },
+     "derived_previous_daily_window": {
+      "type": "string"
+     },
+     "jst_calendar_dates_from_database_window_start": {
+      "type": "string"
+     },
+     "jst_calendar_dates_from_reference_start": {
+      "type": "string"
+     },
+     "jst_calendar_dates_inclusive": {
+      "type": "string"
+     },
+     "path_syntax": {
+      "const": "dot_path_with_array_wildcard",
+      "type": "string"
+     },
+     "reference_timestamp_window": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "path_syntax",
+     "reference_timestamp_window",
+     "database_statement_time_window",
+     "jst_calendar_dates_from_reference_start",
+     "jst_calendar_dates_from_database_window_start",
+     "jst_calendar_dates_inclusive",
+     "account_registry_not_period_scoped",
+     "derived_previous_daily_window",
+     "derived_from_current_and_previous",
+     "defined_per_output_item"
+    ],
+    "type": "object"
+   },
+   "presentation_hints": {
+    "additionalProperties": false,
+    "properties": {
+     "avoid_long_prose": {
+      "const": true,
+      "type": "boolean"
+     },
+     "prefer_compact_visual_summary": {
+      "const": true,
+      "type": "boolean"
+     },
+     "primary_metric": {
+      "type": "string"
+     },
+     "recommended_followup_tools": {
+      "items": {
+       "enum": [
+        "get_breakdown",
+        "get_priority_insights"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "recommended_sections": {
+      "items": {
+       "enum": [
+        "kpi_summary",
+        "trend",
+        "ad_spend_context",
+        "breakdown",
+        "priority_insights",
+        "recommended_actions"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "response_type": {
+      "enum": [
+       "analytics_summary",
+       "analytics_breakdown",
+       "priority_insights"
+      ],
+      "type": "string"
+     },
+     "show_breakdown": {
+      "type": "boolean"
+     },
+     "show_period_comparison": {
+      "type": "boolean"
+     },
+     "show_priority_insights": {
+      "type": "boolean"
+     },
+     "show_trend": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "response_type",
+     "primary_metric",
+     "show_period_comparison",
+     "show_trend",
+     "show_breakdown",
+     "show_priority_insights",
+     "prefer_compact_visual_summary",
+     "avoid_long_prose",
+     "recommended_followup_tools",
+     "recommended_sections"
+    ],
+    "type": "object"
+   },
+   "previous_period": {
+    "$ref": "#/properties/period"
+   },
+   "site_id": {
+    "type": "string"
+   },
+   "trend": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "conversions": {
+       "type": "number"
+      },
+      "cvr": {
+       "type": "number"
+      },
+      "date": {
+       "type": "string"
+      },
+      "revenue": {
+       "type": "number"
+      },
+      "sessions": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "date",
+      "revenue",
+      "sessions",
+      "conversions",
+      "cvr"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "site_id",
+   "period",
+   "previous_period",
+   "data_freshness",
+   "period_boundary_definitions",
+   "basis",
+   "kpis",
+   "trend",
+   "path_recommendation",
+   "ad_spend_data_status",
+   "connected_channels",
+   "ad_spend_channels_in_period",
+   "ad_spend_rows_in_period",
+   "presentation_hints"
+  ],
+  "type": "object"
+ },
+ "title": "Site KPI summary"
+}

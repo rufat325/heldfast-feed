@@ -1,0 +1,201 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Fetch national debt (Debt to the Penny) \u2014 total public debt outstanding broken into publicly-held debt and intragovernmental holdings. Three modes: \"latest\" returns the most recent business day's record; \"date\" returns the record for a specific date (must be a business day \u2014 the API only records debt on days markets are open); \"series\" returns a date range, staging the full result as a DataCanvas table when canvas_id is set or the range matches more than 500 rows \u2014 read the table's column schema with treasury_dataframe_describe, then run SQL over it with treasury_dataframe_query. Records go back to 1993-04-01.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "canvas_id": {
+    "description": "Set any non-empty value to stage mode=series results as a DataCanvas table for SQL analysis \u2014 the value only requests staging; the server picks the table name. Staging also happens on its own when the range matches more than 500 rows. The assigned name (df_XXXXX_XXXXX) comes back in the output canvas_id; pass it to treasury_dataframe_describe, then treasury_dataframe_query. Requires CANVAS_PROVIDER_TYPE=duckdb.",
+    "type": "string"
+   },
+   "date": {
+    "description": "ISO 8601 date (YYYY-MM-DD) for mode=date. Must be a business day; the API only records debt on days the market is open.",
+    "type": "string"
+   },
+   "end_date": {
+    "description": "ISO 8601 end date for mode=series (inclusive). Defaults to today.",
+    "type": "string"
+   },
+   "mode": {
+    "default": "latest",
+    "description": "\"latest\" returns the most recent day's record. \"date\" returns the record for a specific date. \"series\" returns a date range \u2014 use with start_date and end_date.",
+    "enum": [
+     "latest",
+     "date",
+     "series"
+    ],
+    "type": "string"
+   },
+   "start_date": {
+    "description": "ISO 8601 start date for mode=series (inclusive). Fiscal Data has daily debt records back to 1993-04-01.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "treasury_get_debt",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "record_date",
+     "total_debt",
+     "debt_held_public",
+     "intragovernmental_holdings"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "canvas_expires_at": {
+    "description": "ISO 8601 expiry for the canvas dataframe.",
+    "type": "string"
+   },
+   "canvas_id": {
+    "description": "DuckDB table name (df_XXXXX_XXXXX) holding the full retrieved series. Pass it to treasury_dataframe_describe for the column schema, then use it as the FROM target in treasury_dataframe_query SQL. Absent when nothing was staged.",
+    "type": "string"
+   },
+   "cap": {
+    "description": "The preview cap applied to the inline series array.",
+    "type": "number"
+   },
+   "debt_held_public": {
+    "description": "Debt held by the public (external creditors, Fed, foreign governments) in USD.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `no_data_for_date`: No debt record exists for the requested date (API returns HTTP 200 with empty data[], not 404 \u2014 total-count is 0). Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "no_data_for_date"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "intragovernmental_holdings": {
+    "description": "Intragovernmental holdings (debt owed to federal trust funds, Social Security, etc.) in USD.",
+    "type": "string"
+   },
+   "notice": {
+    "description": "Guidance when the inline series is a preview, when the series was staged as a DataCanvas table, or when paging stopped before the full matched set.",
+    "type": "string"
+   },
+   "record_date": {
+    "description": "Date of this debt record (YYYY-MM-DD). For series mode, the most recent date.",
+    "type": "string"
+   },
+   "retrieved_records": {
+    "description": "Records actually fetched for mode=series across every page, and the row count of the canvas table when one was registered. Never larger than total_records.",
+    "type": "number"
+   },
+   "series": {
+    "description": "Inline preview of the mode=series records \u2014 at most 20 rows, newest first. Compare series.length against retrieved_records to detect the cap; the full retrieved set is reachable through canvas_id when one is returned.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One daily debt record.",
+     "properties": {
+      "debt_held_public": {
+       "description": "Debt held by the public in USD.",
+       "type": "string"
+      },
+      "intragovernmental_holdings": {
+       "description": "Intragovernmental holdings in USD.",
+       "type": "string"
+      },
+      "record_date": {
+       "description": "Date of this record (YYYY-MM-DD).",
+       "type": "string"
+      },
+      "total_debt": {
+       "description": "Total public debt outstanding in USD.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "record_date",
+      "total_debt",
+      "debt_held_public",
+      "intragovernmental_holdings"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "shown": {
+    "description": "Series rows returned inline.",
+    "type": "number"
+   },
+   "total_debt": {
+    "description": "Total public debt outstanding in USD, as a plain decimal string \u2014 no separators, no currency symbol, two decimal places. Convert as needed.",
+    "type": "string"
+   },
+   "total_records": {
+    "description": "Records matching the date range upstream. Exceeds retrieved_records when the match is larger than the series row bound.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when the inline series array holds fewer rows than were retrieved.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Get National Debt"
+}

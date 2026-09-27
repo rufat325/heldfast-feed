@@ -1,0 +1,544 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Find EV charging stations from the global Open Charge Map registry near a point or within a bounding box. Provide either a center (latitude + longitude + distance) or a boundingbox; optionally scope to a country with countrycode. This tool is coordinate-native and does not geocode place names \u2014 resolve a place like \"Ballard, Seattle\" to coordinates with openstreetmap_geocode first, then pass them here. Filter by connector type, minimum power (kW), operator/network, usage type (public/free/membership), charge level, operational status, and minimum charge points. Filter IDs are integers \u2014 resolve a connector or network name to its ID with openchargemap_lookup_reference (e.g. \"CCS\" -> 33). Each result includes title, address, distance from the search point, connections (type, power, count), operator, access rules, registry operational status, and the last-verified date. Results come back one page at a time: when a page reports truncated, repeat the same search with the reported nextOffset to read the next one.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "boundingbox": {
+    "description": "Bounding-box search as an alternative to a center+radius. Mutually exclusive with latitude/longitude/distance \u2014 sending a boundingbox alongside a latitude or a longitude is rejected, not resolved in favour of one of them.",
+    "properties": {
+     "ne_lat": {
+      "description": "North-east corner latitude.",
+      "maximum": 90,
+      "minimum": -90,
+      "type": "number"
+     },
+     "ne_lng": {
+      "description": "North-east corner longitude.",
+      "maximum": 180,
+      "minimum": -180,
+      "type": "number"
+     },
+     "sw_lat": {
+      "description": "South-west corner latitude.",
+      "maximum": 90,
+      "minimum": -90,
+      "type": "number"
+     },
+     "sw_lng": {
+      "description": "South-west corner longitude.",
+      "maximum": 180,
+      "minimum": -180,
+      "type": "number"
+     }
+    },
+    "required": [
+     "sw_lat",
+     "sw_lng",
+     "ne_lat",
+     "ne_lng"
+    ],
+    "type": "object"
+   },
+   "connectiontypeid": {
+    "anyOf": [
+     {
+      "description": "A single reference ID.",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     {
+      "description": "Several reference IDs, OR-matched. At least one.",
+      "items": {
+       "description": "A reference ID.",
+       "exclusiveMinimum": 0,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      },
+      "maxItems": 10,
+      "minItems": 1,
+      "type": "array"
+     }
+    ],
+    "description": "Connector type ID, or an array of IDs (OR-matched). Resolve names with openchargemap_lookup_reference \u2014 e.g. CCS (Type 2)=33, CHAdeMO=2, NACS/Tesla Supercharger=27, Type 2 socket=25, Type 1/J1772=1."
+   },
+   "countrycode": {
+    "description": "Restrict to one country by ISO 3166-1 alpha-2 code (e.g. \"US\", \"FR\", \"GB\"). Omit for a global search. The server is global by default \u2014 there is no implicit country.",
+    "maxLength": 2,
+    "minLength": 2,
+    "pattern": "^[A-Za-z]{2}$",
+    "type": "string"
+   },
+   "distance": {
+    "default": 25,
+    "description": "Search radius from the center point, in the unit given by distanceUnit (default km). Max 500. Keep small (5-25) for dense urban areas; widen for rural coverage.",
+    "exclusiveMinimum": 0,
+    "maximum": 500,
+    "type": "number"
+   },
+   "distanceUnit": {
+    "default": "KM",
+    "description": "Unit for the distance parameter and the returned distance values.",
+    "enum": [
+     "KM",
+     "Miles"
+    ],
+    "type": "string"
+   },
+   "latitude": {
+    "description": "Center latitude (WGS84 decimal degrees). Use with longitude + distance for a radius search. Resolve place names via openstreetmap_geocode first.",
+    "maximum": 90,
+    "minimum": -90,
+    "type": "number"
+   },
+   "levelid": {
+    "anyOf": [
+     {
+      "description": "A single reference ID.",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     {
+      "description": "Several reference IDs, OR-matched. At least one.",
+      "items": {
+       "description": "A reference ID.",
+       "exclusiveMinimum": 0,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      },
+      "maxItems": 3,
+      "minItems": 1,
+      "type": "array"
+     }
+    ],
+    "description": "Charge level ID (1=Low <2kW, 2=Medium >2kW, 3=High >40kW/fast). Array OR-matched. Use 3 as a coarse \"fast charging only\" filter when a specific connector is not required."
+   },
+   "longitude": {
+    "description": "Center longitude (WGS84 decimal degrees). Use with latitude + distance for a radius search.",
+    "maximum": 180,
+    "minimum": -180,
+    "type": "number"
+   },
+   "maxresults": {
+    "default": 25,
+    "description": "Maximum stations to return, ordered by distance from the search point. Max 200.",
+    "maximum": 200,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "minchargepoints": {
+    "description": "Minimum number of charge points (stalls) at the station. Filters out single-point locations when you need a station likely to have an open stall.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "minpowerkw": {
+    "description": "Minimum charging power in kW across any connection at the station. Use ~50 for DC fast charging, ~150 for high-power DC. Stations whose fastest connection is below this are excluded.",
+    "exclusiveMinimum": 0,
+    "maximum": 1000,
+    "type": "number"
+   },
+   "offset": {
+    "default": 0,
+    "description": "Matching stations to skip before the returned page, for reading past a truncated result. Repeat the same search with the nextOffset value the previous call reported. One search reaches at most 500 stations, so 499 is the deepest offset that can return one \u2014 narrow the area or add filters to reach stations beyond that. Ordering is by distance and stable, but Open Charge Map is edited continuously, so a station added or removed between pages can shift what a later offset lands on.",
+    "maximum": 499,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "operatorid": {
+    "anyOf": [
+     {
+      "description": "A single reference ID.",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     {
+      "description": "Several reference IDs, OR-matched. At least one.",
+      "items": {
+       "description": "A reference ID.",
+       "exclusiveMinimum": 0,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      },
+      "maxItems": 10,
+      "minItems": 1,
+      "type": "array"
+     }
+    ],
+    "description": "Operator/network ID, or array of IDs (OR-matched). Resolve a network name with openchargemap_lookup_reference (category \"operators\") \u2014 e.g. \"Tesla\", \"ChargePoint\"."
+   },
+   "statustypeid": {
+    "anyOf": [
+     {
+      "description": "A single reference ID.",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     {
+      "description": "Several reference IDs, OR-matched. At least one.",
+      "items": {
+       "description": "A reference ID.",
+       "exclusiveMinimum": 0,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      },
+      "maxItems": 10,
+      "minItems": 1,
+      "type": "array"
+     }
+    ],
+    "description": "Registry operational-status ID, or array (OR-matched). Resolve via openchargemap_lookup_reference (category \"statustypes\"). NOTE: registry status is operator-reported and can be stale \u2014 combine with dateLastVerified and openchargemap_get_station_comments to judge real-world reliability, do not treat it as ground truth."
+   },
+   "usagetypeid": {
+    "anyOf": [
+     {
+      "description": "A single reference ID.",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     {
+      "description": "Several reference IDs, OR-matched. At least one.",
+      "items": {
+       "description": "A reference ID.",
+       "exclusiveMinimum": 0,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      },
+      "maxItems": 10,
+      "minItems": 1,
+      "type": "array"
+     }
+    ],
+    "description": "Usage/access type ID, or array (OR-matched). Resolve via openchargemap_lookup_reference (category \"usagetypes\") \u2014 e.g. Public=1, Public-Pay At Location=5, Public-Membership Required=4."
+   }
+  },
+  "type": "object"
+ },
+ "name": "openchargemap_find_stations",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "stations",
+     "searchSummary",
+     "attribution",
+     "totalCount"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "attribution": {
+    "description": "Required attribution to Open Charge Map contributors under CC BY 4.0.",
+    "type": "string"
+   },
+   "cap": {
+    "description": "The maxresults cap that was applied.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_location`: No search area was provided; or only one half of a center arrived; or a boundingbox arrived alongside a latitude or a longitude. `no_stations`: Open Charge Map holds no station for the search area and filters \u2014 either it returned nothing at all, or every station it returned was ruled out and there were no further candidates. `upstream_unavailable`: OCM returned a non-2xx response or timed out. `auth_failed`: OCM returned HTTP 401 or 403 \u2014 the API key is missing or invalid. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_location",
+         "no_stations",
+         "upstream_unavailable",
+         "auth_failed"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "nextOffset": {
+    "description": "The offset to pass on an otherwise identical call to read the next page. Absent when nothing further was retrieved.",
+    "type": "number"
+   },
+   "notice": {
+    "description": "How to reach the stations this page left out, or why it came back empty.",
+    "type": "string"
+   },
+   "searchSummary": {
+    "description": "Human-readable echo of the resolved search: location mode, scope, and active filters as the server applied them.",
+    "type": "string"
+   },
+   "shown": {
+    "description": "Stations in the returned page.",
+    "type": "number"
+   },
+   "stations": {
+    "description": "Matching stations, ordered by distance from the search point.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A charging station record.",
+     "properties": {
+      "address": {
+       "additionalProperties": false,
+       "description": "Structured station address and coordinates.",
+       "properties": {
+        "accessComments": {
+         "description": "Free-text access notes (e.g. \"24 hours daily\").",
+         "type": "string"
+        },
+        "country": {
+         "description": "Country name.",
+         "type": "string"
+        },
+        "countryCode": {
+         "description": "ISO 3166-1 alpha-2 country code.",
+         "type": "string"
+        },
+        "latitude": {
+         "description": "Station latitude (WGS84).",
+         "type": "number"
+        },
+        "line1": {
+         "description": "Street address line.",
+         "type": "string"
+        },
+        "longitude": {
+         "description": "Station longitude (WGS84).",
+         "type": "number"
+        },
+        "postcode": {
+         "description": "Postal/ZIP code.",
+         "type": "string"
+        },
+        "stateOrProvince": {
+         "description": "State or province.",
+         "type": "string"
+        },
+        "town": {
+         "description": "Town or city.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "latitude",
+        "longitude"
+       ],
+       "type": "object"
+      },
+      "connections": {
+       "description": "Connectors at the station. Empty when OCM has no connection data on record.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A connector at the station.",
+        "properties": {
+         "amps": {
+          "description": "Rated amperage. Often null.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "connectionType": {
+          "description": "Connector type title (e.g. \"CCS (Type 2)\", \"CHAdeMO\").",
+          "type": "string"
+         },
+         "connectionTypeId": {
+          "description": "Connector type ID \u2014 resolve via openchargemap_lookup_reference.",
+          "type": "number"
+         },
+         "currentType": {
+          "description": "Current type (e.g. \"AC (Single-Phase)\", \"DC\").",
+          "type": "string"
+         },
+         "level": {
+          "description": "Charge level title (e.g. \"Level 2 : Medium (Over 2kW)\").",
+          "type": "string"
+         },
+         "levelId": {
+          "description": "Charge level ID (1/2/3).",
+          "type": "number"
+         },
+         "powerKW": {
+          "description": "Rated power in kW for this connection. null/absent when unknown.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "quantity": {
+          "description": "Number of connectors of this type. null when unknown.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "voltage": {
+          "description": "Rated voltage. Often null.",
+          "type": [
+           "number",
+           "null"
+          ]
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "dataProvider": {
+       "description": "Source that provided the listing (e.g. \"afdc.energy.gov\").",
+       "type": "string"
+      },
+      "dateLastVerified": {
+       "description": "ISO 8601 date the listing was last verified. Stale (>12 months) is a reliability caveat. null when never verified.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "distance": {
+       "description": "Distance from the search point. Absent for bounding-box searches.",
+       "type": "number"
+      },
+      "distanceUnit": {
+       "description": "Unit of the distance value.",
+       "enum": [
+        "KM",
+        "Miles"
+       ],
+       "type": "string"
+      },
+      "id": {
+       "description": "OCM station ID.",
+       "type": "number"
+      },
+      "isAccessKeyRequired": {
+       "description": "Whether a physical access key is required. Absent when usage type is unknown.",
+       "type": "boolean"
+      },
+      "isMembershipRequired": {
+       "description": "Whether a membership or RFID card is required. Absent when usage type is unknown.",
+       "type": "boolean"
+      },
+      "isOperational": {
+       "description": "Whether the registry marks the status operational. Absent when the operational state is unknown. A true value can still mask a broken charger \u2014 corroborate with comments and dateLastVerified.",
+       "type": "boolean"
+      },
+      "isPayAtLocation": {
+       "description": "Whether payment is required at the location. Absent when usage type is unknown.",
+       "type": "boolean"
+      },
+      "isRecentlyVerified": {
+       "description": "Whether the listing was verified recently.",
+       "type": "boolean"
+      },
+      "numberOfPoints": {
+       "description": "Reported number of charge points (stalls). Often absent \u2014 absence means unknown, not zero.",
+       "type": "number"
+      },
+      "operator": {
+       "description": "Operating network name (e.g. \"ChargePoint\", \"Tesla\"). Absent when OCM has no operator on record.",
+       "type": "string"
+      },
+      "operatorId": {
+       "description": "OCM operator ID \u2014 resolve names via openchargemap_lookup_reference.",
+       "type": "number"
+      },
+      "status": {
+       "description": "Registry operational status (e.g. \"Operational\", \"Temporarily Unavailable\"). Operator-reported; may be stale.",
+       "type": "string"
+      },
+      "statusTypeId": {
+       "description": "Registry status ID \u2014 the value the openchargemap_find_stations statustypeid filter takes. Absent when OCM has no status on record.",
+       "type": "number"
+      },
+      "title": {
+       "description": "Station name / location title.",
+       "type": "string"
+      },
+      "usageType": {
+       "description": "Access/usage type title (e.g. \"Public\", \"Public - Pay At Location\"). Absent when OCM has no usage type.",
+       "type": "string"
+      },
+      "uuid": {
+       "description": "OCM station UUID \u2014 stable cross-system identifier (cannot be used as a lookup input).",
+       "type": "string"
+      }
+     },
+     "required": [
+      "id",
+      "uuid",
+      "title",
+      "address",
+      "connections"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "totalCount": {
+    "description": "Matching stations this search retrieved, before the offset/maxresults page was taken. Open Charge Map publishes no match total and one search can only retrieve so deep, so this is exact only when the search reached the end of what Open Charge Map holds for the area \u2014 otherwise it is a floor that rises as deeper pages are read. The notice says which of the two applies.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when matching stations were left out of the returned page.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "openchargemap-mcp-server: find stations"
+}

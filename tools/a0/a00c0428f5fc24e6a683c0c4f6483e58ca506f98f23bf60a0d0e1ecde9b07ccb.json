@@ -1,0 +1,756 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Render a map of the world, a continent, a country, its states/provinces/counties, or US ZIP code areas as an image shown in the conversation.\nColor regions with ONE of these (choropleth and categories are mutually exclusive):\n- `choropleth`: a number per region, e.g. {\"values\": {\"California\": 39.5, \"Texas\": 30.5}}. Classes, breaks and palette are picked from the data unless you set them.\n- `categories`: a label per region, e.g. {\"values\": {\"France\": \"Euro\", \"Poland\": \"Z\u0142oty\"}}. Colors are assigned automatically unless you set `colors`.\n- `regions`: explicit hex colors, e.g. {\"Texas\": \"#1D4ED8\"}. Also works on top of either mode as an override.\nRegion keys can be names, ISO/FIPS-style codes or common aliases. Typos are auto-corrected, and every correction or unmatched key is reported with suggestions, so there is no need to call get_map_regions first. Get `mapId` from list_maps if you don't know it.\nAlso available: pins (`locations` with lat/lon), `title`, `legend` position, `style` (theme, borders, region labels; `style.labels.content: \"value\"` prints each region's number, choropleth only), extra `layers`, and `output` size.\n`dryRun: true` validates and previews region matching and the color plan without rendering.\nWithout an API key: 30 renders per hour and 5 per minute (dry runs count), PNG up to 1600 px wide, with Ultimaps attribution on the image. The default 1200 px width is right for viewing in chat. Larger widths and scales are for files and are saved to disk instead of shown. Formats: png, or svg with a Pro key. PDF is not available.\nEvery render is also written to a file and the path reported. Relay that path: in a terminal client the inline image is visible to you but NOT to the user, and the file is the only thing they can open.\nThe result reports corrections, warnings, the resolved color plan, and a link to keep editing the map in Ultimaps Studio.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "categories": {
+    "additionalProperties": false,
+    "description": "Categorical coloring mode. Mutually exclusive with `choropleth`. Unmatched keys simply leave their regions uncolored. The no-data fill is `style.defaultRegionColor`, and `noDataColor` does not apply here.\n",
+    "properties": {
+     "colors": {
+      "additionalProperties": {
+       "examples": [
+        "#1D4ED8"
+       ],
+       "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
+       "type": "string"
+      },
+      "description": "Optional category name to color. Names are matched exactly and case-sensitively against the names in `values` (unlike region keys, which are matched loosely). An entry for a category no region uses is silently ignored. Unlisted categories get a color from a built-in categorical palette, assigned in order of first appearance in `values`, so pin the colors if you need stable output.\n",
+      "type": "object"
+     },
+     "values": {
+      "additionalProperties": {
+       "minLength": 1,
+       "type": "string"
+      },
+      "description": "Region key to category name.",
+      "maxProperties": 5000,
+      "minProperties": 1,
+      "type": "object"
+     }
+    },
+    "required": [
+     "values"
+    ],
+    "type": "object"
+   },
+   "choropleth": {
+    "additionalProperties": false,
+    "description": "Numeric choropleth mode. Mutually exclusive with `categories` (one scale per map). `regions` composes with it as an override layer. If none of the keys in `values` match, the request fails even under `onUnmatched: warn`, since there is nothing to build a scale from. `type`, `classes`, `method` and `palette` are all optional: whatever you leave out is suggested from the data, and the resolved plan is reported in the result.",
+    "properties": {
+     "classes": {
+      "description": "Number of classes. Absent = suggested from the data (5 base, more for skewed distributions). Explicit counts are honored exactly, capped only by the number of unique values. Tied values can still collapse duplicate quantile edges, and a constant dataset collapses to one class. `dryRun` returns the breaks and effective class count that will actually be drawn.\n",
+      "maximum": 9,
+      "minimum": 2,
+      "type": "integer"
+     },
+     "format": {
+      "additionalProperties": false,
+      "description": "Number format for every choropleth surface: class labels, gradient ticks and value labels. Always pass an object, e.g. {\"preset\": \"compact\"}, never a bare string. Presets: `auto` (default, inferred from magnitude), `plain` (39,538,223), `compact` (39.5M), `percent` (the input is a FRACTION, so 0.42 prints as 42% and 0.423 as 42.3%, because the preset trims trailing zeros. An explicit {\"style\": \"percent\", \"decimals\": 1} keeps them and prints 42.0%. For data already in percent points use {\"suffix\": \"%\"}), `currency` ($39,538,223). Or combine options, e.g. {\"decimals\": 1, \"suffix\": \"M\"} or {\"style\": \"currency\", \"currency\": \"EUR\"}. {\"d3\": \"~s\"} is a raw d3-format escape hatch. The result echoes the resolved format.",
+      "properties": {
+       "compact": {
+        "description": "Compact notation: K/M/B/T (never SI \"G\").",
+        "type": "boolean"
+       },
+       "currency": {
+        "default": "USD",
+        "description": "ISO-4217 code, rendered with its Intl symbol (\"\u20ac\", \"CA$\"). Only valid with style \"currency\".\n",
+        "pattern": "^[A-Za-z]{3}$",
+        "type": "string"
+       },
+       "d3": {
+        "description": "Escape hatch: a raw d3-format spec. Invalid grammar is a 400.\n",
+        "maxLength": 20,
+        "type": "string"
+       },
+       "decimals": {
+        "description": "Fraction digits. Min equals max, for uniform labels, unless `trim` is set.",
+        "maximum": 6,
+        "minimum": 0,
+        "type": "integer"
+       },
+       "grouping": {
+        "default": true,
+        "description": "Thousands separators.",
+        "type": "boolean"
+       },
+       "prefix": {
+        "description": "Literal, inserted AFTER any leading sign (\"-\u20ac1,234\", never \"\u20ac-1,234\").\n",
+        "maxLength": 12,
+        "type": "string"
+       },
+       "preset": {
+        "description": "Alias for the bare-string preset form.",
+        "enum": [
+         "auto",
+         "plain",
+         "compact",
+         "percent",
+         "currency"
+        ],
+        "type": "string"
+       },
+       "sign": {
+        "default": "auto",
+        "description": "Maps 1:1 to Intl signDisplay. \"exceptZero\" is the usual choice for diverging legends.\n",
+        "enum": [
+         "auto",
+         "always",
+         "exceptZero"
+        ],
+        "type": "string"
+       },
+       "significantDigits": {
+        "maximum": 6,
+        "minimum": 1,
+        "type": "integer"
+       },
+       "style": {
+        "default": "decimal",
+        "description": "\"percent\" MULTIPLIES BY 100. The input is a fraction (0.42 prints as \"42%\"). Data already in percent points should use `suffix: \"%\"` instead.\n",
+        "enum": [
+         "decimal",
+         "percent",
+         "currency"
+        ],
+        "type": "string"
+       },
+       "suffix": {
+        "description": "Literal, e.g. \" per km\u00b2\".",
+        "maxLength": 20,
+        "type": "string"
+       },
+       "trim": {
+        "description": "Strip trailing zeros.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "method": {
+      "description": "Break method. Absent = suggested from the data. quantile = equal number of regions per class, equalInterval = equal-width value intervals, jenks = natural breaks (minimal within-class variance), pretty = rounded human-readable edges. Additive-only enum: more methods may be added, none removed.\n",
+      "enum": [
+       "quantile",
+       "equalInterval",
+       "jenks",
+       "pretty"
+      ],
+      "type": "string"
+     },
+     "noDataColor": {
+      "description": "Fill for regions absent from `values`. Choropleth mode only. Overrides `style.defaultRegionColor` when both are set.\n",
+      "examples": [
+       "#1D4ED8"
+      ],
+      "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
+      "type": "string"
+     },
+     "palette": {
+      "description": "ColorBrewer palette id (the server matches case-insensitively). Absent = suggested from the data: diverging when the values cross zero (rdbu when they sit symmetrically around zero, rdylgn when they do not), sequential blues otherwise. Note that `rdylgn` only comes back out. It is not in the enum above, and requesting it is a `400`. Sequential palettes suit one-directional data, and diverging palettes (rdbu, brbg, spectral, piyg, prgn, puor, rdgy, rdylbu) suit data around a midpoint.\n",
+      "enum": [
+       "gnbu",
+       "bugn",
+       "bupu",
+       "orrd",
+       "pubu",
+       "pubugn",
+       "purd",
+       "rdpu",
+       "ylgn",
+       "ylgnbu",
+       "ylorbr",
+       "ylorrd",
+       "blues",
+       "greens",
+       "greys",
+       "oranges",
+       "purples",
+       "reds",
+       "rdbu",
+       "brbg",
+       "spectral",
+       "piyg",
+       "prgn",
+       "puor",
+       "rdgy",
+       "rdylbu"
+      ],
+      "type": "string"
+     },
+     "type": {
+      "default": "auto",
+      "description": "Visualization type. `auto` picks from the data: \u22647 unique values \u2192 `groups` (discrete legend items), skewed distributions \u2192 `steps` (contiguous bar with break ticks), else `gradient` (continuous color scale). Explicit values pin the type. `gradient` and `steps` legends are horizontal-only: they render in a top/bottom band (default bottom), and a left/right `legend.position` is coerced to bottom with a warning. That rule depends on the data, so JSON Schema cannot express it and generated SDKs should not try to enforce it.\n",
+      "enum": [
+       "auto",
+       "gradient",
+       "steps",
+       "groups"
+      ],
+      "type": "string"
+     },
+     "values": {
+      "additionalProperties": {
+       "type": "number"
+      },
+      "description": "Region key to numeric value. Keys go through the matching rules described above. Two keys resolving to the same region count as two matched keys, and the later value wins.\n",
+      "maxProperties": 5000,
+      "minProperties": 1,
+      "type": "object"
+     }
+    },
+    "required": [
+     "values"
+    ],
+    "type": "object"
+   },
+   "dryRun": {
+    "default": false,
+    "description": "Validate and preview without rendering: returns the region matching report, the resolved choropleth plan and a legend preview. No image and no monthly quota for keyed calls, but it still counts against the rate limit (one of the 30 keyless renders per hour).",
+    "type": "boolean"
+   },
+   "layers": {
+    "additionalProperties": false,
+    "description": "Extra geographic layers to draw, e.g. {\"cities\": true, \"roads\": true}. Each map ships a subset (`layers` in list_maps and get_map_regions). Turning on a layer the map lacks is not an error: it is skipped with a `layer_unavailable` warning. Omitted layers are off, except layers a map turns on by default (currently `admin0` on ZIP-code maps); pass false to hide those.",
+    "properties": {
+     "admin0": {
+      "description": "Surrounding land, as a filled area of neighbouring countries or states.",
+      "type": "boolean"
+     },
+     "admin0-mesh": {
+      "description": "Country borders (mesh).",
+      "type": "boolean"
+     },
+     "admin1-mesh": {
+      "description": "First-level subdivision borders (states, provinces, regions).",
+      "type": "boolean"
+     },
+     "admin1-mesh-inner": {
+      "description": "State borders drawn over the map's own regions (county and ZIP maps, where `admin1-mesh` covers the surroundings only).",
+      "type": "boolean"
+     },
+     "admin2-mesh": {
+      "description": "Second-level subdivision borders (counties, districts).",
+      "type": "boolean"
+     },
+     "cities": {
+      "description": "Major cities as labelled points.",
+      "type": "boolean"
+     },
+     "lakes": {
+      "description": "Major lakes.",
+      "type": "boolean"
+     },
+     "rivers": {
+      "description": "Major rivers.",
+      "type": "boolean"
+     },
+     "roads": {
+      "description": "Major roads.",
+      "type": "boolean"
+     }
+    },
+    "type": "object"
+   },
+   "legend": {
+    "additionalProperties": false,
+    "properties": {
+     "items": {
+      "description": "Manual legend items, for regions-only maps. With `choropleth` or `categories` the legend is auto-generated and `items` is rejected with 400.\n",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "color": {
+         "examples": [
+          "#1D4ED8"
+         ],
+         "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
+         "type": "string"
+        },
+        "label": {
+         "maxLength": 120,
+         "minLength": 1,
+         "type": "string"
+        }
+       },
+       "required": [
+        "label",
+        "color"
+       ],
+       "type": "object"
+      },
+      "maxItems": 50,
+      "minItems": 1,
+      "type": "array"
+     },
+     "position": {
+      "description": "left/right take a column carved from the map area (180 px, at most 30% of the width); top/bottom take a horizontal band between the title and the map. Absent = left for item/group legends, bottom for gradient/steps. Gradient and steps legends are horizontal-only, so left/right becomes bottom with a warning. Legends do not wrap: a wide legend on a narrow image can overflow, reported as a `legend_overflow` warning.",
+      "enum": [
+       "left",
+       "right",
+       "top",
+       "bottom"
+      ],
+      "type": "string"
+     },
+     "show": {
+      "description": "Defaults to true whenever a legend exists (auto-generated for `choropleth`/`categories`, or from `legend.items`). Set false to suppress it and give the whole canvas to the map.\n",
+      "type": "boolean"
+     }
+    },
+    "type": "object"
+   },
+   "locations": {
+    "description": "Pin markers. They compose with every mode.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "color": {
+       "examples": [
+        "#1D4ED8"
+       ],
+       "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
+       "type": "string"
+      },
+      "labelPosition": {
+       "default": "bottom",
+       "description": "Where the pin's label sits relative to the pin.",
+       "enum": [
+        "top",
+        "bottom",
+        "left",
+        "right"
+       ],
+       "type": "string"
+      },
+      "lat": {
+       "maximum": 90,
+       "minimum": -90,
+       "type": "number"
+      },
+      "lon": {
+       "maximum": 180,
+       "minimum": -180,
+       "type": "number"
+      },
+      "showLabel": {
+       "default": true,
+       "description": "Set false to render this pin without its label (the marker stays).\n",
+       "type": "boolean"
+      },
+      "title": {
+       "maxLength": 120,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "required": [
+      "title",
+      "lat",
+      "lon"
+     ],
+     "type": "object"
+    },
+    "maxItems": 200,
+    "type": "array"
+   },
+   "mapId": {
+    "description": "Map id from list_maps, e.g. `world`, `united-states`, `europe`, `united-states-california`. It is the map's slug on ultimaps.com (the last path segment, not the whole URL) and always resolves to the current edition.",
+    "examples": [
+     "united-states"
+    ],
+    "maxLength": 120,
+    "minLength": 1,
+    "type": "string"
+   },
+   "onUnmatched": {
+    "default": "warn",
+    "description": "warn = render anyway (unmatched regions get the no-data fill) and report. error = 400 with per-key suggestions. Recommended for production pipelines: error. Exception: in choropleth mode, ZERO matched keys is a 400 even under warn.\n",
+    "enum": [
+     "warn",
+     "error"
+    ],
+    "type": "string"
+   },
+   "output": {
+    "additionalProperties": false,
+    "description": "Image size and format. Keep the default width (1200 px) for images viewed in the conversation: much larger renders, and any scale of 2 or more, are too big to show inline and are saved to a file instead. Without an API key: width up to 1600 px, an explicit height up to 1600 px, scale 1. Hard caps: width\u00d7scale and height\u00d7scale \u2264 8192, and at most 4096\u00d74096 pixels in total.",
+    "properties": {
+     "format": {
+      "default": "png",
+      "description": "`png` (default) or `svg`. SVG needs a Pro API key and is saved to a file. PDF is not available.",
+      "enum": [
+       "png",
+       "svg"
+      ],
+      "type": "string"
+     },
+     "height": {
+      "description": "Optional. When omitted, derives as a snug fit: the map's aspect ratio applied to the map area that remains after the title band (50 px) and any left/right legend column take their cut. A top/bottom legend adds its band (60 px for item legends, 70 px for gradient/steps bars) on top of that. An explicit height is delivered exactly, and the title and legend then shrink the map rather than the canvas.\n",
+      "maximum": 4000,
+      "minimum": 100,
+      "type": "integer"
+     },
+     "scale": {
+      "default": 1,
+      "description": "PNG raster multiplier: the PNG is exactly round(width\u00d7scale) \u00d7 round(height\u00d7scale) pixels. It has no effect on SVG output, but it is still tier-capped.\n",
+      "maximum": 4,
+      "minimum": 1,
+      "type": "number"
+     },
+     "width": {
+      "default": 1200,
+      "description": "Image width in pixels. Default 1200.",
+      "maximum": 4000,
+      "minimum": 100,
+      "type": "integer"
+     }
+    },
+    "type": "object"
+   },
+   "regions": {
+    "additionalProperties": {
+     "examples": [
+      "#1D4ED8"
+     ],
+     "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
+     "type": "string"
+    },
+    "description": "Override layer. Region key to hex color, applied AFTER choropleth/categories coloring and winning over it. Precedence: choropleth/categories paint first, `regions` overrides win, and everything else gets `choropleth.noDataColor` (choropleth mode), else `style.defaultRegionColor`, else the theme default.\n",
+    "maxProperties": 5000,
+    "type": "object"
+   },
+   "style": {
+    "additionalProperties": false,
+    "properties": {
+     "backgroundColor": {
+      "examples": [
+       "#1D4ED8"
+      ],
+      "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
+      "type": "string"
+     },
+     "defaultRegionColor": {
+      "description": "Fill for regions that get no color from `choropleth`/`categories`/`regions`. In choropleth mode `choropleth.noDataColor` overrides this. In categories mode this IS the no-data fill.\n",
+      "examples": [
+       "#1D4ED8"
+      ],
+      "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
+      "type": "string"
+     },
+     "labels": {
+      "additionalProperties": false,
+      "description": "Region labels, off by default. Each map ships its own curated label set; on a map with `labels: false` in list_maps, `show: true` renders nothing and a `labels_unavailable` warning is reported.",
+      "properties": {
+       "color": {
+        "examples": [
+         "#1D4ED8"
+        ],
+        "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
+        "type": "string"
+       },
+       "content": {
+        "default": "name",
+        "description": "What each label prints. `name` is the region's name. `value` prints the region's choropleth number instead, formatted by the resolved `choropleth.format` (the same string the legend and tooltips show). Regions without a value get no label. Requires `choropleth`. With `categories`, or with neither, it is a `validation_error`. Labels are not collision-checked: a long number in a small region overflows it, exactly as in Studio.",
+        "enum": [
+         "name",
+         "value"
+        ],
+        "type": "string"
+       },
+       "show": {
+        "default": false,
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "mapBorder": {
+      "additionalProperties": false,
+      "properties": {
+       "color": {
+        "examples": [
+         "#1D4ED8"
+        ],
+        "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
+        "type": "string"
+       },
+       "width": {
+        "maximum": 10,
+        "minimum": 0,
+        "type": "number"
+       }
+      },
+      "type": "object"
+     },
+     "regionBorders": {
+      "additionalProperties": false,
+      "properties": {
+       "color": {
+        "examples": [
+         "#1D4ED8"
+        ],
+        "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
+        "type": "string"
+       },
+       "width": {
+        "maximum": 5,
+        "minimum": 0,
+        "type": "number"
+       }
+      },
+      "type": "object"
+     },
+     "theme": {
+      "default": "paper",
+      "description": "Theme name from Studio's theme gallery (the server matches case-insensitively). Additive-only enum.\n",
+      "enum": [
+       "paper",
+       "newspaper",
+       "dark",
+       "earth",
+       "vintage",
+       "embossed",
+       "maritime",
+       "neon",
+       "outline",
+       "wireframe"
+      ],
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "title": {
+    "additionalProperties": false,
+    "properties": {
+     "color": {
+      "examples": [
+       "#1D4ED8"
+      ],
+      "pattern": "^#([0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$",
+      "type": "string"
+     },
+     "position": {
+      "default": "top",
+      "enum": [
+       "top",
+       "bottom"
+      ],
+      "type": "string"
+     },
+     "text": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "text"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "mapId"
+  ],
+  "type": "object"
+ },
+ "name": "render_map",
+ "outputSchema": {
+  "properties": {
+   "choropleth": {
+    "description": "The resolved choropleth plan. Dry runs add `reason` and `breaks`.",
+    "properties": {
+     "breaks": {
+      "items": {
+       "type": "number"
+      },
+      "type": "array"
+     },
+     "classes": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "format": {
+      "type": "object"
+     },
+     "method": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "palette": {
+      "type": "string"
+     },
+     "reason": {
+      "type": "string"
+     },
+     "type": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "dryRun": {
+    "type": "boolean"
+   },
+   "editUrl": {
+    "description": "Opens this map in Ultimaps Studio for editing or export.",
+    "type": "string"
+   },
+   "embedUrl": {
+    "description": "Keyless GET image URL, when the render is shareable that way.",
+    "type": "string"
+   },
+   "file": {
+    "description": "Set when the image was saved to disk (too large to inline, or SVG).",
+    "properties": {
+     "bytes": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "path": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "path",
+     "bytes"
+    ],
+    "type": "object"
+   },
+   "format": {
+    "description": "Image format; absent on dry runs.",
+    "enum": [
+     "png",
+     "svg"
+    ],
+    "type": "string"
+   },
+   "keylessRemaining": {
+    "description": "Keyless renders left in the current hour.",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "legend": {
+    "description": "Dry runs: legend preview, [{label, color}] or {points, stops} for a gradient."
+   },
+   "matchingTruncated": {
+    "description": "True when `corrected`/`unmatched` list only the first 5 of their counts. Repeat the call with dryRun: true for the full report.",
+    "type": "boolean"
+   },
+   "regionMatching": {
+    "properties": {
+     "corrected": {
+      "items": {
+       "properties": {
+        "input": {
+         "type": "string"
+        },
+        "matchedTo": {
+         "type": "string"
+        },
+        "title": {
+         "type": "string"
+        },
+        "via": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "input",
+        "matchedTo",
+        "title",
+        "via"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "correctedCount": {
+      "description": "Exact number of auto-corrected keys.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "matchedKeys": {
+      "description": "Input keys that resolved. Dry runs only.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "unmatched": {
+      "items": {
+       "properties": {
+        "input": {
+         "type": "string"
+        },
+        "suggestions": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "input",
+        "suggestions"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "unmatchedCount": {
+      "description": "Exact number of keys that matched no region.",
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "correctedCount",
+     "unmatchedCount",
+     "corrected",
+     "unmatched"
+    ],
+    "type": "object"
+   },
+   "renderId": {
+    "description": "The API render id; quote it to Ultimaps support.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "warnings": {
+    "items": {
+     "properties": {
+      "code": {
+       "type": "string"
+      },
+      "message": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "code",
+      "message"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "renderId",
+   "dryRun",
+   "regionMatching",
+   "matchingTruncated",
+   "warnings"
+  ],
+  "type": "object"
+ },
+ "title": "Render map"
+}

@@ -1,0 +1,159 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "reddit_monitor_update"
+ },
+ "description": "Update an existing monitor: pause/resume it (`active`), change its poll interval (`cadence_s`), switch between posts and comments (`kind`), replace its filter entirely, or re-target which webhook(s) it delivers to (`webhook_ids`). IMPORTANT: if you pass ANY filter field (subreddit, q, kind, domain, etc.), it REPLACES the whole filter, it does not merge with the existing one -- resupply every field you want kept, including `subreddit` AND `kind` (omitting `kind` reverts that monitor to posts-only). Same rule for `webhook_ids`: passing it REPLACES the monitor's targeting outright (an empty array clears back to 'every active webhook'); omitting it entirely leaves the monitor's existing targeting untouched. Omit all filter/webhook_ids fields to change only `active`/`cadence_s`. Returns 404 `monitor_not_found` if the id does not exist or is not yours, or 400 `webhook_not_found` if a `webhook_ids` entry is not yours.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "active": {
+    "description": "Set false to pause the monitor (stops matching/delivering), true to resume it.",
+    "type": "boolean"
+   },
+   "author": {
+    "description": "Only match posts by this Reddit username (without u/).",
+    "maxLength": 200,
+    "type": "string"
+   },
+   "cadence_s": {
+    "description": "New poll interval in seconds, same tier-floor clamping as reddit_monitor_add.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "domain": {
+    "description": "Outbound link domains to watch for (e.g. ['example.com']). Matches the post's link URL, any URL inside a self-post/comment body, and a crosspost's original link, including one that only appeared in the original post's body. Exact-or-subdomain match only: 'example.com' matches 'blog.example.com' but never 'notexample.com'. Does NOT resolve shortened links (bit.ly, t.co).",
+    "items": {
+     "maxLength": 200,
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 50,
+    "type": "array"
+   },
+   "exclude_subreddits": {
+    "description": "Subreddits to SUPPRESS, without the r/ prefix (e.g. ['politics', 'AskReddit']). SITEWIDE MONITORS ONLY: pass this only when you have OMITTED `subreddit` and anchored the monitor with `q`. Passing it together with `subreddit` is rejected with a field-level 400 -- a monitor that names its subreddits should drop the unwanted name from that list instead. Up to 50, matched exactly like `subreddit` so 'r/Politics', '/r/politics' and 'politics' are one entry. This is the noise control for an all-of-Reddit keyword watch: it filters DELIVERY only, so it never changes what is polled, never frees quota, and never affects matching in any other subreddit. Independent of exclude_terms -- an item is dropped if either fires.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 50,
+    "type": "array"
+   },
+   "exclude_terms": {
+    "description": "Posts containing any of these terms are suppressed even if they otherwise match. Use to cut noise (e.g. exclude 'giveaway' from a brand-mention monitor).",
+    "items": {
+     "maxLength": 200,
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 50,
+    "type": "array"
+   },
+   "group": {
+    "description": "Optional label to bundle multiple matches into one delivery instead of one webhook call per match. Omit for one delivery per matching item.",
+    "maxLength": 64,
+    "type": "string"
+   },
+   "id": {
+    "description": "The monitor's id, from reddit_monitor_add's response or reddit_monitor_list.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "include_all": {
+    "description": "EVERY one of these terms must appear (AND match) for the post to qualify, on top of any `q`.",
+    "items": {
+     "maxLength": 200,
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 50,
+    "type": "array"
+   },
+   "include_any": {
+    "description": "At least ONE of these terms must appear (OR match) for the post to qualify, on top of any `q`.",
+    "items": {
+     "maxLength": 200,
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 50,
+    "type": "array"
+   },
+   "kind": {
+    "description": "What to watch in the named subreddits: 'post' (default when omitted), 'comment', or 'both'. Comment monitoring requires a Growth, Pro or Scale plan -- on a lower tier this returns `comment_monitoring_requires_higher_tier` (402). Comments run roughly 7x the volume of posts, so expect proportionally more deliveries and check reddit_monitor_health's delivery ceiling before enabling it on a busy subreddit.",
+    "enum": [
+     "post",
+     "comment",
+     "both"
+    ],
+    "type": "string"
+   },
+   "min_relevance": {
+    "description": "AI relevance floor, 0-100. 0 (the default) is off. Above 0, every match is scored by a language model against this monitor's own keywords and anything below the floor is NOT delivered -- it is recorded in your delivery history with status 'suppressed' and reason 'low_relevance', carrying its score and a one-line explanation, so you can always read what was filtered and why. Nothing is silently discarded. Rough calibration: 80-100 squarely on topic, 50-79 related but peripheral, 20-49 tangential, 0-19 the keyword is used in an unrelated sense. The comparison is inclusive, so a score equal to the floor is delivered. If scoring is unavailable the match is delivered UNSCORED rather than withheld. Requires a Growth, Pro or Scale plan -- on a lower tier this returns `ai_relevance_requires_higher_tier` (402). REJECTED with a field-level 400 on a monitor that has no q, include_any or include_all, because there would be no topic to score an item against and the floor could only ever admit everything.",
+    "maximum": 100,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "min_score": {
+    "description": "Only match posts with at least this many upvotes.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "nsfw": {
+    "description": "Set false to EXCLUDE NSFW/over-18 posts. Omitted or true both mean NSFW is allowed through -- there is no exclude-by-default; you must explicitly pass false to filter it out. POSTS ONLY: nsfw=false is REJECTED with a field-level 400 when kind is 'comment' or 'both', because Reddit flags NSFW on a post and never on an individual comment, so there is no field to filter a comment on. Run a kind='post' monitor to keep NSFW filtering, and cut unwanted comment text with exclude_terms.",
+    "type": "boolean"
+   },
+   "q": {
+    "description": "Free-text keyword or phrase to match. Matched against the fields in `search_in` (default title+body+url). Omit to match every new post in the watched subreddits.",
+    "maxLength": 200,
+    "type": "string"
+   },
+   "search_in": {
+    "description": "Which fields keyword/term matching is scoped to. Default ['title', 'body', 'url']. Narrow to avoid false positives, e.g. a term that only appears in a URL slug matching a post that never mentions it in prose. All four resolve on comments as well as posts: on a comment, 'title' matches the title of the THREAD the comment sits under (a comment has no title of its own), which also applies through the default scope and can deliver every comment under a busy matching thread. Scope to ['body'] if you only want comments that say the term themselves.",
+    "items": {
+     "enum": [
+      "title",
+      "body",
+      "url",
+      "permalink"
+     ],
+     "type": "string"
+    },
+    "minItems": 1,
+    "type": "array"
+   },
+   "subreddit": {
+    "description": "Subreddits to watch, without the r/ prefix (e.g. ['SaaS', 'startups']). 1 to 50. OMIT this entirely (and set `q`) to watch ALL of Reddit for a keyword -- a monitor must be anchored by either a subreddit list or a keyword, never neither. Do NOT pass ['all']: r/all is Reddit's site-wide listing rather than a subreddit, so it is refused with 400 subreddit_reserved. Sitewide monitors are capped per plan tier (see reddit_monitor_list's `slots`) and cover POSTS only. On an update, omitting this while passing another filter field makes the monitor SITEWIDE (the filter is replaced wholesale, not merged), so resupply it if you meant to keep the monitor scoped.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 50,
+    "minItems": 1,
+    "type": "array"
+   },
+   "webhook_ids": {
+    "description": "Restrict delivery to specific webhook(s) instead of every active webhook on the account. Pass id(s) from reddit_monitor_webhook_create/reddit_monitor_webhook_list. Omit (or pass an empty array) for the default: deliver to every active webhook you've registered. Every id must be a webhook you own -- returns `webhook_not_found` (400) otherwise.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 20,
+    "type": "array"
+   }
+  },
+  "required": [
+   "id"
+  ],
+  "type": "object"
+ },
+ "name": "reddit_monitor_update"
+}

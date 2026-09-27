@@ -1,0 +1,300 @@
+{
+ "annotations": {
+  "readOnlyHint": true
+ },
+ "description": "Search Hacker News stories, comments, polls, and jobs via Algolia \u2014 by keyword, by filters alone, or both. Filterable by content type, author, parent story, date range, and minimum points.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "author": {
+    "description": "Filter results to a specific author. Useful for finding a user's posts on a topic (hn_get_user only shows recent submissions). Trimmed before filtering; omit the field to search all authors rather than passing a blank string.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "count": {
+    "default": 30,
+    "description": "Number of results to return.",
+    "maximum": 50,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "dateRange": {
+    "description": "Filter to a creation-time window with a start, an end, or both. An empty object is rejected \u2014 omit dateRange instead.",
+    "properties": {
+     "end": {
+      "description": "Exclusive upper bound \u2014 only items created strictly before this instant match. Same formats and UTC reading as start, and must be later than start. A date-only end excludes that whole UTC day: to include it, pass the next day or a full timestamp.",
+      "pattern": "^(\\d{4})(?:-(\\d{2})(?:-(\\d{2})(?:T(\\d{2}):(\\d{2})(?::(\\d{2})(?:\\.\\d{1,3})?)?(?:Z|[+-](\\d{2}):(\\d{2}))?)?)?)?$",
+      "type": "string"
+     },
+     "start": {
+      "description": "Exclusive lower bound \u2014 only items created strictly after this instant match. ISO 8601: YYYY, YYYY-MM, YYYY-MM-DD, or YYYY-MM-DDThh:mm[:ss[.sss]] with an optional Z or \u00b1hh:mm offset. Reduced and date-only forms mean UTC midnight at the start of that period; a date-time without an offset is read as UTC.",
+      "pattern": "^(\\d{4})(?:-(\\d{2})(?:-(\\d{2})(?:T(\\d{2}):(\\d{2})(?::(\\d{2})(?:\\.\\d{1,3})?)?(?:Z|[+-](\\d{2}):(\\d{2}))?)?)?)?$",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "minPoints": {
+    "description": "Minimum score. Applies to stories and polls, including the ask_hn, show_hn, and front_page subsets. Comments and jobs carry no points in the search index, so any minPoints excludes them \u2014 combining it with tags \"comment\" or \"job\" is rejected.",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "page": {
+    "default": 0,
+    "description": "Page number for pagination (0-indexed).",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "query": {
+    "description": "Search terms. Supports simple keywords \u2014 Algolia handles stemming and relevance. Trimmed before searching; blank or whitespace-only input is rejected. Omit for a filter-only search, which needs at least one of tags, author, storyId, minPoints, or a dateRange bound.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "sort": {
+    "default": "relevance",
+    "description": "Sort order. \"relevance\" for best match, \"date\" for most recent first.",
+    "enum": [
+     "relevance",
+     "date"
+    ],
+    "type": "string"
+   },
+   "storyId": {
+    "description": "Restrict results to one discussion: the id of a story or poll root, combined with the other filters. Pair with tags \"comment\" to search within a thread. Take it from hits[].storyId or the root item of hn_get_thread \u2014 a comment id matches nothing.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "tags": {
+    "description": "Filter results by content type: \"story\", \"comment\", \"poll\", or \"job\", or the story subsets \"ask_hn\", \"show_hn\", and \"front_page\". Omit to search all types.",
+    "enum": [
+     "story",
+     "comment",
+     "poll",
+     "job",
+     "ask_hn",
+     "show_hn",
+     "front_page"
+    ],
+    "type": "string"
+   },
+   "view": {
+    "default": "full",
+    "description": "How much of each hit to return. \"full\" includes every field. \"compact\" omits the two body-text fields \u2014 `text` and `highlights.text` \u2014 which together can repeat a long comment twice per hit; everything else (id, title, url, domain, author, points, comment count, timestamp, parent story, title highlight, matchedWords) is unchanged. Use \"compact\" to scan many results, then pass a hit id to hn_get_thread to read the body you skipped.",
+    "enum": [
+     "full",
+     "compact"
+    ],
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "hn_search_content",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "hits",
+     "totalHits",
+     "page",
+     "totalPages"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cap": {
+    "description": "The count cap that was applied.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `missing_query_or_filter`: Neither a query nor any filter was supplied, so there is nothing to search by. `invalid_date_range`: dateRange was supplied with neither bound, or with start not before end. `min_points_unscored_type`: minPoints was combined with tags \"comment\" or \"job\", record types Algolia stores without points. `upstream_rejected`: Algolia answered with a 4xx status other than 429 \u2014 it rejected the request as built. `upstream_rate_limited`: Algolia answered with HTTP 429. `upstream_unavailable`: Algolia answered with a 5xx status. `upstream_html`: Algolia served an HTML error page with a 200 status, which it does under rate limiting or maintenance. `upstream_malformed`: Algolia answered with a 200 status and a body that is not JSON. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "missing_query_or_filter",
+         "invalid_date_range",
+         "min_points_unscored_type",
+         "upstream_rejected",
+         "upstream_rate_limited",
+         "upstream_unavailable",
+         "upstream_html",
+         "upstream_malformed"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "hits": {
+    "description": "Search results ranked by sort order.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A single Algolia search hit (story, comment, poll, or job).",
+     "properties": {
+      "author": {
+       "description": "Author username.",
+       "type": "string"
+      },
+      "createdAt": {
+       "description": "Creation time (ISO 8601).",
+       "type": "string"
+      },
+      "domain": {
+       "description": "Bare hostname derived from url (e.g. \"github.com\", with leading \"www.\" stripped). Absent when url is missing or unparseable.",
+       "type": "string"
+      },
+      "highlights": {
+       "additionalProperties": false,
+       "description": "Algolia per-field highlight metadata showing which terms matched and where. Absent when no fields produced a match.",
+       "properties": {
+        "matchedWords": {
+         "description": "Deduplicated union of matched terms across all searchable fields (title, url, author, comment_text, story_text, story_title).",
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "text": {
+         "description": "Body snippet (comment_text or story_text), HTML stripped, with matched terms wrapped in `<em>\u2026</em>`. A literal `<em>` typed into the body is indistinguishable from a marker. Absent when the body did not match, and always absent under view \"compact\" \u2014 matchedWords still lists what matched.",
+         "type": "string"
+        },
+        "title": {
+         "description": "Title snippet with matched terms wrapped in `<em>\u2026</em>`. Titles are not HTML, though some arrive entity-encoded; entities are decoded and no tags are stripped, so a literal `<em>` in the title is indistinguishable from a marker. Absent when the title did not match.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "matchedWords"
+       ],
+       "type": "object"
+      },
+      "id": {
+       "description": "HN item ID \u2014 use with hn_get_thread to read the discussion.",
+       "type": "number"
+      },
+      "numComments": {
+       "description": "Comment count.",
+       "type": "number"
+      },
+      "points": {
+       "description": "Score/upvotes.",
+       "type": "number"
+      },
+      "storyId": {
+       "description": "Parent story ID for comment hits; equals `id` for story hits.",
+       "type": "number"
+      },
+      "storyTitle": {
+       "description": "Parent story title (present for comment results).",
+       "type": "string"
+      },
+      "text": {
+       "description": "Comment or story body text (HTML stripped). Absent when the hit has no body, and always absent under view \"compact\" \u2014 call hn_get_thread with this id to read it.",
+       "type": "string"
+      },
+      "title": {
+       "description": "Item title (present for stories, polls, and jobs).",
+       "type": "string"
+      },
+      "url": {
+       "description": "External link URL.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "id",
+      "author",
+      "createdAt"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "notice": {
+    "description": "Agent guidance: the next page to request while more pages remain, the last valid page when the requested page is past the end, or the filters to relax when a first page comes back empty. Absent on the last page of a non-empty result.",
+    "type": "string"
+   },
+   "page": {
+    "description": "Current page number (0-indexed).",
+    "type": "number"
+   },
+   "query": {
+    "description": "The query that was searched. Absent for a filter-only search.",
+    "type": "string"
+   },
+   "shown": {
+    "description": "Number of hits returned.",
+    "type": "number"
+   },
+   "totalHits": {
+    "description": "Total matching results across all pages.",
+    "type": "number"
+   },
+   "totalPages": {
+    "description": "Number of pages Algolia will actually serve for this query. Not derived from totalHits \u2014 broad queries report a totalHits far larger than the reachable page range, so paginate against this value.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when more pages remain after this one (page + 1 < totalPages). Absent on the last page Algolia serves.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Hn Search Content"
+}

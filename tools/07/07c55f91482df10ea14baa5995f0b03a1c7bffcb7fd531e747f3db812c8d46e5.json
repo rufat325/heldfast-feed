@@ -1,0 +1,250 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Query any Treasury Fiscal Data endpoint by path, field list, filters, sort, and page. Call treasury_list_datasets first to get the correct endpoint path and exact field names \u2014 a typo in either causes a 400. Filter syntax: each condition is { field, operator, value } where operator is eq/gt/gte/lt/lte/in (e.g., record_date:gte:2024-01-01). Multiple conditions are ANDed together. All response values are strings per the API contract, including numbers and dates; \"null\" (string) means no value. Supply canvas_id to stage the page result as a DataCanvas table \u2014 read its column schema with treasury_dataframe_describe, then run SQL over it with treasury_dataframe_query (requires CANVAS_PROVIDER_TYPE=duckdb on the server).",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "canvas_id": {
+    "description": "Set any non-empty value to stage this page as a DataCanvas table for SQL analysis \u2014 the value only requests staging; the server picks the table name. The assigned name (df_XXXXX_XXXXX) comes back in the output canvas_id; pass it to treasury_dataframe_describe, then treasury_dataframe_query. Omit to receive results inline only. Requires CANVAS_PROVIDER_TYPE=duckdb on the server.",
+    "type": "string"
+   },
+   "endpoint": {
+    "description": "Endpoint path returned by treasury_list_datasets (e.g., \"/v2/accounting/od/debt_to_penny\"). Include the leading slash.",
+    "type": "string"
+   },
+   "fields": {
+    "description": "Fields to return. Omit to return all fields. Specify field names exactly as listed by treasury_list_datasets \u2014 a typo causes a 400.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "filters": {
+    "description": "Filter conditions (ANDed together). Multiple filters on different fields are combined in one filter= parameter.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One filter condition.",
+     "properties": {
+      "field": {
+       "description": "Field name to filter on.",
+       "type": "string"
+      },
+      "operator": {
+       "description": "Comparison operator. \"in\" matches any value in the provided list.",
+       "enum": [
+        "eq",
+        "gt",
+        "gte",
+        "lt",
+        "lte",
+        "in"
+       ],
+       "type": "string"
+      },
+      "value": {
+       "anyOf": [
+        {
+         "description": "Single filter value. Dates use YYYY-MM-DD format.",
+         "minLength": 1,
+         "type": "string"
+        },
+        {
+         "description": "List of values for \"in\" operator.",
+         "items": {
+          "minLength": 1,
+          "type": "string"
+         },
+         "minItems": 1,
+         "type": "array"
+        }
+       ],
+       "description": "Filter value. For \"in\", pass an array of strings. Dates use YYYY-MM-DD format."
+      }
+     },
+     "required": [
+      "field",
+      "operator",
+      "value"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "page_number": {
+    "default": 1,
+    "description": "Page to fetch (1-indexed). Check total_pages in the response to know if more pages exist.",
+    "maximum": 9007199254740991,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "page_size": {
+    "default": 100,
+    "description": "Rows per page. Default 100. Raise to 10000 to minimize round trips for small datasets. For large time-series pulls, use canvas_id with treasury_dataframe_query instead.",
+    "maximum": 10000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "sort": {
+    "description": "Sort expression: field name optionally prefixed with \"-\" for descending (e.g., \"-record_date\" for newest-first).",
+    "type": "string"
+   }
+  },
+  "required": [
+   "endpoint"
+  ],
+  "type": "object"
+ },
+ "name": "treasury_query_dataset",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "endpoint",
+     "data",
+     "total_count",
+     "total_pages",
+     "page_number",
+     "page_size",
+     "field_labels"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "applied_filters": {
+    "description": "Filter expression sent to the API, for verification.",
+    "type": "string"
+   },
+   "canvas_expires_at": {
+    "description": "ISO 8601 expiry for the canvas dataframe.",
+    "type": "string"
+   },
+   "canvas_id": {
+    "description": "DuckDB table name (df_XXXXX_XXXXX) holding this page. Pass it to treasury_dataframe_describe for the column schema, then use it as the FROM target in treasury_dataframe_query SQL. Absent when nothing was staged.",
+    "type": "string"
+   },
+   "data": {
+    "description": "Rows returned. All values are strings per API contract \u2014 including numeric and date fields. Convert in the calling context. Null values appear as the string \"null\".",
+    "items": {
+     "additionalProperties": {
+      "type": "string"
+     },
+     "propertyNames": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "endpoint": {
+    "description": "Endpoint that was queried.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_endpoint`: The endpoint path does not exist (API returns 404 HTML). `invalid_field`: A field name in fields= or filter= does not exist on this endpoint \u2014 API returns JSON {\"error\":\"Invalid Query Param\",\"message\":\"...Field 'X' does not exist...\"}. `invalid_filter`: The filter expression uses an unsupported operator \u2014 API returns JSON {\"error\":\"Invalid Query Param\",\"message\":\"...Operator ':op:' is not supported...\"}. `page_out_of_range`: page_number is past the last page of the matched set \u2014 API returns JSON {\"error\":\"Invalid Query Param\",\"message\":\"...Page #N is out of range...\"}. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_endpoint",
+         "invalid_field",
+         "invalid_filter",
+         "page_out_of_range"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "field_labels": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "description": "Human-readable label for each returned field.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "notice": {
+    "description": "Guidance when results are empty, a field typo is suspected, the endpoint was not found in the catalog, or staging was requested.",
+    "type": "string"
+   },
+   "page_number": {
+    "description": "Current page (1-indexed).",
+    "type": "number"
+   },
+   "page_size": {
+    "description": "Rows per page.",
+    "type": "number"
+   },
+   "totalCount": {
+    "description": "Total rows matching the query across all pages \u2014 discloses that this page is a subset.",
+    "type": "number"
+   },
+   "total_count": {
+    "description": "Total rows matching the query (across all pages).",
+    "type": "number"
+   },
+   "total_pages": {
+    "description": "Total pages at the current page_size.",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Query Treasury Fiscal Data Dataset"
+}

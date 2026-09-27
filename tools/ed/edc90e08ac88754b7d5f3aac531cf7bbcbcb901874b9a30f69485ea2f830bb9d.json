@@ -1,0 +1,424 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Run Build"
+ },
+ "description": "Build one task with its spec, its branch and its record kept for you. Starting a build hands back that task's BUILD HANDOFF (scope, what is out of scope, acceptance criteria, the decisions that constrain it, and what recent builds in the same area already learned or ruled out), puts the work on the right branch, and marks the task In Progress so a second session can see it is taken. On a shared project it also checks for another active session already on this task or these files and warns before you start. Completing it records what actually happened: effort against estimate, surprises, dead ends, and bugs found outside the scope. That record is what later cycles are sized and planned from, so nothing has to be remembered. Call with just task_id to start (returns BUILD HANDOFF, creates feature branch, marks In Progress). After implementing the task, you MUST call build_execute again with all report fields (completed, effort, estimated_effort, surprises, discovered_issues, architecture_notes) to finish \u2014 do not wait for user confirmation between start and complete. Never call on tasks that are already In Review or Done. Does not call the Anthropic API. Set light=true to skip branch/PR creation (commits to current branch). Set PAPI_LIGHT_MODE=true in env to default all builds to light mode. On a shared project, call `session_announce` at the start of a work session and `session_list` to see who else is active.",
+ "inputSchema": {
+  "$defs": {
+   "effortSize": {
+    "enum": [
+     "XS",
+     "S",
+     "M",
+     "L",
+     "XL"
+    ],
+    "type": "string"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "acceptance_confirmed": {
+    "description": "task-2833: set true to assert every acceptance criterion in the task's BUILD HANDOFF was met. Required to record a completed:\"yes\" build when the handoff lists acceptance criteria \u2014 without it, build_execute returns the criteria checklist and does NOT mark the task Done (the report is not discarded; re-send with acceptance_confirmed:true). Tasks with no acceptance criteria, and completed:\"partial\"/\"no\", are unaffected. Still the fallback for criteria that are human judgements (\"copy reads well\") \u2014 see acceptance_results for criteria you actually checked.",
+    "type": "boolean"
+   },
+   "acceptance_results": {
+    "description": "task-3223, OPTIONAL: per-criterion results for the handoff's ACCEPTANCE CRITERIA, matched back to each criterion by `text`. A criterion may declare a typed `check` (command / http / grep) \u2014 YOU run it, PAPI never does (AD-58), and you report what happened here. Reporting met:true for every criterion satisfies the acceptance gate on its own (no acceptance_confirmed needed) because a run check is stronger evidence than an assertion. Reporting met:false on any criterion BLOCKS completion \u2014 the report is not discarded and the task is not marked Done. Omit the array entirely and nothing changes.",
+    "items": {
+     "properties": {
+      "evidence": {
+       "description": "What you observed: the command you ran and its outcome, the status code, the matched line. A tick with no evidence is the same checkbox in a new coat.",
+       "maxLength": 600,
+       "type": "string"
+      },
+      "met": {
+       "description": "true = met, false = NOT met (blocks completion), null = could NOT be evaluated \u2014 say why in unevaluated_reason. Never send false for \"did not check\": that is null.",
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "text": {
+       "description": "The criterion text, verbatim from the handoff checklist. Matched case- and whitespace-insensitively.",
+       "maxLength": 500,
+       "type": "string"
+      },
+      "unevaluated_reason": {
+       "description": "Required in spirit when met is null \u2014 why the criterion could not be evaluated (e.g. \"human judgement\", \"no staging deploy to curl\").",
+       "maxLength": 300,
+       "type": "string"
+      }
+     },
+     "required": [
+      "text",
+      "met"
+     ],
+     "type": "object"
+    },
+    "maxItems": 40,
+    "type": "array"
+   },
+   "architecture_notes": {
+    "description": "Patterns established or decisions made during this build that AFFECT FUTURE WORK. Good: \"Created shared service layer for cockpit data \u2014 all cockpit components should use it.\" Bad: \"Used React hooks.\" Only include if future builders need to know this to avoid rework or follow the established pattern. Use \"None\" if none. Required for complete.",
+    "maxLength": 800,
+    "type": "string"
+   },
+   "brief_implications": {
+    "description": "Strategic learnings discovered during this build that the planner and strategy review should know about. Include when a build reveals: (1) something about assumptions that were wrong, (2) competitive/landscape insights, (3) user journey friction discovered during implementation, (4) MVP boundary implications (something that must/must-not be in v1), or (5) new success signal data. Each entry feeds into the Discovery Canvas and informs future planning.",
+    "items": {
+     "properties": {
+      "canvas_section": {
+       "description": "Which discovery canvas section this implication relates to.",
+       "enum": [
+        "landscape",
+        "journeys",
+        "mvpBoundary",
+        "assumptions",
+        "successSignals"
+       ],
+       "type": "string"
+      },
+      "detail": {
+       "description": "What was learned \u2014 specific and actionable.",
+       "type": "string"
+      },
+      "type": {
+       "description": "Whether this confirms, contradicts, or adds new evidence to the canvas section.",
+       "enum": [
+        "confirm",
+        "contradict",
+        "new"
+       ],
+       "type": "string"
+      }
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "cache_read_tokens": {
+    "description": "OPTIONAL for complete. Cache-read (cached prompt) tokens your harness reports for this build. Omit if unknown.",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "completed": {
+    "description": "Whether the build was completed. Required for complete.",
+    "enum": [
+     "yes",
+     "no",
+     "partial"
+    ],
+    "type": "string"
+   },
+   "corrections_count": {
+    "default": 0,
+    "description": "Number of times the user corrected or redirected the build during implementation. Captures informal pushback that bypasses review_submit. Default 0.",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "dead_ends": {
+    "description": "CONTRACT: send this on every complete. List approaches you tried and RULED OUT during this build, with why each failed. Example: \"Tried Supabase realtime but Edge Functions can't hold persistent connections \u2014 switched to polling.\" Send \"None\" ONLY if you genuinely tried nothing that failed. Ruled-out paths are first-class intelligence \u2014 future builds and plans read them to avoid repeating blind alleys.",
+    "type": "string"
+   },
+   "decision": {
+    "description": "task-2933: answer a loop-detection gate. After N failed build attempts (default 3, PAPI_BUILD_LOOP_THRESHOLD) build_execute REFUSES to start and asks for a decision. Re-run with this to answer. Only meaningful on a gated task.",
+    "properties": {
+     "answer": {
+      "description": "\"retry-differently\" clears the gate and injects `guidance` verbatim into the next handoff. \"skip\"/\"stop\" leave the task Blocked on the board rather than pretending it is in flight.",
+      "enum": [
+       "retry-differently",
+       "skip",
+       "stop"
+      ],
+      "type": "string"
+     },
+     "guidance": {
+      "description": "What to do differently. Required in spirit for \"retry-differently\" \u2014 it is the whole point of the retry. Rendered to the next builder as quoted human direction.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "answer"
+    ],
+    "type": "object"
+   },
+   "discovered_issues": {
+    "description": "A REAL bug or gap OUTSIDE this task's scope that needs its own task. Include severity (P0-P3). INCLUSION TEST \u2014 file it only if BOTH are true: (1) the bug would exist even if this task had never run, and (2) it is outside this task's scope. If either is false, it is NOT a discovered_issue. NEVER file a trivial in-file cleanup you noticed while editing (an em-dash tidy, a rename, a lint nit, a stray console.log) \u2014 those are not bugs, just clean them up or leave them. Good: \"P2: Auth middleware doesn't validate token expiry \u2014 affects all protected routes.\" Bad: \"Two em dashes remain in the file\" / \"Had to install a dependency.\" Use \"None\" if none. Required for complete. TIP: When submitting a follow-up idea for a discovered issue, include \"learning:<uuid>\" in the idea notes to link it to this cycle learning entry \u2014 use the UUID returned in the build completion output.",
+    "maxLength": 800,
+    "type": "string"
+   },
+   "effort": {
+    "$ref": "#/$defs/effortSize",
+    "description": "Actual effort: XS, S, M, L, or XL. Required for complete."
+   },
+   "estimated_effort": {
+    "$ref": "#/$defs/effortSize",
+    "description": "Estimated effort from the BUILD HANDOFF. Required for complete."
+   },
+   "findings": {
+    "description": "OPTIONAL, and the highest-leverage field here. One entry per DISCRETE thing you found, instead of (or alongside) the prose blobs. The point is `disposition`: PAPI has never had a verb for \"found it, fixed it, moving on\", so the only way to record a finding was to file it \u2014 which costs more than fixing it and grows the board faster than the fixes. Use fixed_now when you already fixed it (the row is recorded as caught AND fixed, and is never auto-triaged), filed when it genuinely needs its own task, wont_fix when it is not worth fixing. A P2/P3 you are filing rather than fixing, and any wont_fix, needs a `reason` of at least 12 characters. Omit this array entirely and nothing changes \u2014 the prose blobs are still parsed.",
+    "items": {
+     "properties": {
+      "detail": {
+       "description": "The verbatim context: what breaks, where, and how it reproduces.",
+       "maxLength": 600,
+       "type": "string"
+      },
+      "disposition": {
+       "description": "Required for kind=issue. fixed_now = already fixed in this build. filed = needs its own task. wont_fix = not worth fixing.",
+       "enum": [
+        "fixed_now",
+        "filed",
+        "wont_fix"
+       ],
+       "type": "string"
+      },
+      "introduced_by_task": {
+       "description": "OPTIONAL. The task id (e.g. \"task-3101\") that SHIPPED this defect, if you actually established it \u2014 a git blame, a bisect, or a change you can point at. This is the ESCAPED axis: PAPI counts what the gates caught but has never counted what got through, so it cannot tell whether a gate is worth its cost. NEVER GUESS. Omit it when the origin is not established; omitted is the normal case and reads as unknown-origin, which is honest. A wrong id is worse than no id. An id that does not name a task in this project is stored as null.",
+       "type": "string"
+      },
+      "kind": {
+       "description": "What kind of finding. Only `issue` carries a disposition.",
+       "enum": [
+        "issue",
+        "dead_end",
+        "surprise"
+       ],
+       "type": "string"
+      },
+      "module": {
+       "description": "Module the finding belongs to. Defaults to the task's module.",
+       "type": "string"
+      },
+      "reason": {
+       "description": "Why you filed rather than fixed, or why it will not be fixed. Required (>= 12 chars) for a filed P2/P3 and for any wont_fix.",
+       "maxLength": 200,
+       "type": "string"
+      },
+      "severity": {
+       "description": "Severity, for issues.",
+       "enum": [
+        "P0",
+        "P1",
+        "P2",
+        "P3"
+       ],
+       "type": "string"
+      },
+      "summary": {
+       "description": "One line. No \"Pn:\" prefix \u2014 severity has its own field.",
+       "maxLength": 200,
+       "type": "string"
+      }
+     },
+     "required": [
+      "kind",
+      "summary"
+     ],
+     "type": "object"
+    },
+    "maxItems": 12,
+    "type": "array"
+   },
+   "fixed_issues": {
+    "description": "cycle_learnings UUIDs of discovered issues this build FIXED. SEND THIS whenever your work closed an issue listed under \"OPEN DISCOVERED ISSUES\" in the BUILD HANDOFF \u2014 that block prints the exact UUIDs to copy. Nothing else stamps a fix, so an unreported one is indistinguishable from an unfixed issue: the hub's \"What PAPI caught\" caught\u2192fixed ledger reads zero until this is passed. Stamps resolved_at via the existing discovered_issue_resolve path \u2014 triage-and-fix at build time, no separate tool call. Distinct from resolves_learnings, which only LINKS a learning to this task without closing it. Do not pass UUIDs for issues you did not actually fix. Best-effort and idempotent.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "handoff_accuracy": {
+    "description": "Structured handoff accuracy assessment. Optional \u2014 provides granular accuracy data beyond scope_accuracy.",
+    "properties": {
+     "effort_match": {
+      "description": "Did the effort estimate match actual effort?",
+      "type": "boolean"
+     },
+     "files_match": {
+      "description": "How well did the FILES LIKELY TOUCHED section predict actual files?",
+      "enum": [
+       "exact",
+       "partial",
+       "missed"
+      ],
+      "type": "string"
+     },
+     "notes": {
+      "description": "Optional notes on accuracy gaps.",
+      "type": "string"
+     },
+     "scope_match": {
+      "description": "Did the handoff scope match what was actually built?",
+      "type": "boolean"
+     }
+    },
+    "type": "object"
+   },
+   "input_tokens": {
+    "description": "OPTIONAL for complete. Prompt tokens your harness reports it spent on this build. PAPI measures nothing \u2014 pass what your own runtime reports, or omit. Feeds the subscription-vs-BYOK cost metric (task-3878); omitted means \"not reported\", never zero.",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "light": {
+    "description": "Light-ceremony mode for XS/S tasks. Skips feature branch creation and PR. Work stays on current branch. Build report is still captured. Default false.",
+    "type": "boolean"
+   },
+   "model": {
+    "description": "REQUIRED for complete. The model/agent that executed this build, self-reported, e.g. 'claude-opus-4' / 'gpt-5' \u2014 powers attributed-intelligence analytics. PAPI never selects a model (AD-58) \u2014 report the model YOU are running as, not a model PAPI chose.",
+    "maxLength": 120,
+    "type": "string"
+   },
+   "output_tokens": {
+    "description": "OPTIONAL for complete. Completion tokens your harness reports for this build. Omit if unknown.",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "preview": {
+    "description": "Optional. For a build that touched USER-FACING UI: tell the owner how to SEE the result locally so reviewing it doesn't mean reading code or asking \"show me\". urls = the localhost route(s) to open (e.g. [\"http://localhost:3000/hub\"]); notes = what to look at; screenshot_path = a path to an image you captured. Surfaced verbatim in the completion output. When the diff touched UI and you omit this, the output nudges you to provide it.",
+    "properties": {
+     "notes": {
+      "description": "What the owner should look at / verify.",
+      "type": "string"
+     },
+     "screenshot_path": {
+      "description": "Path to a captured screenshot of the rendered result.",
+      "type": "string"
+     },
+     "urls": {
+      "description": "Localhost route(s) to open to view the work.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "type": "object"
+   },
+   "production_verification": {
+    "description": "Required when the branch diff touches a trigger surface (install snippets, MCP transport, auth/middleware, OAuth well-known, vercel.json, supabase functions, Dockerfile, Procfile, env declarations). Record exactly what you verified against the live deploy. http_status MUST be 2xx \u2014 non-2xx rejects the build. Server inspects the diff and enforces this, so passing it on non-trigger tasks is harmless but unnecessary.",
+    "properties": {
+     "curl_command": {
+      "description": "Exact curl command run.",
+      "type": "string"
+     },
+     "http_status": {
+      "description": "HTTP status observed (2xx required).",
+      "type": "integer"
+     },
+     "response_excerpt": {
+      "description": "First \u22641024 chars of response body \u2014 secret-like tokens are auto-redacted before storage.",
+      "type": "string"
+     },
+     "urls": {
+      "description": "URLs verified post-deploy.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "verified_at": {
+      "description": "ISO 8601 timestamp.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "urls",
+     "curl_command",
+     "http_status",
+     "response_excerpt",
+     "verified_at"
+    ],
+    "type": "object"
+   },
+   "proposal": {
+    "description": "task-3273, OPTIONAL: propose a Decision or a Convention you settled while building this. PAPI never mints one for you \u2014 a proposal that passes all four admission tests is QUEUED for the owner behind a decision gate, and nothing is written as an Active Decision. YOU apply the four tests (they are stated in the planning prompts); the server routes on your answers and makes no judgement about the content. Fails \"arguable today\" only and it is recorded as a Convention instead, riding every future build. Fails \"constrains future work\" and it is returned to you with the reason, unrecorded.",
+    "properties": {
+     "body": {
+      "description": "What was decided or settled, and why.",
+      "type": "string"
+     },
+     "module": {
+      "description": "Optional module scope. Only used when this lands as a Convention.",
+      "type": "string"
+     },
+     "tests": {
+      "description": "The four admission tests, each answered explicitly. An omitted test is NOT a failed test \u2014 the proposal is refused rather than routed.",
+      "properties": {
+       "alternativesWereReal": {
+        "description": "(a) Something else could genuinely have been chosen.",
+        "type": "boolean"
+       },
+       "arguableToday": {
+        "description": "(c) A competent person could argue the other side right now.",
+        "type": "boolean"
+       },
+       "constrainsFutureWork": {
+        "description": "(b) It changes what a task nobody has written yet will do.",
+        "type": "boolean"
+       },
+       "reversalCostsMore": {
+        "description": "(d) Reversing it costs more than making it did.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "alternativesWereReal",
+       "constrainsFutureWork",
+       "arguableToday",
+       "reversalCostsMore"
+      ],
+      "type": "object"
+     },
+     "title": {
+      "description": "One line stating the stance or rule.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "title",
+     "body",
+     "tests"
+    ],
+    "type": "object"
+   },
+   "related_decisions": {
+    "description": "Comma-separated AD IDs this build validated or challenged (e.g. \"AD-5,AD-12\"). Optional but high-value: name any Active Decision your work CONFIRMED, CONTRADICTED, or DEPENDED ON \u2014 this is the primary signal feeding the decision-intelligence graph (validated-decision events). Check the BUILD HANDOFF for AD references. If you leave this empty, AD IDs found in the handoff are auto-captured as a fallback.",
+    "type": "string"
+   },
+   "resolves_learnings": {
+    "description": "IDs of cycle_learnings this build directly resolves or acts on. Use when the BUILD HANDOFF references a prior learning entry (e.g. \"addresses learning abc-123\"). Links the learning to this task as action_taken=task_created.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "scope_accuracy": {
+    "description": "How well the BUILD HANDOFF matched actual work. Optional for complete.",
+    "enum": [
+     "accurate",
+     "over-scoped",
+     "under-scoped",
+     "missed-context"
+    ],
+    "type": "string"
+   },
+   "surprises": {
+    "description": "What was DIFFERENT from what you expected? Scope changes, wrong assumptions, unexpected complexity, or missing infrastructure. NOT implementation details. Good: \"Assumed table had status column but it uses state \u2014 required migration.\" Bad: \"Used CSS keyframes instead of library.\" If your surprise is about implementation mechanics (which library, which pattern), it is not a surprise \u2014 use \"None\". Required for complete.",
+    "maxLength": 800,
+    "type": "string"
+   },
+   "task_id": {
+    "description": "The task ID to execute.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "task_id"
+  ],
+  "type": "object"
+ },
+ "name": "build_execute"
+}

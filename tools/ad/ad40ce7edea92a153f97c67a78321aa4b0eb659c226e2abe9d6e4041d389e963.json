@@ -1,0 +1,277 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Create Kapruka Order (Guest Checkout)"
+ },
+ "description": "Create a guest-checkout order on Kapruka and return a click-to-pay link.\n\n    Builds a Kapruka order from the supplied cart + recipient + delivery + sender,\n    then returns a checkout URL the customer opens in a browser to complete payment.\n    No Kapruka account is required. Prices are locked for the lifetime of the link\n    (60 minutes) \u2014 the customer pays exactly the quoted grand total even if the\n    catalog price changes meanwhile.\n\n    Free public tier limits: 30 orders per hour per client IP. Cart up to 30 items,\n    quantity up to 99 per item. A fresh idempotency key is generated per call so\n    retries on transient errors return the same checkout URL rather than duplicates.\n\n    Args:\n        params (CreateOrderInput):\n            - cart (list[CartItem]): 1\u201330 lines. Catalogue line: product_id, quantity (default 1), optional icing_text (cakes only).\n              Custom cake line: custom_cake_request_id + phone \u2014 orders the cake Kapruka staff quoted via\n              kapruka_custom_cake_status (status must be 'quoted'; quantity is always 1; never send a price).\n              Lines can be mixed in one order \u2014 one delivery fee covers everything; the whole cart must be\n              deliverable to delivery.city. Only place a custom cake order after the customer clearly\n              accepted the quoted total.\n            - recipient (Recipient): name + phone (E.164 +9477\u2026 or local 077\u2026)\n            - delivery (Delivery): address, city (must be Kapruka-deliverable \u2014 use kapruka_list_delivery_cities), location_type (house/apartment/office/other, default house), date (YYYY-MM-DD, today-or-future Asia/Colombo), optional instructions\n            - sender (Sender): name + anonymous flag\n            - gift_message (Optional[str]): Up to 300 chars\n            - currency (str): LKR (default), USD, GBP, AUD, EUR\n            - response_format (str): 'markdown' (default) or 'json'\n\n    Returns:\n        str: Order confirmation with checkout URL.\n\n        JSON schema:\n        {\n          \"checkout_url\": str,           # Open in browser to pay (no login required)\n          \"order_ref\": str,              # e.g. \"ORD-20260520-7823\"\n          \"order_id\": str,               # id used by the bank-deposit flow\n          \"summary\": {\n            \"items_total\":   number,\n            \"delivery_fee\":  number,\n            \"addons_total\":  number,\n            \"grand_total\":   number,     # items_total + delivery_fee + addons_total\n            \"currency\":      str\n          },\n          \"expires_at\": str              # ISO 8601 \u2014 link stops working after this\n        }\n\n        Error: \"Error (<code>): <message>\" on failure. Common codes:\n          empty_cart, missing_field, past_delivery_date, product_not_found,\n          product_out_of_stock, city_not_deliverable (city not in the network at\n          all), date_not_deliverable, city_not_deliverable_for_item.\n\n        Custom cake lines add: request_not_found (404 \u2014 wrong id/phone or staff\n        removed it), quote_not_ready (409 \u2014 staff haven't priced it; check\n        kapruka_custom_cake_status later), quote_expired (410 \u2014 submit a new\n        kapruka_custom_cake_request). summary.items_total may differ from the\n        quoted cake total by a few rupees (USD round-trip) \u2014 quote the summary\n        numbers when asking for payment.\n\n        city_not_deliverable_for_item (HTTP 422): at least one cart item (food /\n        hotel cake / liquor) cannot reach delivery.city. NOTHING is created \u2014 the\n        API never places a partial order and neither should you. The error text\n        names every blocking item and lists the cities the whole cart CAN go to.\n        Tell the customer which item blocks the order and offer to (a) change the\n        city to one of those, or (b) remove/replace that item. Never retry with\n        the same city. Avoid this entirely by calling kapruka_check_delivery with\n        `product_id` for each limited item before ordering.\n    ",
+ "inputSchema": {
+  "$defs": {
+   "CartItem": {
+    "additionalProperties": false,
+    "description": "One cart line \u2014 EITHER a catalogue product OR a quoted custom cake.\n\nCatalogue line:   {\"product_id\": \"...\", \"quantity\": 1, \"icing_text\": \"...\"}\nCustom cake line: {\"custom_cake_request_id\": \"...\", \"phone\": \"+9477...\"}\nThe custom cake line is turned into the staff-quoted cake server-side\n(name, picture, price); quantity is always 1 and no price is ever sent.",
+    "properties": {
+     "custom_cake_request_id": {
+      "anyOf": [
+       {
+        "maxLength": 80,
+        "minLength": 6,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "request_id of a custom cake that kapruka_custom_cake_status reports as 'quoted'. Orders the staff-quoted cake (quantity 1). Requires `phone`.",
+      "title": "Custom Cake Request Id"
+     },
+     "icing_text": {
+      "anyOf": [
+       {
+        "maxLength": 120,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Cake icing text. Silently ignored for non-cake products. Catalogue lines only.",
+      "title": "Icing Text"
+     },
+     "phone": {
+      "anyOf": [
+       {
+        "maxLength": 30,
+        "minLength": 7,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "The customer.phone the custom cake request was made with (custom cake lines only).",
+      "title": "Phone"
+     },
+     "product_id": {
+      "anyOf": [
+       {
+        "maxLength": 80,
+        "minLength": 3,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Kapruka product ID (e.g. 'cakeXX000000'). Catalogue line.",
+      "title": "Product Id"
+     },
+     "quantity": {
+      "anyOf": [
+       {
+        "maximum": 99,
+        "minimum": 1,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Quantity (1\u201399, default 1). Catalogue lines only.",
+      "title": "Quantity"
+     }
+    },
+    "title": "CartItem",
+    "type": "object"
+   },
+   "CreateOrderInput": {
+    "additionalProperties": false,
+    "properties": {
+     "cart": {
+      "description": "1\u201330 items.",
+      "items": {
+       "$ref": "#/$defs/CartItem"
+      },
+      "maxItems": 30,
+      "minItems": 1,
+      "title": "Cart",
+      "type": "array"
+     },
+     "currency": {
+      "default": "LKR",
+      "description": "Pricing currency. Supported: LKR, USD, GBP, AUD, EUR.",
+      "title": "Currency",
+      "type": "string"
+     },
+     "delivery": {
+      "$ref": "#/$defs/Delivery"
+     },
+     "gift_message": {
+      "anyOf": [
+       {
+        "maxLength": 300,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Optional gift card message.",
+      "title": "Gift Message"
+     },
+     "recipient": {
+      "$ref": "#/$defs/Recipient"
+     },
+     "response_format": {
+      "default": "markdown",
+      "description": "'markdown' (default) or 'json'.",
+      "title": "Response Format",
+      "type": "string"
+     },
+     "sender": {
+      "$ref": "#/$defs/Sender"
+     }
+    },
+    "required": [
+     "cart",
+     "recipient",
+     "delivery",
+     "sender"
+    ],
+    "title": "CreateOrderInput",
+    "type": "object"
+   },
+   "Delivery": {
+    "additionalProperties": false,
+    "properties": {
+     "address": {
+      "description": "Street address.",
+      "maxLength": 250,
+      "minLength": 3,
+      "title": "Address",
+      "type": "string"
+     },
+     "city": {
+      "description": "Must be a Kapruka delivery city (canonical name from kapruka_list_delivery_cities) that EVERY cart item can reach. The order ships as one shipment, so food / hotel cake / liquor items restrict the whole cart to their city set \u2014 verify with kapruka_check_delivery(city, product_id) first; otherwise the order is rejected with city_not_deliverable_for_item.",
+      "maxLength": 100,
+      "minLength": 2,
+      "title": "City",
+      "type": "string"
+     },
+     "date": {
+      "description": "Delivery date in YYYY-MM-DD (Asia/Colombo). Must be today or future.",
+      "title": "Date",
+      "type": "string"
+     },
+     "instructions": {
+      "anyOf": [
+       {
+        "maxLength": 250,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Free-form delivery instructions.",
+      "title": "Instructions"
+     },
+     "location_type": {
+      "default": "house",
+      "description": "One of: house, apartment, office, other.",
+      "title": "Location Type",
+      "type": "string"
+     }
+    },
+    "required": [
+     "address",
+     "city",
+     "date"
+    ],
+    "title": "Delivery",
+    "type": "object"
+   },
+   "Recipient": {
+    "additionalProperties": false,
+    "properties": {
+     "name": {
+      "description": "Recipient name shown on the order.",
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+     },
+     "phone": {
+      "description": "Recipient phone \u2014 E.164 (+9477\u2026) or local SL (077\u2026) format.",
+      "maxLength": 30,
+      "minLength": 7,
+      "title": "Phone",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "phone"
+    ],
+    "title": "Recipient",
+    "type": "object"
+   },
+   "Sender": {
+    "additionalProperties": false,
+    "properties": {
+     "anonymous": {
+      "default": false,
+      "description": "If true, gift card shows 'Anonymous' instead of the sender name.",
+      "title": "Anonymous",
+      "type": "boolean"
+     },
+     "name": {
+      "description": "Sender name on the gift card.",
+      "maxLength": 80,
+      "minLength": 1,
+      "title": "Name",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "title": "Sender",
+    "type": "object"
+   }
+  },
+  "properties": {
+   "params": {
+    "$ref": "#/$defs/CreateOrderInput"
+   }
+  },
+  "required": [
+   "params"
+  ],
+  "title": "kapruka_create_orderArguments",
+  "type": "object"
+ },
+ "name": "kapruka_create_order",
+ "outputSchema": {
+  "properties": {
+   "result": {
+    "title": "Result",
+    "type": "string"
+   }
+  },
+  "required": [
+   "result"
+  ],
+  "title": "kapruka_create_orderOutput",
+  "type": "object"
+ }
+}

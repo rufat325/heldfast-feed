@@ -1,0 +1,428 @@
+{
+ "_meta": {
+  "anthropic/alwaysLoad": true
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Recall Memory"
+ },
+ "description": "Recall memories from AutoMem in one of three modes. The mode is selected by which params you pass.\n\n**Mode 1 \u2014 ID fetch:** pass `memory_id` to retrieve a single memory by ID. All other params are ignored. Routes to GET /memory/{id} and updates last_accessed.\n\n**Mode 2 \u2014 Tag enumeration:** pass `tags` + `exhaustive: true` for paginated exact-match listing (NOT ranked retrieval). Use this for cleanup/audit workflows where ranked retrieval silently undercounts large tag sets. Pair with `limit` (\u2264200) and `offset`. Returns `has_more`/`limit`/`offset` page metadata. Tag matching is exact, case-insensitive, any-of mode \u2014 `tag_match: \"prefix\"` and `tag_mode: \"all\"` are rejected in this mode.\n\n**Mode 3 \u2014 Ranked retrieval (default):** hybrid search across vector, keyword, tags, recency, and optional graph expansion. The primary tool for finding relevant context. By default, ranked recall requests current active memories only; set `current_only: false` for audits.\n\n**When to use ranked (mode 3):**\n- At conversation start: recall context about the current project/topic\n- Before making decisions: check for past decisions on similar topics\n- When debugging: search for similar past errors and their solutions\n- For complex questions: use `expand_entities` for multi-hop reasoning\n\n**When to use enumeration (mode 2):** when you need to know *how many* memories carry a tag, or to walk all of them for cleanup/migration. Ranked recall ignores low-importance hits \u2014 enumeration does not.\n\n**Examples:**\n- recall_memory({ query: \"database architecture decisions\", tags: [\"my-project\"], limit: 5 })\n- recall_memory({ memory_id: \"abc123\" })  // Mode 1\n- recall_memory({ tags: [\"benchmark-test\"], exhaustive: true, limit: 50 })  // Mode 2 (add offset for later pages)\n- recall_memory({ query: \"auth\", exclude_tags: [\"deprecated\"] })  // Mode 3 with exclusion\n- recall_memory({ query: \"What is Sarah's sister's job?\", expand_entities: true })  // Mode 3 multi-hop",
+ "inputSchema": {
+  "properties": {
+   "active_path": {
+    "description": "Current file path for language auto-detection (e.g., \"src/auth.ts\")",
+    "type": "string"
+   },
+   "adaptive_floor": {
+    "description": "Ranked-mode only. Enable the service's adaptive score floor when filtering weak matches.",
+    "type": "boolean"
+   },
+   "auto_decompose": {
+    "description": "Auto-extract entities and topics from query to generate supplementary searches.",
+    "type": "boolean"
+   },
+   "context": {
+    "description": "Context label (e.g., \"coding-style\", \"architecture\"). Boosts matching preferences.",
+    "type": "string"
+   },
+   "context_tags": {
+    "description": "Priority tags to boost in results (e.g., [\"coding-style\", \"preferences\"])",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "context_types": {
+    "description": "Priority memory types to boost (e.g., [\"Style\", \"Preference\"])",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "current_only": {
+    "default": true,
+    "description": "Ranked-mode only. When true, server suppresses archived, not-yet-valid, expired, invalidated, or superseded memories from active context.",
+    "type": "boolean"
+   },
+   "embedding": {
+    "description": "Optional embedding vector for direct similarity search",
+    "items": {
+     "type": "number"
+    },
+    "type": "array"
+   },
+   "end": {
+    "description": "ISO timestamp upper bound",
+    "type": "string"
+   },
+   "exclude_tags": {
+    "description": "Ranked-mode only. Tags to exclude from results (any match excludes). Independent of `tag_match` \u2014 supports both exact and prefix matching internally on the server.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "exhaustive": {
+    "description": "MODE: tag enumeration. When true, requires non-empty `tags`. Routes to GET /memory/by-tag for paginated exact-match listing \u2014 NOT ranked retrieval. Use for cleanup/audit workflows where ranked recall undercounts. `limit` is clamped to 200. `tag_match: \"prefix\"` and `tag_mode: \"all\"` are rejected in this mode.",
+    "type": "boolean"
+   },
+   "expand_entities": {
+    "description": "Enable multi-hop reasoning via entity expansion. Finds memories about people/places mentioned in seed results. Use for \"What is X's sister's job?\" type questions.",
+    "type": "boolean"
+   },
+   "expand_min_importance": {
+    "description": "Minimum importance score for expanded results. Filters out low-relevance memories during graph/entity expansion. Recommended: 0.3-0.5 for broad context, 0.6-0.8 for focused results. Seed results are never filtered, only expanded ones.",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "expand_min_strength": {
+    "description": "Minimum relation strength to follow during graph expansion. Only traverses edges above this threshold. Recommended: 0.3 for exploratory, 0.6+ for high-confidence connections only. Does not affect entity expansion.",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "expand_relations": {
+    "description": "Follow graph relationships from seed results to find related memories.",
+    "type": "boolean"
+   },
+   "expand_respect_tags": {
+    "description": "Ranked-mode only. When true, graph/entity expansion stays within the original tag scope; when false, expansion may include related context outside the tags.",
+    "type": "boolean"
+   },
+   "expansion_limit": {
+    "default": 25,
+    "description": "Max total expanded memories (default: 25)",
+    "maximum": 500,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "format": {
+    "default": "text",
+    "description": "Output format: text (default), items (one block per memory), detailed (adds type/confidence/metadata keys/relation stubs), json (raw per-memory fields incl. full content/metadata/relations; whole-response token budget still applies). text/items/detailed show a content preview (default 400 chars) and keep any stored summary as an additive field \u2014 fetch a full record via memory_id.",
+    "enum": [
+     "text",
+     "items",
+     "detailed",
+     "json"
+    ],
+    "type": "string"
+   },
+   "language": {
+    "description": "Programming language hint (e.g., \"python\", \"typescript\"). Prioritizes language-specific memories.",
+    "type": "string"
+   },
+   "limit": {
+    "default": 5,
+    "description": "Max memories to return. Schema allows 1\u2013200; in enumeration mode (`exhaustive: true`) the server honors up to 200, while ranked mode is typically clamped server-side to ~50. Default 5.",
+    "maximum": 200,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "memory_id": {
+    "description": "MODE: ID fetch. When set, fetches the single memory by ID and IGNORES all other params. Routes to GET /memory/{id}; updates last_accessed.",
+    "type": "string"
+   },
+   "min_score": {
+    "description": "Ranked-mode only. Minimum final score threshold before results are returned.",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "offset": {
+    "description": "Result offset for pagination",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "per_query_limit": {
+    "description": "Per-query result limit when using queries[] (default: 5)",
+    "maximum": 50,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "priority_ids": {
+    "description": "Specific memory IDs to ensure are included in results",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "queries": {
+    "description": "Multiple queries for broader recall. Results are deduplicated server-side.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "query": {
+    "description": "Semantic search query (natural language). Describe what you're looking for.",
+    "type": "string"
+   },
+   "recency_bias": {
+    "description": "Ranked-mode only. Controls service recency boosting: auto lets the service infer, on forces boosting, off disables it.",
+    "enum": [
+     "auto",
+     "on",
+     "off"
+    ],
+    "type": "string"
+   },
+   "relation_limit": {
+    "default": 5,
+    "description": "Max relations to follow per seed memory (default: 5)",
+    "maximum": 200,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "scope_fallback": {
+    "description": "Ranked-mode only. Allow fallback outside the requested tag scope when scoped recall has weak evidence; diagnostics report tag_scope and outside_tag_scope.",
+    "type": "boolean"
+   },
+   "sort": {
+    "description": "Result ordering (use time_* for chronological recaps)",
+    "enum": [
+     "score",
+     "time_desc",
+     "time_asc",
+     "updated_desc",
+     "updated_asc"
+    ],
+    "type": "string"
+   },
+   "start": {
+    "description": "ISO timestamp lower bound (alternative to time_query)",
+    "type": "string"
+   },
+   "state_debug": {
+    "default": false,
+    "description": "Ranked-mode only. Include state-filter suppression/replacement IDs and reasons when current_only is true.",
+    "type": "boolean"
+   },
+   "state_mode": {
+    "description": "Ranked-mode only. `current` returns active memories; `history` allows superseded/invalidated memories for audit timelines. Prefer this over current_only for new clients.",
+    "enum": [
+     "current",
+     "history"
+    ],
+    "type": "string"
+   },
+   "tag_match": {
+    "description": "\"exact\" for exact tag match (default), \"prefix\" for starts-with matching",
+    "enum": [
+     "exact",
+     "prefix"
+    ],
+    "type": "string"
+   },
+   "tag_mode": {
+    "description": "\"any\" matches memories with any tag (default), \"all\" requires all tags",
+    "enum": [
+     "any",
+     "all"
+    ],
+    "type": "string"
+   },
+   "tags": {
+    "description": "Filter by tags. Use project name as first tag for scoping.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "time_query": {
+    "description": "Natural language time filter: \"today\", \"yesterday\", \"last week\", \"last 30 days\"",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "recall_memory",
+ "outputSchema": {
+  "properties": {
+   "count": {
+    "description": "Number of memories returned",
+    "type": "integer"
+   },
+   "dedup_removed": {
+    "description": "Number of duplicate results removed (when using multiple queries)",
+    "type": "integer"
+   },
+   "entities": {
+    "description": "Entity identity diagnostics injected by the service.",
+    "items": {
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "exclude_tags": {
+    "description": "Tags excluded from ranked recall.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "has_more": {
+    "description": "Enumeration mode only: true if more pages exist past `offset + limit`.",
+    "type": "boolean"
+   },
+   "jit_enriched_count": {
+    "description": "Number of memories enriched inline during recall.",
+    "type": "integer"
+   },
+   "limit": {
+    "description": "Enumeration mode only: page size used for this response.",
+    "type": "integer"
+   },
+   "mode": {
+    "description": "Mode that produced the result.",
+    "enum": [
+     "ranked",
+     "enumeration",
+     "id_fetch"
+    ],
+    "type": "string"
+   },
+   "offset": {
+    "description": "Enumeration mode only: offset used for this response.",
+    "type": "integer"
+   },
+   "queries": {
+    "description": "Query variants executed by the service.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "query": {
+    "description": "Query text executed by ranked recall.",
+    "type": "string"
+   },
+   "query_time_ms": {
+    "description": "Service recall latency in milliseconds.",
+    "type": "number"
+   },
+   "recency_bias": {
+    "description": "Recency bias mode applied by the service.",
+    "enum": [
+     "auto",
+     "on",
+     "off"
+    ],
+    "type": "string"
+   },
+   "results": {
+    "description": "Array of matching memories with scores",
+    "items": {
+     "properties": {
+      "content": {
+       "description": "Memory content (preview-capped in budgeted formats).",
+       "type": "string"
+      },
+      "content_chars": {
+       "description": "Original content length when content was previewed.",
+       "type": "integer"
+      },
+      "content_truncated": {
+       "description": "True when content is a preview; fetch the full record via recall_memory({ memory_id }).",
+       "type": "boolean"
+      },
+      "created_at": {
+       "type": "string"
+      },
+      "deduped_from": {
+       "description": "Result IDs merged into this result during multi-query deduplication.",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "final_score": {
+       "type": "number"
+      },
+      "importance": {
+       "type": "number"
+      },
+      "jit_enriched": {
+       "description": "True when the service enriched the memory during recall.",
+       "type": "boolean"
+      },
+      "match_type": {
+       "type": "string"
+      },
+      "memory_id": {
+       "type": "string"
+      },
+      "outside_tag_scope": {
+       "description": "True when scope_fallback admitted this result outside the requested tag scope.",
+       "type": "boolean"
+      },
+      "state_replaces": {
+       "description": "ID of the suppressed memory this result replaced during current-state filtering.",
+       "type": "string"
+      },
+      "summary": {
+       "description": "Stored 1-2 sentence summary when the server provides one. Additive in budgeted formats; does not replace content.",
+       "type": "string"
+      },
+      "tags": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "updated_at": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "scope_fallback": {
+    "description": "True when recall allowed outside-scope fallback results.",
+    "type": "boolean"
+   },
+   "score_filter": {
+    "description": "Score filtering diagnostics such as min_score, adaptive_floor, and filtered_count.",
+    "type": "object"
+   },
+   "sort": {
+    "description": "Sort mode applied by the service.",
+    "type": "string"
+   },
+   "state_filter": {
+    "description": "Current-state filtering diagnostics. Includes aggregate counts by default and detailed IDs/reasons only when state_debug=true.",
+    "type": "object"
+   },
+   "state_mode": {
+    "description": "State mode applied by ranked recall.",
+    "enum": [
+     "current",
+     "history"
+    ],
+    "type": "string"
+   },
+   "tag_scope": {
+    "description": "Tag-scope diagnostics including whether scoped evidence was strong enough.",
+    "type": "object"
+   },
+   "truncation": {
+    "description": "Present when trailing results were dropped to fit the response budget: { applied, omitted_results, reason }.",
+    "type": "object"
+   },
+   "vector_search": {
+    "description": "Vector-search diagnostics from the service.",
+    "type": "object"
+   }
+  },
+  "required": [
+   "count",
+   "results"
+  ],
+  "type": "object"
+ },
+ "title": "Recall Memory"
+}

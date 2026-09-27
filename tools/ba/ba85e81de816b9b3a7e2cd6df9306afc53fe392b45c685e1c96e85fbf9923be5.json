@@ -1,0 +1,407 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Audit page (full)"
+ },
+ "description": "Full AI-SEO audit of a single URL: returns categorized findings (info/warning/error) with severity, fix instructions, and a 0-100 composite score plus per-dimension subscores.\n\nRead-only. Fetches the URL once and runs every sub-audit (schema, robots, technical, sitemap, AI-Overview eligibility) against the response. No writes, no third-party APIs, no auth required, no rate limits beyond polite per-host throttling.\n\nDeterministic, rule-based scoring; no LLM calls. Same URL + same input flags returns the same score.\n\nSupports `render: \"static\" | \"headless\"`. Default `static` (fast, raw HTML only). Use `headless` for React/Vue/Angular SPAs \u2014 adds 3-10s and requires the optional `playwright-core` peer dep plus a one-time `npx playwright install chromium`.\n\nWhen to use: the default entry point for `audit any page`. Use this instead of calling check_technical / audit_schema / check_robots / check_sitemap / score_ai_overview_eligibility individually unless you specifically need only one dimension - this tool composes all of them.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "generate_report": {
+    "default": false,
+    "description": "If true, return a standalone HTML scorecard in the `report_html` field. The HTML is self-contained (no external dependencies) and can be saved as a .html file or pasted to Gist/CodePen. Default false to keep audits cheap.",
+    "type": "boolean"
+   },
+   "include_raw_html": {
+    "default": false,
+    "description": "If true, return the full raw HTML in the response under `raw_html`. Default false. Set true only when you need to inspect markup that wasn't captured by the structured findings; the payload can be large.",
+    "type": "boolean"
+   },
+   "render": {
+    "default": "static",
+    "description": "Rendering mode. `static` (default) fetches raw HTML via HTTP \u2014 fast (<1s) but misses JS-rendered content typical of SPAs (React/Vue/Angular landing pages). `headless` spins up Playwright Chromium, waits for networkidle, and audits the rendered DOM \u2014 adds 3-10s per audit and requires `playwright-core` installed plus a one-time `npx playwright install chromium`. Use `headless` when the static audit shows `content_quality: \"spa_empty\"` or you know the target is JS-rendered.",
+    "enum": [
+     "static",
+     "headless"
+    ],
+    "type": "string"
+   },
+   "respect_robots": {
+    "default": true,
+    "description": "If true (default), the tool checks robots.txt before fetching and skips disallowed paths, returning a robots_blocked finding instead. Set to false ONLY for auditing your own site where you've intentionally blocked crawlers and need the audit to bypass that block.",
+    "type": "boolean"
+   },
+   "url": {
+    "description": "Public URL to audit. Must be a fully-qualified http(s) URL that returns HTTP 200 (redirects are followed). The tool fetches this URL once and runs every sub-audit (schema, robots, technical, sitemap, AI-Overview eligibility) against the response.",
+    "format": "uri",
+    "type": "string"
+   }
+  },
+  "required": [
+   "url"
+  ],
+  "type": "object"
+ },
+ "name": "audit_page",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "citation_verdict": {
+    "additionalProperties": false,
+    "description": "Prepended block summarizing whether AI assistants will cite this page and why.",
+    "properties": {
+     "one_line_summary": {
+      "description": "Single-sentence explanation suitable for headlines/dashboards.",
+      "type": "string"
+     },
+     "top_3_blockers": {
+      "description": "Top three highest-impact issues blocking AI citation.",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "category": {
+         "type": "string"
+        },
+        "estimated_impact": {
+         "enum": [
+          "high",
+          "medium",
+          "low"
+         ],
+         "type": "string"
+        },
+        "fix": {
+         "type": "string"
+        },
+        "message": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "category",
+        "message",
+        "fix"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "will_ai_cite": {
+      "description": "Coarse verdict from the composite score.",
+      "enum": [
+       "unlikely",
+       "marginal",
+       "likely"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "will_ai_cite",
+     "top_3_blockers",
+     "one_line_summary"
+    ],
+    "type": "object"
+   },
+   "content_quality": {
+    "description": "Classification of the fetched HTML's readiness. spa_empty means audit results are degraded.",
+    "enum": [
+     "static_html",
+     "ssr_likely",
+     "spa_empty"
+    ],
+    "type": "string"
+   },
+   "dimension_scores": {
+    "additionalProperties": false,
+    "description": "Per-dimension 0-100 subscores. The composite score is a weighted blend of these.",
+    "properties": {
+     "authority": {
+      "type": "number"
+     },
+     "citability": {
+      "description": "Passage-level extractability: share of sections in the 134-167 word citable band.",
+      "type": "number"
+     },
+     "entity_density": {
+      "type": "number"
+     },
+     "evidence": {
+      "description": "Citations / statistics / quotations density (Princeton GEO weighting).",
+      "type": "number"
+     },
+     "freshness": {
+      "type": "number"
+     },
+     "robots": {
+      "type": "number"
+     },
+     "schema": {
+      "type": "number"
+     },
+     "sitemap": {
+      "type": "number"
+     },
+     "structure": {
+      "type": "number"
+     },
+     "technical": {
+      "type": "number"
+     },
+     "trust": {
+      "description": "E-E-A-T trust signals: author, dates, contact/policy pages, HTTPS.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "schema",
+     "robots",
+     "technical",
+     "freshness",
+     "structure",
+     "authority",
+     "entity_density",
+     "sitemap",
+     "citability",
+     "evidence",
+     "trust"
+    ],
+    "type": "object"
+   },
+   "fetched_at": {
+    "description": "UTC ISO-8601 timestamp of the fetch.",
+    "type": "string"
+   },
+   "findings": {
+    "description": "All findings emitted by the sub-audits, deduplicated.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "category": {
+       "description": "Finding category - which AI-SEO dimension it relates to.",
+       "enum": [
+        "schema",
+        "robots",
+        "technical",
+        "freshness",
+        "structure",
+        "authority",
+        "presence",
+        "sitemap",
+        "llms_txt",
+        "citation",
+        "evidence",
+        "trust",
+        "entity",
+        "content"
+       ],
+       "type": "string"
+      },
+      "estimated_impact": {
+       "description": "Estimated impact on AI citation probability when resolved.",
+       "enum": [
+        "high",
+        "medium",
+        "low"
+       ],
+       "type": "string"
+      },
+      "failure_signal": {
+       "description": "Falsifiability: the observable signal that would prove the fix did NOT work.",
+       "type": "string"
+      },
+      "fix": {
+       "description": "Concrete, copy-pasteable fix.",
+       "type": "string"
+      },
+      "leading_indicator": {
+       "description": "Falsifiability: the leading indicator to monitor to confirm the fix is landing.",
+       "type": "string"
+      },
+      "message": {
+       "description": "Human-readable description of the issue.",
+       "type": "string"
+      },
+      "severity": {
+       "description": "Triage priority: critical blocks AI citation, warning hurts probability, info is nice-to-have.",
+       "enum": [
+        "critical",
+        "warning",
+        "info"
+       ],
+       "type": "string"
+      },
+      "where": {
+       "description": "Location of the issue (CSS selector, JSON-LD path, robots.txt line, or 'page-level').",
+       "type": "string"
+      }
+     },
+     "required": [
+      "severity",
+      "category",
+      "where",
+      "message",
+      "fix"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "grade": {
+    "description": "Letter grade derived from the numeric score.",
+    "enum": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "F"
+    ],
+    "type": "string"
+   },
+   "platform_readiness": {
+    "additionalProperties": false,
+    "description": "Per-engine readiness derived from the dimensions; engines reward different signals.",
+    "properties": {
+     "chatgpt": {
+      "additionalProperties": false,
+      "properties": {
+       "label": {
+        "enum": [
+         "ready",
+         "partial",
+         "weak"
+        ],
+        "type": "string"
+       },
+       "score": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "score",
+       "label"
+      ],
+      "type": "object"
+     },
+     "gemini": {
+      "additionalProperties": false,
+      "properties": {
+       "label": {
+        "enum": [
+         "ready",
+         "partial",
+         "weak"
+        ],
+        "type": "string"
+       },
+       "score": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "score",
+       "label"
+      ],
+      "type": "object"
+     },
+     "google_ai_overview": {
+      "additionalProperties": false,
+      "properties": {
+       "label": {
+        "enum": [
+         "ready",
+         "partial",
+         "weak"
+        ],
+        "type": "string"
+       },
+       "score": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "score",
+       "label"
+      ],
+      "type": "object"
+     },
+     "perplexity": {
+      "additionalProperties": false,
+      "properties": {
+       "label": {
+        "enum": [
+         "ready",
+         "partial",
+         "weak"
+        ],
+        "type": "string"
+       },
+       "score": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "score",
+       "label"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "chatgpt",
+     "perplexity",
+     "google_ai_overview",
+     "gemini"
+    ],
+    "type": "object"
+   },
+   "raw_html": {
+    "description": "Full raw HTML response. Present only when include_raw_html=true.",
+    "type": "string"
+   },
+   "report_html": {
+    "description": "Self-contained HTML scorecard. Present only when generate_report=true.",
+    "type": "string"
+   },
+   "score": {
+    "description": "Composite 0-100 AI-citation score.",
+    "maximum": 100,
+    "minimum": 0,
+    "type": "number"
+   },
+   "score_caps": {
+    "description": "Hard blockers that capped the composite score (e.g. noindex, AI bots blocked). Empty when none fired.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "url": {
+    "description": "The URL that was audited.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "url",
+   "fetched_at",
+   "score",
+   "grade",
+   "findings",
+   "citation_verdict",
+   "dimension_scores",
+   "platform_readiness",
+   "score_caps",
+   "content_quality"
+  ],
+  "type": "object"
+ },
+ "title": "Audit page (full)"
+}

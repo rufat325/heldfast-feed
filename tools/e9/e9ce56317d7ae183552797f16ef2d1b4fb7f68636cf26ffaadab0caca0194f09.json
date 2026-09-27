@@ -1,0 +1,420 @@
+{
+ "description": "Compose a STATE return's printed-form line set deterministically (2025 IL-1040 / VA 760 / CA 540 / NY IT-201 / PA-40) \u2014 correct line NUMBERS from the printed forms and whole-dollar rounding, with the state tax computed by the oracle targets internally. PA is CLASS-BASED: transcribe the pa* class fields (Box 16 compensation, per-spouse loss classes) \u2014 federalAGI is NOT the PA base; the composer runs the class netting, Schedule O, and Tax Forgiveness targets itself, and reports the WPTC as a note (no printed line). Workflow: run compute_return first for the federal substrate, compute any state-specific components the citations describe (additions, subtractions, credits without targets \u2014 disclose each), then call this ONCE and report its line set VERBATIM. Never hand-assemble state line numbers: transposed lines on correct dollars are the dominant state error mode. ALWAYS pass taxableSocialSecurity and unemploymentCompensation when nonzero (VA/CA/NY subtractions are applied by the composer). ALWAYS transcribe the intake's state-specific block (e.g. ca_tax_return.ca_form540_schca: AB 5 employee-classification additions; va_sch_a fields; county/use-tax questions) \u2014 those fields drive composer inputs. For VA MFJ, pass vaYourVagi/vaSpouseVagi (the separate-VAGI worksheet) so the composer can run the Spouse Tax Adjustment worksheet itself.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "additions": {
+    "$ref": "#/properties/federalAGI",
+    "description": "total state additions to federal AGI (e.g. NY 414(h) A-104 + IRC-125 A-101; VA Schedule ADJ line 2 codes). GATE RULE: coded addition/subtraction line-item arrays sitting under a false 'do you have additions/subtractions' boolean are inactive template rows (especially $1-$4 placeholder amounts) \u2014 transcribe $0 for them and disclose; the gate controls for these arrays"
+   },
+   "ageOrBlindBoxes": {
+    "description": "count of age-65+/blind boxes checked (taxpayer/spouse, per box)",
+    "type": "integer"
+   },
+   "asOf": {
+    "description": "year-end date, e.g. 2025-12-31 \u2014 REQUIRED",
+    "type": "string"
+   },
+   "caAb5GrossIncomeAddition": {
+    "$ref": "#/properties/federalAGI",
+    "description": "gross income from businesses where the worker is classified as an EMPLOYEE for California (AB 5/Dynamex reclassification; the intake's ca_form540_schca.add_gross_income field) \u2014 Schedule CA WAGE addition, col C"
+   },
+   "caAb5NetLossAddition": {
+    "$ref": "#/properties/federalAGI",
+    "description": "net losses from businesses where the worker is an employee for California (intake ca_form540_schca.add_net_loss) \u2014 the federal Schedule C loss is disallowed for CA: Schedule CA BUSINESS addition, col C"
+   },
+   "caAmt": {
+    "$ref": "#/properties/federalAGI",
+    "description": "OVERRIDE for Form 540 line 61 \u2014 prefer caIsoPreference + caAmtTaxesAddback so the composer builds Schedule P AMTI and evaluates us.ca.amt itself; a passed caAmt wins."
+   },
+   "caAmtTaxesAddback": {
+    "$ref": "#/properties/federalAGI",
+    "description": "taxes actually included in the CA itemized deduction (property taxes etc. surviving the Schedule CA SALT adjustments) \u2014 the Schedule P line 2 addback used when the composer builds AMTI from caIsoPreference; $0 when not itemizing (the composer adds back the standard deduction instead)"
+   },
+   "caBhst": {
+    "$ref": "#/properties/federalAGI",
+    "description": "us.ca.bhst result (pass the oracle target's answer) \u2014 Form 540 line 62 Behavioral Health Services Tax (R&TC \u00a7 17043, 1% of CA taxable income over $1,000,000); added into line 64 total tax when nonzero."
+   },
+   "caCalEITC": {
+    "$ref": "#/properties/federalAGI",
+    "description": "us.ca.caleitc result (pass the oracle target's answer)"
+   },
+   "caDepreciationAddition": {
+    "$ref": "#/properties/federalAGI",
+    "description": "CA depreciation-difference addition: federal depreciation (with \u00a7 168(k) bonus, which California NEVER conforms to) minus CA depreciation (plain MACRS on the same asset). Positive = CA income addition (Schedule CA col C on the business/rents line). Compute per-asset and disclose."
+   },
+   "caEducatorExpensesDeducted": {
+    "$ref": "#/properties/federalAGI",
+    "description": "federal educator-expense deduction claimed (\u00a7 62(a)(2)(D)) \u2014 California does NOT conform: the composer ADDS it back on Schedule CA (line 11 col C). Pass the federal amount actually deducted (both spouses' combined)."
+   },
+   "caHsaDeduction": {
+    "$ref": "#/properties/federalAGI",
+    "description": "federal HSA deduction (Form 8889 line 13) \u2014 California does not conform to \u00a7 223: the composer ADDS it back for CA"
+   },
+   "caHsaTaxableDistribution": {
+    "$ref": "#/properties/federalAGI",
+    "description": "HSA distribution amount taxed federally (Form 8889 line 16) \u2014 not income for California: the composer SUBTRACTS it for CA"
+   },
+   "caIsoPreference": {
+    "$ref": "#/properties/federalAGI",
+    "description": "ISO exercise spread AMT preference (\u00a7 56(b)(3) as modified by R&TC \u00a7 17062) \u2014 with caAmtTaxesAddback this lets the composer BUILD Schedule P AMTI itself (AMTI = line 19 taxable income + taxes deducted in the CA itemized deduction + this preference; standard deduction added back instead when not itemizing) and evaluate us.ca.amt internally; caAmt (a precomputed answer) wins if both are given"
+   },
+   "caItemizedDeductions": {
+    "$ref": "#/properties/federalAGI",
+    "description": "CA itemized deduction total (Schedule CA Part II, line 29) \u2014 agent-computed per Schedule CA's own itemized rules WITH disclosure (differs from the federal Schedule A: no SALT cap, mortgage/medical add-backs, etc.). Form 540 line 18 takes the GREATER of this or the CA standard deduction; omit to use the standard deduction only."
+   },
+   "caRentersCredit": {
+    "$ref": "#/properties/federalAGI",
+    "description": "us.ca.renters_credit result (pass the oracle target's answer) \u2014 nonrefundable, joins the exemption credits in the line-48 subtraction from tax."
+   },
+   "caTaxableEarlyDistribution": {
+    "$ref": "#/properties/federalAGI",
+    "description": "retirement-plan early distribution amount subject to the FEDERAL \u00a7 72(t) additional tax \u2014 California imposes its own 2.5% additional tax on the same base (R&TC \u00a7 17085(c)(1), FTB 3805P); the composer computes 2.5% and prints it on Form 540 line 63"
+   },
+   "caYCTC": {
+    "$ref": "#/properties/federalAGI",
+    "description": "us.ca.yctc result (pass the oracle target's answer)"
+   },
+   "cityWithholding": {
+    "$ref": "#/properties/federalAGI",
+    "description": "NY line 73 NYC withholding"
+   },
+   "claimedAsDependent": {
+    "description": "someone else can claim this taxpayer as a dependent (carry the prior-year 1040 'Someone can claim: You as a dependent' checkbox forward as a continuing condition unless the current-year interview contradicts it). IL: zeroes the line 10 exemption allowance when base income exceeds the exemption amount. VA: limits the standard deduction to earned income.",
+    "type": "boolean"
+   },
+   "dependents": {
+    "description": "dependent count (CA dependent exemption credits; NY $1,000 exemptions)",
+    "type": "integer"
+   },
+   "estimatedPayments": {
+    "$ref": "#/properties/federalAGI",
+    "description": "state estimated payments ONLY (extension payments and prior-year credited overpayments have their own lines where the form provides them)"
+   },
+   "exemptions": {
+    "description": "personal + dependent exemption COUNT (self + spouse + dependents)",
+    "type": "integer"
+   },
+   "extensionPayment": {
+    "$ref": "#/properties/federalAGI",
+    "description": "payment made with an extension request. VA 760 line 22 (its own line, never folded into the estimated-payments line). NY IT-201 line 75 is the COMBINED line \u2014 'estimated tax payments and amount paid with Form IT-370' \u2014 so for NY this is added into the same line as estimatedPayments, not kept separate."
+   },
+   "federalAGI": {
+    "description": "federal Form 1040 line 11 (from compute_return, verbatim). REQUIRED for il/va/ca/ny \u2014 the composer refuses without it. NOT used by PA (class-based: pass the pa* class fields instead).",
+    "type": "number"
+   },
+   "federalEITC": {
+    "$ref": "#/properties/federalAGI",
+    "description": "federal EIC, line 27a (from compute_return)"
+   },
+   "filingHoh": {
+    "type": "boolean"
+   },
+   "filingHohOrQss": {
+    "type": "boolean"
+   },
+   "filingJoint": {
+    "type": "boolean"
+   },
+   "filingStatus": {
+    "description": "REQUIRED in practice: the federal filing status \u2014 drives the state bracket schedule, standard deduction column, and exemption structure. The filingJoint/filingHoh/filingHohOrQss booleans are legacy aliases; when filingStatus is present it wins.",
+    "enum": [
+     "single",
+     "mfj",
+     "mfs",
+     "hoh",
+     "qss"
+    ],
+    "type": "string"
+   },
+   "ilChildUnder12": {
+    "description": "IL CTC gate: a QUALIFYING CHILD (\u00a7 152(c) lineage \u2014 child/stepchild/foster/sibling or their descendants) under age 12. A qualifying-relative/ODC-only dependent does NOT satisfy this even if under 12; leave false.",
+    "type": "boolean"
+   },
+   "ilEitcOverride": {
+    "$ref": "#/properties/federalAGI",
+    "description": "us.il.eitc oracle target's answer (35 ILCS 5/212(a)(vi), (b-5), (b-10): 20% of the federal EITC recomputed WITHOUT the \u00a7 32(c)(1)(A)(ii) childless age gate) \u2014 WINS over the generic 20%-of-federalEITC line-29 computation when present. MUST be used (not merely optional) for a taxpayer age 18-24 or 65+ with NO qualifying children: federalEITC alone is correctly $0 for that population under federal law, so line 29 = 20% x federalEITC would wrongly zero out Illinois' decoupled credit \u2014 pass us.il.eitc's computed answer instead. Safe to pass for every IL EITC claimant (agrees with the generic computation outside the decoupled population)."
+   },
+   "ilK12Expenses": {
+    "$ref": "#/properties/federalAGI",
+    "description": "IL qualified K-12 education expenses (before the $250 floor)"
+   },
+   "ilPropertyTaxPaid": {
+    "$ref": "#/properties/federalAGI",
+    "description": "IL property tax on principal residence, net of business-use portion"
+   },
+   "ilTeacherExpenses": {
+    "$ref": "#/properties/federalAGI",
+    "description": "IL Schedule 1299-C educator materials expenses"
+   },
+   "jurisdiction": {
+    "enum": [
+     "il",
+     "va",
+     "ca",
+     "ny",
+     "pa"
+    ],
+    "type": "string"
+   },
+   "nonrefundableCredits": {
+    "$ref": "#/properties/federalAGI",
+    "description": "state NONREFUNDABLE credits without an oracle target \u2014 capped at the state tax due by the composer (an excess never creates a refund). VA: do NOT put the low-income credit or any VA EITC election here \u2014 passing it forces a legacy capped path; instead pass federalEITC (+ vaFamilyVagi if testing the low-income credit) and the composer computes and SELECTS the Form 760 line 23 credit itself (TY2025 refundable VA EITC = 20% of federal EIC, uncapped \u2014 it dominates whenever federal EITC > 0). IL: pass ICR raw inputs instead where fields exist."
+   },
+   "nyHouseholdCredit": {
+    "$ref": "#/properties/federalAGI",
+    "description": "NYS household credit from table 2 (us.ny.parameters citation)"
+   },
+   "nycHouseholdCredit": {
+    "$ref": "#/properties/federalAGI",
+    "description": "NYC household credit from table 5"
+   },
+   "nycTaxableIncome": {
+    "$ref": "#/properties/federalAGI",
+    "description": "NYC taxable income (IT-201 line 47) if NYC resident"
+   },
+   "pa529Contributions": {
+    "$ref": "#/properties/federalAGI",
+    "description": "Schedule O code T: \u00a7 529 contributions, ALREADY capped at $19,000 per beneficiary per taxpayer-spouse (2025); no deduction for rollovers/beneficiary changes"
+   },
+   "paAbleContributions": {
+    "$ref": "#/properties/federalAGI",
+    "description": "Schedule O code A: PA ABLE contributions, capped at the federal gift-tax exclusion ($19,000 for 2025)"
+   },
+   "paBusinessNet": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 4, TAXPAYER's own net business/profession/farm income or LOSS (negative allowed; within-class netting of the taxpayer's own activities only \u2014 a loss never crosses classes or spouses)"
+   },
+   "paDividends": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 3: PA-taxable dividends INCLUDING mutual-fund capital-gain distributions (PA classifies them as dividends, not gains)"
+   },
+   "paEligibilityAddbacks": {
+    "$ref": "#/properties/federalAGI",
+    "description": "Schedule SP Section III nontaxable add-backs (gifts, inheritances, insurance proceeds, non-PA income, nontaxable military pay, excluded home-sale gain, educational assistance, outside cash support). NOT Social Security, eligible retirement benefits, child support, or workers' comp."
+   },
+   "paEstateTrust": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 7: estate/trust income (PA Schedule J; an estate or trust cannot distribute a loss \u2014 never negative)"
+   },
+   "paGambling": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 8: gambling and lottery winnings net of wager costs (noncash PA Lottery prizes exempt; cash prizes taxable)"
+   },
+   "paGrossCompensation": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 1a: W-2 BOX 16 total (NOT Box 1 \u2014 401(k)/elective deferrals are PA-taxable; eligible retirement distributions are exempt and excluded). Falls back to the shared wages input when omitted (composer discloses). Include taxable early-distribution amounts under the cost-recovery method."
+   },
+   "paInterest": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 2: PA-taxable interest (gross class \u2014 no expenses; includes commercial-annuity interest taxable as PA interest)"
+   },
+   "paMsaHsaContributions": {
+    "$ref": "#/properties/federalAGI",
+    "description": "Schedule O codes M/H: MSA + HSA contributions at the federally-allowed amounts"
+   },
+   "paNrk1Withholding": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 17: nonresident tax withheld from PA Schedule(s) NRK-1"
+   },
+   "paPenaltiesInterest": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 27: penalties and interest incl. estimated-underpayment penalty (REV-1630)"
+   },
+   "paPropertyNet": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 5, taxpayer's own net gain/loss from sale/exchange/disposition of property (negative allowed; no carryover)"
+   },
+   "paRentRoyaltyNet": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 6, taxpayer's own net rents/royalties/patents/copyrights (short-term rentals under 30 days are BUSINESS income, line 4)"
+   },
+   "paResidentCredit": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 22: resident credit for tax paid other states (Schedule G-L; not for reciprocal-state compensation: IN/MD/NJ/OH/VA/WV). Subtracts BEFORE Tax Forgiveness \u2014 the composer handles the ordering."
+   },
+   "paScheduleDcCredit": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 23 component: the Child and Dependent Care Enhancement credit \u2014 pass us.pa.cdcc's computed answer (= 100% of the federal Form 2441 line 9a tentative credit; refundable)"
+   },
+   "paScheduleOcCredits": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 23 component: Schedule OC restricted credits total (transcribed; no oracle target)"
+   },
+   "paSpDependentChildren": {
+    "description": "Schedule SP dependent CHILDREN count (child/stepchild/adopted; grandchild of a grandparent; foster child of a foster parent \u2014 never other relatives) claimable as federal dependents; each adds $9,500 to the Tax Forgiveness eligibility-income threshold",
+    "type": "integer"
+   },
+   "paSpouseBusinessNet": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 4, SPOUSE's own net business income or loss (kept separate: PA never nets one spouse's loss against the other's income)"
+   },
+   "paSpousePropertyNet": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 5, spouse's own net property gain/loss"
+   },
+   "paSpouseRentRoyaltyNet": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 6, spouse's own net rent/royalty amount"
+   },
+   "paStudentLoanInterest": {
+    "$ref": "#/properties/federalAGI",
+    "description": "Schedule O code S: student loan interest PAID (new deduction for 2025; the composer caps at $2,500 \u2014 pass the uncapped amount)"
+   },
+   "paUnreimbursedExpenses": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PA-40 line 1b: Schedule UE unreimbursed employee business expenses (a compensation-class expense, never a line-10 deduction)"
+   },
+   "priorYearOverpaymentCredited": {
+    "$ref": "#/properties/federalAGI",
+    "description": "prior-year state overpayment applied toward this year's estimated tax. VA 760 line 21 (its own printed line \u2014 never fold into line 20 estimated payments). Other states: folded into the estimated-payments line."
+   },
+   "refundableCredits": {
+    "$ref": "#/properties/federalAGI",
+    "description": "state refundable credits, e.g. the NY credit block: ESCC + NYS EIC + IT-216 + NYC EIC + NYC school tax + NYC child care (WITHOUT their own oracle target, self-computed per the us.ny.parameters citation and disclosed) PLUS us.ny.it214 (the Real Property Tax Credit, which DOES have an oracle target as of TY2025 v5 \u2014 pass its computed answer here, not a hand-derived percentage of rent)"
+   },
+   "spouseStateWithholding": {
+    "$ref": "#/properties/federalAGI",
+    "description": "VA line 19b spouse withholding (spouse's own W-2/1099/VK-1 boxes + spouse's half of jointly-issued documents' withholding, odd dollar to the primary)"
+   },
+   "stateWithholding": {
+    "$ref": "#/properties/federalAGI",
+    "description": "state income tax withheld (IL line 25 / VA 19a / CA 71 / NY 72). CONVENTIONS: IL line 25 sums state withholding from EVERY document (W-2s + all 1099s). NY line 72 = W-2 box 17 NYS withholding PLUS NY-coded state withholding from 1099s whose PAYER has an in-state (NY) address; NY-coded withholding printed by an OUT-OF-STATE-addressed payer is NOT included; disclose any excluded amount in notes. VA 19a = the PRIMARY taxpayer's withholding from EVERY document type (W-2, 1099, VK-1 \u2014 Form 760 line 19 instructions name all three; the payer's address does NOT matter for VA, unlike NY); a jointly-issued document's state withholding splits 50/50 between 19a/19b with the odd dollar to the primary."
+   },
+   "subtractions": {
+    "$ref": "#/properties/federalAGI",
+    "description": "total state subtractions OTHER than the automatic ones (taxable social security / unemployment have their own inputs below; e.g. NY S-136 alimony paid, IL retirement subtraction)"
+   },
+   "taxableSocialSecurity": {
+    "$ref": "#/properties/federalAGI",
+    "description": "federally TAXABLE social security (Form 1040 line 6b, from compute_return). REQUIRED whenever nonzero: VA (760 line 5 subtraction), CA (Schedule CA line 6 col B), and NY (IT-201 line 27) all subtract it \u2014 the composer applies the subtraction automatically; do NOT also fold it into the generic subtractions total."
+   },
+   "unemploymentCompensation": {
+    "$ref": "#/properties/federalAGI",
+    "description": "unemployment compensation included in federal AGI (Schedule 1 line 7). REQUIRED whenever nonzero: VA fully subtracts it (Va. Code \u00a7 58.1-322.02(9), Schedule ADJ) and CA excludes it (Schedule CA line 7 col B) \u2014 the composer subtracts automatically for those states; do NOT also fold it into the generic subtractions total. IL and NY tax it (no subtraction)."
+   },
+   "useTax": {
+    "$ref": "#/properties/federalAGI",
+    "description": "consumer use / sales-use tax owed on the return"
+   },
+   "vaAgeDeduction": {
+    "$ref": "#/properties/federalAGI",
+    "description": "OVERRIDE ONLY \u2014 pass vaAgeQualifyingFull/vaAgeQualifyingTested instead and the composer computes the age deduction itself (including the AFAGI social-security exclusion agents routinely miss). When splitting an odd joint total between spouses (Form 760 lines 4a/4b), the odd dollar goes to the SPOUSE."
+   },
+   "vaAgeQualifyingFull": {
+    "description": "count of filers (taxpayer/spouse) born ON OR BEFORE January 1, 1939 \u2014 each gets the UNCONDITIONAL $12,000 age deduction (no income test)",
+    "type": "integer"
+   },
+   "vaAgeQualifyingTested": {
+    "description": "count of filers born January 2, 1939 - January 1, 1961 (65+ for 2025 but income-tested): the composer computes $12,000 each, reduced dollar-for-dollar by AFAGI over $50,000 single / $75,000 married \u2014 where AFAGI = federal AGI MINUS the federally taxable social security (the SS exclusion is the step agents miss; Va. Code \u00a7 58.1-322.03(2))",
+    "type": "integer"
+   },
+   "vaFamilyVagi": {
+    "$ref": "#/properties/federalAGI",
+    "description": "Schedule ADJ line 10 total family VAGI (you + spouse + dependents' VAGI) for the Credit for Low-Income Individuals poverty test; defaults to line 9 VAGI when omitted"
+   },
+   "vaItemizedCasualty": {
+    "$ref": "#/properties/federalAGI",
+    "description": "VA Sch A casualty/theft losses (protected from the overall limitation)"
+   },
+   "vaItemizedCharitable": {
+    "$ref": "#/properties/federalAGI",
+    "description": "VA Sch A charitable contributions (federal Schedule A amount)"
+   },
+   "vaItemizedGambling": {
+    "$ref": "#/properties/federalAGI",
+    "description": "VA Sch A gambling losses (\u00a7 165(d), limited to winnings; protected from the overall limitation)"
+   },
+   "vaItemizedInvestmentInterest": {
+    "$ref": "#/properties/federalAGI",
+    "description": "VA Sch A investment interest (protected from the overall limitation)"
+   },
+   "vaItemizedMedical": {
+    "$ref": "#/properties/federalAGI",
+    "description": "VA Sch A line 1: total medical/dental expenses BEFORE any floor (VA applies its own 10%-of-FAGI floor \u2014 Virginia deconforms from the federal 7.5% floor)"
+   },
+   "vaItemizedMortgageInterest": {
+    "$ref": "#/properties/federalAGI",
+    "description": "VA Sch A home mortgage interest and points (federal Schedule A amount)"
+   },
+   "vaItemizedOther": {
+    "$ref": "#/properties/federalAGI",
+    "description": "VA Sch A other itemized deductions"
+   },
+   "vaItemizedOtherTaxes": {
+    "$ref": "#/properties/federalAGI",
+    "description": "VA Sch A line 6 other taxes (foreign income tax etc.)"
+   },
+   "vaItemizedPersonalPropertyTaxes": {
+    "$ref": "#/properties/federalAGI",
+    "description": "VA Sch A line 5c personal property taxes \u2014 NOT subject to the SALT cap for Virginia"
+   },
+   "vaItemizedRealEstateTaxes": {
+    "$ref": "#/properties/federalAGI",
+    "description": "VA Sch A line 5b real estate taxes \u2014 NOT subject to the SALT cap for Virginia"
+   },
+   "vaItemizedSalesTaxes": {
+    "$ref": "#/properties/federalAGI",
+    "description": "VA Sch A line 5a when the general SALES tax election was made federally \u2014 capped at the Virginia SALT cap ($40,000; $20,000 MFS for TY2025)"
+   },
+   "vaItemizedStateLocalIncomeTaxes": {
+    "$ref": "#/properties/federalAGI",
+    "description": "VA Sch A line 5a when INCOME taxes are claimed (mutually exclusive with sales taxes)"
+   },
+   "vaItemizing": {
+    "description": "taxpayer itemized federally (VA requires the same election, Va. Code \u00a7 58.1-322.03(1)) \u2014 enables the VA Schedule A computation from the component inputs below; Form 760 line 10 replaces the line 11 standard deduction",
+    "type": "boolean"
+   },
+   "vaRefundableEitc": {
+    "$ref": "#/properties/federalAGI",
+    "description": "OVERRIDE ONLY \u2014 the composer now computes the Form 760 line 23 credit itself from federalEITC + the eligibility inputs below. If passed, this refundable amount wins over the computed selection."
+   },
+   "vaScheduleAdjDeductions": {
+    "$ref": "#/properties/federalAGI",
+    "description": "Schedule ADJ line 9 total deductions (deduction CODES like 105 continuing-teacher-education, 199 other) \u2014 prints on Form 760 line 13; these are DEDUCTIONS from VAGI, never income subtractions on line 7"
+   },
+   "vaSpouseAgeBlindBoxes": {
+    "description": "STA worksheet Part 1 line 2: spouse's 65+/blind box count (0-2)",
+    "type": "integer"
+   },
+   "vaSpouseTaxAdjustment": {
+    "$ref": "#/properties/federalAGI",
+    "description": "OVERRIDE ONLY \u2014 the composer now computes the VA Spouse Tax Adjustment worksheet itself when vaYourVagi/vaSpouseVagi are provided. If passed, this amount wins."
+   },
+   "vaSpouseVagi": {
+    "$ref": "#/properties/federalAGI",
+    "description": "spouse's separate VAGI for the STA worksheet (Form 760 line 17 box; MFJ only)"
+   },
+   "vaYourAgeBlindBoxes": {
+    "description": "STA worksheet Part 1 line 2: PRIMARY taxpayer's 65+/blind box count (0-2) \u2014 per-spouse exemption = boxes x $800 + $930",
+    "type": "integer"
+   },
+   "vaYourVagi": {
+    "$ref": "#/properties/federalAGI",
+    "description": "PRIMARY taxpayer's separate VAGI (MFJ only \u2014 the 760 instructions' 'Worksheet for Determining Separate Virginia Adjusted Gross Income': own wages/SE/pensions, own share of joint items 50/50, own age deduction and subtractions). Enables the composer's Spouse Tax Adjustment worksheet (Form 760 line 17). vaYourVagi + vaSpouseVagi must equal line 9 VAGI."
+   },
+   "wages": {
+    "$ref": "#/properties/federalAGI",
+    "description": "federal line 1a wages (NY IT-201 line 1)"
+   },
+   "yonkersSurcharge": {
+    "$ref": "#/properties/federalAGI",
+    "description": "us.ny.yonkers_surcharge result (pass the oracle target's answer) \u2014 16.75% of the Yonkers worksheet's netted base (nyYonkersBase). Added into line 62's total and printed on its own line (IT-201 LINE 55, not 54 \u2014 line 54 is MCTMT) when nonzero."
+   },
+   "yonkersWithholding": {
+    "$ref": "#/properties/federalAGI",
+    "description": "NY line 74 Yonkers withholding (W-2 box 19 with a Yonkers locality)"
+   }
+  },
+  "required": [
+   "jurisdiction",
+   "asOf"
+  ],
+  "type": "object"
+ },
+ "name": "compute_state_return"
+}

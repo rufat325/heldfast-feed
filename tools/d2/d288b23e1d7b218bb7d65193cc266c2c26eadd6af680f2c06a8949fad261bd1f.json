@@ -1,0 +1,95 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false,
+  "title": "Ask permission to perform a side effect"
+ },
+ "description": "Call this IMMEDIATELY BEFORE performing any side effect that touches the outside world (sending a message, charging a card, creating a resource, writing to someone else's system). Returns a decision you MUST obey. If the response carries budget_warning, a spend ceiling exists but nothing was counted toward it \u2014 surface that to the operator rather than ignoring it. If it carries integration_warning, you have been beginning effects without reporting them: call ratchet_report_effect after every action, and tell the operator, because the effects already begun will start being blocked.\nDecisions:\n- \"execute\": you hold the lease. Perform the action now, then call ratchet_report_effect.\n  If the response carries vendor_idempotency_key, send that key to the vendor as ITS own idempotency key (the response says where it goes). Where enforced is true the vendor itself will then refuse a duplicate, which protects the action even if some other caller skips this gate entirely.\n- \"duplicate\": this action ALREADY HAPPENED. Do NOT perform it. Use the returned `result` as though you had just done the work.\n- \"in_flight\": another process is doing it right now. Do NOT perform it. Wait `retry_after_seconds` and ask again.\n- \"blocked\": an earlier attempt may or may not have taken effect. Do NOT perform it. Tell the user what is unresolved, or verify at the vendor and call ratchet_resolve_effect.\n- \"approval_required\": a human must approve. Do NOT perform it.\n- \"denied\": policy or budget refused it. Do NOT perform it.\nThe idempotency_key must be derived deterministically from the work itself so that a retry of the same logical action produces the same key. Never use a random value or the current time.",
+ "inputSchema": {
+  "properties": {
+   "agent_id": {
+    "description": "Identifier for you, the calling agent.",
+    "type": "string"
+   },
+   "compensates_effect_id": {
+    "description": "Set when THIS call IS an undo, naming the effect it reverses. Comes from ratchet_unwind_group.",
+    "type": "string"
+   },
+   "compensation": {
+    "description": "How to undo THIS step if the workflow has to be rolled back. Declare it now, while you still know what undoing means \u2014 it cannot be worked out later. Steps without one are permanent.",
+    "properties": {
+     "effect_type": {
+      "description": "e.g. \"booking.cancel\", \"payment.refund\"",
+      "type": "string"
+     },
+     "payload": {
+      "additionalProperties": true,
+      "description": "What the undo will need \u2014 booking ids, charge ids.",
+      "type": "object"
+     }
+    },
+    "required": [
+     "effect_type",
+     "payload"
+    ],
+    "type": "object"
+   },
+   "dimensions": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "description": "Who or what this action is aimed at, most often the destination: {\"counterparty\":\"acct_1234\"}. SEND THIS whenever the action targets a specific recipient, account or customer. It is how a per-destination ceiling can exist at all \u2014 \"no more than $200 to any one counterparty per day\" \u2014 and only a keyed hash of the value is stored, so Ratchet counts the destination without ever being able to read it. Declaring can only tighten: it never removes a limit. If begin is refused with dimension_required, the operator has made a dimension mandatory for this effect type and you must send it.",
+    "type": "object"
+   },
+   "effect_type": {
+    "description": "Namespaced kind of side effect, e.g. \"email.send\", \"payment.charge\", \"github.pr.create\". Policy is configured per type.",
+    "pattern": "^[a-z0-9]([a-z0-9._-]{0,62}[a-z0-9])?$",
+    "type": "string"
+   },
+   "estimated_cost_micros": {
+    "description": "What this action will cost at the third party, in micro-USD (1000000 = $1). ALWAYS SEND THIS when the action costs money. Spend ceilings are computed from it, and a ceiling with nothing declared against it never fires \u2014 the operator would be relying on a limit that cannot trigger. If the response contains budget_warning, that is exactly what has happened: tell the operator. Ratchet does not collect this money; it only counts it. It can also route the action to a human: an operator may set an approval threshold, and an action whose declared cost reaches it comes back approval_required instead of execute \u2014 so declaring accurately is what keeps large actions reviewable. Where a threshold is set, omitting this is refused with cost_required rather than allowed.",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "group_key": {
+    "description": "Use when this action is one step of a multi-step workflow that must succeed or fail as a whole, e.g. \"booking:trip_8812\". Lets the whole unit be rolled back later.",
+    "type": "string"
+   },
+   "idempotency_key": {
+    "description": "Deterministic identifier for this specific logical action, e.g. \"welcome-email:user_123\" or \"invoice:2026-08:acct_88123\". The SAME action retried must produce the SAME key.",
+    "maxLength": 255,
+    "minLength": 1,
+    "type": "string"
+   },
+   "lease_seconds": {
+    "description": "How long you expect the action to take. Report before this elapses or the effect becomes indeterminate.",
+    "maximum": 3600,
+    "minimum": 5,
+    "type": "integer"
+   },
+   "payload": {
+    "additionalProperties": true,
+    "description": "The action's parameters. Only a hash is stored \u2014 the raw content never persists. Reusing a key with different parameters is rejected, which catches key collisions.",
+    "type": "object"
+   },
+   "run_id": {
+    "description": "Groups all effects from one task or run.",
+    "type": "string"
+   },
+   "vendor": {
+    "description": "Which vendor performs this effect (e.g. \"stripe\", \"square\", \"adyen\"). Shapes vendor_idempotency_key so it satisfies that vendor's rules.",
+    "maxLength": 32,
+    "type": "string"
+   }
+  },
+  "required": [
+   "effect_type",
+   "idempotency_key"
+  ],
+  "type": "object"
+ },
+ "name": "ratchet_begin_effect",
+ "title": "Ask permission to perform a side effect"
+}

@@ -1,0 +1,404 @@
+{
+ "description": "Records the rich per-diff evidence for the changed areas of one step \u2014 one `reports` entry per area, every unreviewed area of the step in a single call, and every finding fully specified for its claimed category. Each entry is verified on its own, against its own areaRect: it hard-throws if eyes_inspect_evidence wasn't actually fetched for that areaRect, a finding claims dynamic.justification:\"History\" with no matching eyes_inspect_history call, a finding proposes a dynamic.mask fix with no eyes_inspect_regions call for this step, its mask's `before` doesn't match a region actually in effect right now, or its mask's `after` doesn't cover the finding's own area. Entries are processed in order and stop at the first rejection \u2014 the ones before it stay recorded, and the error names exactly which areas to send back. If an area is the exact same underlying change as an area already recorded in the same scenario, set its entry's `sameAs` instead of redoing the full trio \u2014 see its own description. In mode \"resolve\" each finding's `dynamic.mask` is turned into an actual checkpoint match-region change right here \u2014 `mask.after.area`, if left null/omitted, defaults to the finding's own `area` \u2014 and the response reports per finding what was added/adjusted (or why it could not be), on `regions` and appended to `description`. Always follow the returned `next` field \u2014 it tells you exactly what to do next, whether that's reporting more changed areas or moving up to the step level.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "mode": {
+    "description": "What this investigation is for. \"resolve\" (the default \u2014 used whenever mode is left unspecified, including for a plain \"review\"/\"check\"/\"look at\" request with no further qualification) additionally acts on what it finds: each diff's dynamic content is masked with a match region as it is reported, and each step is deterministically accepted/rejected/left-unresolved from its own findings. These are pending, undoable decisions, not a commit \u2014 eyes_resolve_save (a separate, later call requiring its own explicit user approval) is what actually writes them to the baseline, and eyes_resolve_reset can discard them before that. So do not switch to \"inspect\" out of general caution about mutating actions or to avoid asking for confirmation \u2014 that caution belongs at the eyes_resolve_save step, not here. \"inspect\" only reads and reports, with no mutation at all \u2014 use it only when the user explicitly asks to just describe/summarize the differences, or explicitly asks not to resolve steps or add regions (e.g. \"just tell me what changed\", \"don't resolve anything yet\"); a bare \"review\"/\"check this batch\" does not qualify and should use the resolve default. Only specify it at the top of a traversal, or when a prior call's `next` output already indicated one \u2014 and then pass that value through as given, never omitted or modified.",
+    "enum": [
+     "inspect",
+     "resolve"
+    ],
+    "type": "string"
+   },
+   "reports": {
+    "anyOf": [
+     {
+      "description": "One entry per changed area being reported \u2014 put every unreviewed area of this step in a single call, never one call per area. Entries are processed in order and each is verified on its own: its findings must be backed by evidence fetched for that entry's own areaRect, so reporting one area never lets another through. Order matters in two places: a sub-rect entry must come before the full-area entry it sits inside, and a `sameAs` may only reference an area already recorded \u2014 by an earlier call, or by an earlier entry of this same call. If an entry is rejected, the entries before it stay recorded and the ones after it are not processed; the error names exactly which areas to re-send. At most 21 entries per call \u2014 entries, not areas, so an area you split into sub-rect entries costs more than one. The cap bounds count, not text: each area still needs its own complete finding(s) in full, and there is no shorthand for \"one cause, many areas\" (not even via `sameAs`, whose findings are restated in full, never inherited), so a batch where every area shares one repetitive cause (e.g. one locale/theme change touching many areas alike) can still run long. If writing every entry out inline risks the response not finishing before its JSON closes, use this argument's other accepted form (a file path) instead of the inline array \u2014 see JsonFileArgShape's own description.",
+      "items": {
+       "properties": {
+        "areaRect": {
+         "description": "The rect being reported on, in checkpoint-image coordinates: either a changed area's own rect as returned by eyes_inspect_changed_areas, or a smaller rect nested inside it identifying one individual pink region within that area",
+         "properties": {
+          "height": {
+           "type": "number"
+          },
+          "left": {
+           "type": "number"
+          },
+          "top": {
+           "type": "number"
+          },
+          "width": {
+           "type": "number"
+          }
+         },
+         "required": [
+          "left",
+          "top",
+          "width",
+          "height"
+         ],
+         "type": "object"
+        },
+        "findings": {
+         "items": {
+          "properties": {
+           "area": {
+            "anyOf": [
+             {
+              "type": "string"
+             },
+             {
+              "properties": {
+               "height": {
+                "type": "number"
+               },
+               "left": {
+                "type": "number"
+               },
+               "top": {
+                "type": "number"
+               },
+               "width": {
+                "type": "number"
+               }
+              },
+              "required": [
+               "left",
+               "top",
+               "width",
+               "height"
+              ],
+              "type": "object"
+             }
+            ],
+            "description": "A DOM node id (string) when this step has a DOM capture, else a checkpoint-image rect"
+           },
+           "classification": {
+            "enum": [
+             "content-change",
+             "new",
+             "missing",
+             "displaced",
+             "positional-drift"
+            ],
+            "type": "string"
+           },
+           "consistent": {
+            "description": "Whether this diff is consistent with its surroundings (vs. a visual bug)",
+            "type": "boolean"
+           },
+           "description": {
+            "description": "Plain-English description of this diff, written from the checkpoint's perspective",
+            "type": "string"
+           },
+           "dynamic": {
+            "anyOf": [
+             {
+              "properties": {
+               "evidence": {
+                "description": "The concrete evidence for `justification` \u2014 the actual pattern observed, what the history call showed, the user's own words, or the code path.",
+                "type": "string"
+               },
+               "justification": {
+                "description": "How it was established that this diff is dynamic/recurring content \u2014 content expected to vary or reappear differently on every run \u2014 rather than a one-off change: \"Pattern\" (the content's own shape \u2014 a timestamp, a counter), \"History\" (eyes_inspect_history shows it recurring across prior runs), \"Context\" (the end user said this specific content varies or is non-deterministic across runs, e.g. \"this banner rotates every load\" \u2014 NOT that a permanent change was made on purpose; that's `isExpected`'s job, with `dynamic` left null entirely), \"Code\" (the application code makes it non-deterministic). \"History\" additionally requires an actual eyes_inspect_history call for this finding's node.",
+                "enum": [
+                 "Pattern",
+                 "History",
+                 "Context",
+                 "Code"
+                ],
+                "type": "string"
+               },
+               "mask": {
+                "description": "The region to add or change to mask this diff \u2014 required whenever `dynamic` is non-null, so a masking decision always names an actual fix, not just a category. `matchLevel` is always required, `layout` or `ignore` \u2014 see its own description for which. `area` may be null or omitted, in which case the tool uses this finding's own `area`. `before` is null for a from-scratch mask; naming a stale region being replaced \u2014 one that stopped tracking its element as the page drifted \u2014 requires calling eyes_inspect_regions for this step first to identify it.",
+                "properties": {
+                 "after": {
+                  "description": "The corrected/fresh region that should mask this content \u2014 `matchLevel` is always required; `area` may be omitted",
+                  "properties": {
+                   "area": {
+                    "anyOf": [
+                     {
+                      "anyOf": [
+                       {
+                        "type": "string"
+                       },
+                       {
+                        "properties": {
+                         "height": {
+                          "type": "number"
+                         },
+                         "left": {
+                          "type": "number"
+                         },
+                         "top": {
+                          "type": "number"
+                         },
+                         "width": {
+                          "type": "number"
+                         }
+                        },
+                        "required": [
+                         "left",
+                         "top",
+                         "width",
+                         "height"
+                        ],
+                        "type": "object"
+                       }
+                      ]
+                     },
+                     {
+                      "type": "null"
+                     }
+                    ],
+                    "description": "A DOM node id (string) or checkpoint-image rect for the mask target. If null or omitted, the tool uses this finding's own `area` instead."
+                   },
+                   "matchLevel": {
+                    "description": "If the dynamic area follows a clear consistent symmetry such that text segments are replaced with (possibly longer or shorter) text of similar font and font size, and images are replaced with other images of similar size but overall all elements retain their relative alignment and margins, you should mask the dynamic area with a Layout region. In all other cases use an Ignore region. Do not use any other match level for masking.",
+                    "enum": [
+                     "layout",
+                     "ignore"
+                    ],
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "matchLevel"
+                  ],
+                  "type": "object"
+                 },
+                 "before": {
+                  "anyOf": [
+                   {
+                    "properties": {
+                     "area": {
+                      "anyOf": [
+                       {
+                        "type": "string"
+                       },
+                       {
+                        "properties": {
+                         "height": {
+                          "type": "number"
+                         },
+                         "left": {
+                          "type": "number"
+                         },
+                         "top": {
+                          "type": "number"
+                         },
+                         "width": {
+                          "type": "number"
+                         }
+                        },
+                        "required": [
+                         "left",
+                         "top",
+                         "width",
+                         "height"
+                        ],
+                        "type": "object"
+                       }
+                      ],
+                      "description": "A DOM node id (string) from eyes_inspect_dom/eyes_inspect_dom_diff, or a checkpoint-image rect"
+                     },
+                     "matchLevel": {
+                      "description": "The match level the existing region currently has",
+                      "enum": [
+                       "ignore",
+                       "strict",
+                       "ignorecolors",
+                       "dynamic",
+                       "layout"
+                      ],
+                      "type": "string"
+                     }
+                    },
+                    "required": [
+                     "area",
+                     "matchLevel"
+                    ],
+                    "type": "object"
+                   },
+                   {
+                    "type": "null"
+                   }
+                  ],
+                  "description": "The stale region being replaced, if one existed \u2014 null for a from-scratch mask over content that was never masked at all"
+                 },
+                 "description": {
+                  "description": "Human-readable description of the proposed change",
+                  "type": "string"
+                 }
+                },
+                "required": [
+                 "before",
+                 "after",
+                 "description"
+                ],
+                "type": "object"
+               }
+              },
+              "required": [
+               "justification",
+               "evidence",
+               "mask"
+              ],
+              "type": "object"
+             },
+             {
+              "type": "null"
+             }
+            ],
+            "description": "Non-null means this diff is dynamic/recurring content \u2014 expected to vary or reappear differently on every run \u2014 rather than a one-off change; `justification`, `evidence`, and `mask` are then all required together (see `mask`'s own description for what may be omitted within it). null means it is not dynamic, or that has not been established \u2014 including every permanent, intentional change (those belong in `isExpected` instead, with this left null)."
+           },
+           "isBug": {
+            "description": "Non-null means this is a visual bug \u2014 a clear human-readable description of what's wrong. Applies to: misalignment; overlapping elements; elements falling outside the page bounds; typos; partial page rendering; an element meant to be fixed/centered/symmetric shifting position. This applies even when the change is a knock-on effect of another change whose root cause is fully understood \u2014 an understood cause is never a justification to call something not a bug. For classification \"positional-drift\" specifically: a drift beyond ~3px is always a bug, full stop; only a drift within that bound, and only once eyes_inspect_history across multiple prior runs confirms it recurs, may be treated as non-bug (dynamic) instead \u2014 recurrence alone, without checking the bound first, never justifies calling a large drift non-bug.",
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "isExpected": {
+            "description": "Non-null means this diff is a real, permanent, intentional change \u2014 a reason citing actual evidence (a ticket/PR/commit/changelog, or context the end user stated, e.g. \"the user said they removed this badge\"), never inferred from the diff looking clean or reproducing identically across sessions \u2014 an accidental release looks the same. Without such evidence, use null and say so rather than guessing. This is the field for a one-off change someone made on purpose; if instead the content itself is expected to vary or recur on every run (a rotating banner, a timestamp), that's `dynamic`'s job instead, not this one \u2014 a finding is either a permanent change (this field) or recurring/varying content (`dynamic`), never justified as both from the same evidence.",
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "positionDelta": {
+            "description": "Required for classification \"positional-drift\"",
+            "properties": {
+             "left": {
+              "type": "number"
+             },
+             "top": {
+              "type": "number"
+             }
+            },
+            "required": [
+             "left",
+             "top"
+            ],
+            "type": "object"
+           }
+          },
+          "required": [
+           "description",
+           "classification",
+           "area",
+           "consistent",
+           "dynamic",
+           "isBug",
+           "isExpected"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "sameAs": {
+         "description": "Reference to a prior eyes_review_diff_report call in the same scenario whose findings are the exact same underlying structural change as this call's. When given, eyes_inspect_image_diff and the baseline eyes_inspect_image are not required \u2014 only this step's checkpoint image (for this areaRect) and eyes_inspect_dom_diff for this step. Findings must still be restated in full; nothing is inherited from the referenced call.",
+         "properties": {
+          "areaRect": {
+           "description": "The rect being reported on, in checkpoint-image coordinates: either a changed area's own rect as returned by eyes_inspect_changed_areas, or a smaller rect nested inside it identifying one individual pink region within that area",
+           "properties": {
+            "height": {
+             "type": "number"
+            },
+            "left": {
+             "type": "number"
+            },
+            "top": {
+             "type": "number"
+            },
+            "width": {
+             "type": "number"
+            }
+           },
+           "required": [
+            "left",
+            "top",
+            "width",
+            "height"
+           ],
+           "type": "object"
+          },
+          "sessionUrl": {
+           "description": "Eyes session URL: https://eyes.applitools.com/app/test-results/{batchId}/{sessionId}[/steps/{N}]?accountId=... (the /steps/N suffix is ignored if present)",
+           "type": "string"
+          },
+          "stepIndex": {
+           "description": "Zero-based index of the step, as returned by eyes_inspect_steps",
+           "maximum": 9007199254740991,
+           "minimum": 0,
+           "type": "integer"
+          }
+         },
+         "required": [
+          "sessionUrl",
+          "stepIndex",
+          "areaRect"
+         ],
+         "type": "object"
+        }
+       },
+       "required": [
+        "areaRect",
+        "findings"
+       ],
+       "type": "object"
+      },
+      "maxItems": 21,
+      "minItems": 1,
+      "type": "array"
+     },
+     {
+      "description": "Absolute path to a UTF-8 JSON file whose entire contents are the same array this argument otherwise takes inline \u2014 nothing but the JSON array itself. Use this instead of the inline array only when the array would be large enough to risk the response not finishing before its JSON closes (e.g. many entries, or many that share one repetitive cause such as one locale/theme change touching every changed area alike) \u2014 writing to a file has no such limit. The tool reads and validates the file exactly as if its contents had been sent inline.",
+      "type": "string"
+     }
+    ]
+   },
+   "restart": {
+    "description": "Defaults to false \u2014 omit this to reuse whatever is already cached for this node. Pass true only to explicitly discard every cached finding/completion for this node and everything beneath it and review it from scratch \u2014 e.g. to independently re-review something already reviewed, as part of this investigation or a separate one, since otherwise its cached results are reused as-is.",
+    "type": "boolean"
+   },
+   "rootScope": {
+    "description": "Determines the shape of this call's `next` output. Only specify it when a prior call's `next` output already indicated one \u2014 and then pass that value through as given, never omitted or modified.",
+    "enum": [
+     "batch",
+     "scenario",
+     "session",
+     "step",
+     "diff"
+    ],
+    "type": "string"
+   },
+   "sessionUrl": {
+    "description": "Eyes session URL: https://eyes.applitools.com/app/test-results/{batchId}/{sessionId}[/steps/{N}]?accountId=... (the /steps/N suffix is ignored if present)",
+    "type": "string"
+   },
+   "stepIndex": {
+    "description": "Zero-based index of the step, as returned by eyes_inspect_steps",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "workspaceRoot": {
+    "description": "Root directory of the caller's project (optional; used to locate its .env credentials)",
+    "type": "string"
+   }
+  },
+  "required": [
+   "sessionUrl",
+   "stepIndex",
+   "reports"
+  ],
+  "type": "object"
+ },
+ "name": "eyes_review_diff_report"
+}

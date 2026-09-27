@@ -1,0 +1,245 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Find US medical codes whose official descriptions match a described concept, via full-text search over the bundled index. Every search term must appear \u2014 matched first as a token prefix, then as a substring so inflected and compound forms are also found (a \"neuropathy\" search surfaces \"mononeuropathy\"/\"polyneuropathy\" siblings too, not only a standalone \"neuropathy\" token). An RxNorm concept matches on its drug name alone, never its term type (SBD, IN, \u2026) \u2014 narrow by type with `chapter`. Filter by `system` (ICD10CM/ICD10PCS/HCPCS/RXNORM), `billableOnly` to exclude headers/categories, and `chapter`. Use when you have a clinical description and need the code \u2014 the reverse of medcode_get_code. Results echo the resolved system per row for chaining, rank exact prefix matches ahead of substring-only matches with a deterministic tie-break, and disclose truncation with a `nextCursor`: pass it back as `cursor` to page through the full ranked set.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "billableOnly": {
+    "default": false,
+    "description": "When true, return only billable leaf codes (exclude headers/categories). RxNorm has no billing concept, so this excludes every RxNorm concept.",
+    "type": "boolean"
+   },
+   "chapter": {
+    "description": "Restrict to a chapter/range bucket (the value from a code's `chapter` field). Case-insensitive: surrounding whitespace is trimmed and the value is upper-cased to match how chapters are stored, and `appliedFilters.chapter` echoes the upper-cased value that actually ran. A blank or whitespace-only value carries no filtering intent and is treated as omitted, which the response discloses as `appliedFilters.chapter: null`.",
+    "type": "string"
+   },
+   "cursor": {
+    "description": "Opaque continuation token from a previous response's `nextCursor`, to fetch the next page of the same ranked result set. Omit for the first page.",
+    "type": "string"
+   },
+   "limit": {
+    "description": "Max codes per page. Defaults to the server's MEDCODE_MAX_RESULTS (50), ceiling 200.",
+    "maximum": 200,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "query": {
+    "description": "Clinical description to match, e.g. \"type 2 diabetes with neuropathy\". Must not be blank or whitespace-only.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "system": {
+    "description": "Restrict results to one system. Omit to search all bundled systems.",
+    "enum": [
+     "ICD10CM",
+     "ICD10PCS",
+     "HCPCS",
+     "RXNORM"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "query"
+  ],
+  "type": "object"
+ },
+ "name": "medcode_search_codes",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "codes",
+     "effectiveQuery",
+     "appliedFilters",
+     "truncated",
+     "shown",
+     "cap"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "appliedFilters": {
+    "additionalProperties": false,
+    "description": "Filters the server applied to the search.",
+    "properties": {
+     "billableOnly": {
+      "description": "Whether the billable-only filter was applied.",
+      "type": "boolean"
+     },
+     "chapter": {
+      "description": "Chapter filter applied, or null.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "system": {
+      "description": "System filter applied, or null.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "system",
+     "billableOnly",
+     "chapter"
+    ],
+    "type": "object"
+   },
+   "cap": {
+    "description": "The page size that was applied.",
+    "type": "number"
+   },
+   "codes": {
+    "description": "Matching codes, ranked by full-text relevance.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A code matching the search query.",
+     "properties": {
+      "billable": {
+       "description": "True when the code is a billable leaf. Null when the system has no billing concept (RxNorm).",
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "chapter": {
+       "description": "Chapter/range bucket, or null. For RxNorm, the concept term type (IN, PIN, MIN, BN, SCD, SBD, GPCK, BPCK).",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "code": {
+       "description": "The code in display form (ICD-10-CM carries the dot).",
+       "type": "string"
+      },
+      "description": {
+       "description": "Official long description (falls back to short when no long form exists).",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "header": {
+       "description": "True when the code is a non-billable category/header.",
+       "type": "boolean"
+      },
+      "shortDescription": {
+       "description": "Official short description, or null when none is on record. Always null for RxNorm, which publishes a single name.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "system": {
+       "description": "The system the code belongs to, echoed for chaining.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "system",
+      "code",
+      "description",
+      "shortDescription",
+      "billable",
+      "header",
+      "chapter"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "effectiveQuery": {
+    "description": "The query as the server parsed it for matching.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode.",
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "nextCursor": {
+    "description": "Opaque token to pass back as `cursor` for the next page. Present only when more matches exist beyond this page.",
+    "type": "string"
+   },
+   "notice": {
+    "description": "Guidance when nothing matched \u2014 echoes the query and suggests how to broaden, or names `billableOnly` as the cause when the searched system has no billing concept.",
+    "type": "string"
+   },
+   "shown": {
+    "description": "Number of codes returned on this page.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when more matches exist beyond this page.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Search Medical Codes"
+}

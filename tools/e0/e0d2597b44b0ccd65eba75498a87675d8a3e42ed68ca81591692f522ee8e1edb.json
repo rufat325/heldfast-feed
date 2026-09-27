@@ -1,0 +1,288 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Audit a site's content by sampling its sitemap"
+ },
+ "description": "Site-wide content audit: discovers the sitemap, samples N URLs by deterministic uniform stride, runs audit_page on each, and returns score distribution + worst pages + most-common findings.\n\nRead-only. One HTTP GET for sitemap discovery, optionally a few more for sitemap-index children, then `sample_size` \u00d7 audit_page calls (each one HTTP GET + parsing). Polite throttling is enforced per host.\n\nDeterministic \u2014 same domain + same sample_size returns the same set of URLs (uniform-stride sampling). Per-page scoring is rule-based; no LLM.\n\nWhen to use: portfolio-level health check across a site (\"how does our content score on average?\"). Distinct from `audit_site` (homepage-only composite) and `check_sitemap` (validates sitemap.xml structure, not page content).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "concurrency": {
+    "default": 2,
+    "description": "Parallel audit_page calls. Default 2 (gentle). Max 5. The shared politeFetch host-delay is still enforced, so this is per-batch dispatch concurrency, not bypass.",
+    "maximum": 5,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "domain": {
+    "description": "Hostname or origin to audit. Examples: `example.com`, `https://example.com`. The tool discovers the sitemap, samples N URLs by uniform stride, and runs audit_page on each.",
+    "minLength": 3,
+    "type": "string"
+   },
+   "respect_robots": {
+    "default": true,
+    "description": "If true (default), respect robots.txt for each sampled URL. Set false only for self-audits where you've intentionally blocked crawlers.",
+    "type": "boolean"
+   },
+   "sample_size": {
+    "default": 10,
+    "description": "Number of URLs to sample from the sitemap. Default 10. Max 50 (sampling caps to avoid runaway audits \u2014 each sample is one full audit_page call, ~1-3s with polite throttling). Sampling is deterministic uniform-stride: if the sitemap has 1000 URLs and sample_size=10, every 100th URL is picked.",
+    "maximum": 50,
+    "minimum": 1,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "domain"
+  ],
+  "type": "object"
+ },
+ "name": "audit_sitemap",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "audited": {
+    "description": "Per-page audit results that completed successfully.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "grade": {
+       "description": "Letter grade derived from the numeric score.",
+       "enum": [
+        "A",
+        "B",
+        "C",
+        "D",
+        "F"
+       ],
+       "type": "string"
+      },
+      "score": {
+       "type": "number"
+      },
+      "top_issue": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "url": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "url",
+      "score",
+      "grade",
+      "top_issue"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "domain": {
+    "description": "The domain audited.",
+    "type": "string"
+   },
+   "failed": {
+    "description": "URLs whose audit failed, with the error message.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "error": {
+       "type": "string"
+      },
+      "url": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "url",
+      "error"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "fetched_at": {
+    "description": "UTC ISO-8601 timestamp of the audit.",
+    "type": "string"
+   },
+   "grade_distribution": {
+    "additionalProperties": false,
+    "description": "Count of pages per letter grade.",
+    "properties": {
+     "A": {
+      "type": "number"
+     },
+     "B": {
+      "type": "number"
+     },
+     "C": {
+      "type": "number"
+     },
+     "D": {
+      "type": "number"
+     },
+     "F": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "A",
+     "B",
+     "C",
+     "D",
+     "F"
+    ],
+    "type": "object"
+   },
+   "sampling": {
+    "const": "uniform_stride",
+    "description": "Sampling strategy. Deterministic uniform stride: every Nth URL is picked.",
+    "type": "string"
+   },
+   "score_distribution": {
+    "additionalProperties": false,
+    "description": "Summary statistics across the audited sample.",
+    "properties": {
+     "avg": {
+      "type": "number"
+     },
+     "max": {
+      "type": "number"
+     },
+     "median": {
+      "type": "number"
+     },
+     "min": {
+      "type": "number"
+     },
+     "p25": {
+      "type": "number"
+     },
+     "p75": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "avg",
+     "median",
+     "min",
+     "max",
+     "p25",
+     "p75"
+    ],
+    "type": "object"
+   },
+   "sitemap_url": {
+    "description": "Resolved sitemap URL (null when discovery failed).",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "top_findings": {
+    "description": "Most-common findings across all sampled pages, sorted by occurrence count desc.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "category": {
+       "type": "string"
+      },
+      "count": {
+       "description": "How many pages in the sample had this finding.",
+       "type": "number"
+      },
+      "fix": {
+       "type": "string"
+      },
+      "message": {
+       "type": "string"
+      },
+      "severity": {
+       "enum": [
+        "critical",
+        "warning",
+        "info"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "message",
+      "category",
+      "severity",
+      "count",
+      "fix"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "total_urls_in_sitemap": {
+    "description": "Total URLs declared across the sitemap and any indexed children.",
+    "type": "number"
+   },
+   "urls_sampled": {
+    "description": "Number of URLs picked via uniform-stride sampling.",
+    "type": "number"
+   },
+   "worst_pages": {
+    "description": "Lowest-scoring pages from the sample, worst first.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "grade": {
+       "$ref": "#/properties/audited/items/properties/grade"
+      },
+      "score": {
+       "type": "number"
+      },
+      "top_issue": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "url": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "url",
+      "score",
+      "grade",
+      "top_issue"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "domain",
+   "sitemap_url",
+   "total_urls_in_sitemap",
+   "urls_sampled",
+   "sampling",
+   "audited",
+   "failed",
+   "score_distribution",
+   "grade_distribution",
+   "worst_pages",
+   "top_findings",
+   "fetched_at"
+  ],
+  "type": "object"
+ },
+ "title": "Audit a site's content by sampling its sitemap"
+}

@@ -1,0 +1,196 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Create a JsonFabrica batch generation job"
+ },
+ "description": "Calls POST /v1/batches. Generates multiple documents from one or more persisted templates in one call, optionally cross-referencing documents via `relations` \u2014 use this instead of looping jsonfabrica_generate_from_template yourself when you need many documents or cross-document relations in a single request. Small batches run synchronously and the response is 200 with `results`; larger batches are queued and the response is 202 with just `{ batchId, status, seed }` \u2014 poll jsonfabrica_get_batch for the final results in that case. Like a single generate call, this is metered/billed per document produced and, unless namespaced, can advance real durable sequences and mutate durable variables referenced by the templates.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "documents": {
+    "description": "One entry per group of documents to generate, each naming a `templateId`, a unique `alias`, how many (`count`) to generate, and optionally `relations`/`params`. Required; at least one entry. Entries are executed in dependency order (documents with `relations` are generated after the aliases they depend on).",
+    "items": {
+     "properties": {
+      "alias": {
+       "description": "Short name identifying this `documents[]` entry within the batch, used to reference it from other entries' `relations` (and duplicated aliases across entries are rejected with a 400 error). Required.",
+       "type": "string"
+      },
+      "count": {
+       "description": "How many documents to generate from this template within the batch. Required; must be an integer.",
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "params": {
+       "additionalProperties": {},
+       "description": "Key/value map supplying values for getParam(\"key\") placeholders in this template's body, applied to every document generated for this alias. Optional; omitted keys leave the corresponding getParam() calls unresolved/empty.",
+       "propertyNames": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "relations": {
+       "additionalProperties": {
+        "anyOf": [
+         {
+          "description": "Shorthand relation reference in the form \"parentAlias\" or \"parentAlias.field.nested\", pointing at a document from another `documents[]` entry (by its `alias`). Only valid when the referenced parent has `count === 1` \u2014 with `count > 1` the reference is ambiguous and the request is rejected with a 400 error; use the object form with `strategy` instead.",
+          "type": "string"
+         },
+         {
+          "properties": {
+           "from": {
+            "description": "Same \"parentAlias\" or \"parentAlias.field.nested\" reference as the string form, but required here so a `strategy` can be attached \u2014 used when the referenced parent has `count > 1`.",
+            "type": "string"
+           },
+           "strategy": {
+            "description": "How to pick one of several parent documents when the referenced alias has `count > 1`. Only \"round-robin\" is currently supported (cycles through the parent's generated documents in order, wrapping around); any other value is rejected with a 400 UNSUPPORTED_STRATEGY error. Optional, but effectively required whenever the parent alias has `count > 1`.",
+            "enum": [
+             "round-robin"
+            ],
+            "type": "string"
+           }
+          },
+          "type": "object"
+         }
+        ]
+       },
+       "description": "Map of field name (as it appears in this template's generated output) to a reference into another alias in the same batch, letting generated documents cross-reference each other (e.g. an \"orders\" entry referencing a \"customers\" entry's id). Optional; omit for documents with no cross-references. Unknown aliases or dependency cycles across `documents[]` are rejected with a 400 error.",
+       "propertyNames": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "templateId": {
+       "description": "ID of the persisted template used to generate this document group. Required.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "templateId",
+      "alias",
+      "count"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "seed": {
+    "description": "Deterministic PRNG seed applied across the whole batch \u2014 the same seed reproduces byte-identical random values for every document. Optional; if omitted the server picks a random seed and returns it in the response (`seed` in both sync and async cases).",
+    "type": "number"
+   },
+   "sequenceNamespace": {
+    "description": "Isolates createSeq()/getSeq() durable-sequence side effects for this whole batch under this namespace, so test/debug runs don't advance real tenant sequences. Optional; omitted means the default (unnamespaced) sequence scope is used.",
+    "type": "string"
+   },
+   "variableNamespace": {
+    "description": "Isolates durable-variable side effects for this whole batch under this namespace, analogous to `sequenceNamespace`. Optional; omitted means the default (unnamespaced) variable scope is used.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "documents"
+  ],
+  "type": "object"
+ },
+ "name": "jsonfabrica_create_batch",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "batchId": {
+    "description": "Id of the created batch.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": false,
+    "description": "Present if the whole batch failed.",
+    "properties": {
+     "code": {
+      "type": "string"
+     },
+     "message": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "results": {
+    "description": "Present only for synchronous (200) responses.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "alias": {
+       "description": "The `documents[]` alias this document was generated for.",
+       "type": "string"
+      },
+      "batchId": {
+       "description": "Id of the batch this document belongs to.",
+       "type": "string"
+      },
+      "documentSeed": {
+       "description": "Per-document PRNG seed actually used.",
+       "type": "number"
+      },
+      "result": {
+       "description": "The generated document; shape depends on the template body. Absent while pending/failed."
+      },
+      "seqNo": {
+       "description": "0-based index of this document within its alias group.",
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "status": {
+       "description": "Per-document generation status.",
+       "enum": [
+        "pending",
+        "completed",
+        "failed"
+       ],
+       "type": "string"
+      },
+      "templateId": {
+       "description": "Template used to generate this document.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "batchId",
+      "alias",
+      "seqNo",
+      "templateId",
+      "status"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "seed": {
+    "description": "PRNG seed used/assigned for the whole batch.",
+    "type": "number"
+   },
+   "status": {
+    "description": "Batch status at response time.",
+    "enum": [
+     "queued",
+     "running",
+     "completed",
+     "failed"
+    ],
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Create a JsonFabrica batch generation job"
+}

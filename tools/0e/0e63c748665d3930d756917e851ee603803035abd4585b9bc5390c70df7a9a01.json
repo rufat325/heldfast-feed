@@ -1,0 +1,641 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Configure Account Automations"
+ },
+ "description": "Configure an account's automations from a list of intents and return the unsigned setAssetManagers transaction. The backend resolves which asset managers each intent needs, validates that the combination is compatible, encodes the metadata and builds the calldata, so you describe the desired outcome rather than the contracts.\n\nWith mode 'save' (the default) the intents array is the complete desired state: the backend diffs it against what is currently enabled, so any automation you leave out is DISABLED by the returned transaction. Pass a single intent with enabled: false to turn everything off.\n\nMode 'preview' validates and resolves the intents WITHOUT reading chain state and returns no transaction, because its calldata carries no disable entries and would only partially apply the state. Use it to check a combination is legal or to show a plan; use 'save' to get something signable. To toggle one automation without restating the rest, use write.account.automations_delta.\n\nIntents:\n- compound_fees: reinvest earned fees/rewards back into the LP. Optional 'tokens' scopes it per yielding token. A staked reward that is not a pool token is swapped in via CowSwap automatically.\n- claim_rewards: claim yield out. config.mode as_earned pays the tokens as-is, convert_to swaps them to config.buy_token via CowSwap. config.convert_tokens converts only a subset and claims the rest as-earned. config.destination account or wallet.\n- add_to_lp: fold idle pool-token balances (deposits, rebalance leftovers) back into the LP. Opt-in per token.\n- claim_merkl: auto-claim Merkl incentive rewards. Independent of the compounder/claimer/cowswapper triad and needs no position context.\n- rebalance: reposition the LP. strategy out_of_range (default), take_profit (runs on the dedicated profit-taker contract), or protocol_owned_liquidity.\n\nPass position_id (from assets[] in read.account.info) and the backend fills in protocol, is_staked, token0, token1 and reward_tokens for you; anything you pass explicitly wins. claim_merkl needs no position context.\n\nRules the backend enforces (a violation is returned as an error, never written on-chain):\n- Every yielding token must be assigned to exactly one of compound_fees or claim_rewards. Scoping one to a subset without covering the rest is rejected, and no token may be in both.\n- A wallet or custom-recipient payout requires a pure as-earned claim: nothing converted, and every yielding token claimed. Converts settle in the account.\n- convert_tokens must be a subset of the claimed tokens, and buy_token cannot be a compounded token, a converted token, or an add_to_lp folded token.\n- Each intent kind may appear only once, and a token list must not be empty or name a token the position does not yield.\n\nReturns { valid, errors, warnings, human_summary, plan, diff, transaction }. When a compatibility rule fires the call returns an error and no transaction: read errors[].reason, adjust the intents and retry. There is deliberately no transaction when the account already matches the request (no_changes_needed), when the Tenderly simulation predicts a revert (an error), or in preview mode (preview_only). Call read.asset_manager.intents first to see which intents this account can enable.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "account_address": {
+    "description": "Arcadia account address",
+    "type": "string"
+   },
+   "chain_id": {
+    "default": 8453,
+    "description": "Chain ID: 8453 (Base), 130 (Unichain), or 10 (Optimism)",
+    "type": "number"
+   },
+   "intents": {
+    "description": "Complete desired automation state. In save mode anything omitted is disabled, so include every automation to keep. A single intent with enabled: false disables all automations.",
+    "items": {
+     "anyOf": [
+      {
+       "additionalProperties": false,
+       "properties": {
+        "enabled": {
+         "default": true,
+         "description": "False disables this intent's managers instead of enabling them.",
+         "type": "boolean"
+        },
+        "kind": {
+         "const": "compound_fees",
+         "type": "string"
+        },
+        "position_id": {
+         "description": "LP position (NFT) id this intent applies to. Also used to auto-fetch position context.",
+         "type": "integer"
+        },
+        "tokens": {
+         "description": "Which tokens' yield to reinvest. Omit for all yielding tokens. 'reward' only exists on a staked position whose reward token is not a pool token. Every yielding token must be assigned to either compound_fees or claim_rewards, so if you scope this to a subset you must add a claim_rewards intent covering the rest.",
+         "items": {
+          "enum": [
+           "token0",
+           "token1",
+           "reward"
+          ],
+          "type": "string"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "kind"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "config": {
+         "additionalProperties": false,
+         "default": {},
+         "properties": {
+          "buy_token": {
+           "description": "ERC20 to swap into. Required whenever any token is being converted. It cannot be a token you also compound, one of the tokens being converted, or a token folded by add_to_lp.",
+           "type": "string"
+          },
+          "convert_tokens": {
+           "description": "Subset of this intent's claimed tokens to swap to buy_token; the rest are claimed as-earned. Must be a subset of `tokens`. Omit to defer to mode (convert_to converts all claimed tokens, as_earned converts none). Use this for a partial convert, e.g. tokens: ['token0','reward'] with convert_tokens: ['reward'] swaps only the reward and claims token0 as-is.",
+           "items": {
+            "$ref": "#/properties/intents/items/anyOf/0/properties/tokens/items"
+           },
+           "type": "array"
+          },
+          "destination": {
+           "default": "account",
+           "description": "Payout target ('wallet' is the owner EOA). A wallet payout is only allowed for a pure as-earned claim: nothing converted, and every yielding token claimed. Any convert, or a claim scoped to a subset of tokens, must use 'account' because CowSwap settles there.",
+           "enum": [
+            "account",
+            "wallet"
+           ],
+           "type": "string"
+          },
+          "mode": {
+           "default": "as_earned",
+           "description": "as_earned pays out the claimed tokens as-is; convert_to swaps them to buy_token via CowSwap. Use convert_tokens to convert only some of them.",
+           "enum": [
+            "as_earned",
+            "convert_to"
+           ],
+           "type": "string"
+          },
+          "recipient": {
+           "description": "Explicit payout address. Overrides destination when set, and is subject to the same pure-as-earned rule as a wallet payout unless it equals the account address.",
+           "type": "string"
+          },
+          "tokens": {
+           "description": "Which tokens' yield to claim out. Omit for all yielding tokens. A token cannot be both claimed and compounded, and every yielding token must be assigned to one of the two.",
+           "items": {
+            "$ref": "#/properties/intents/items/anyOf/0/properties/tokens/items"
+           },
+           "type": "array"
+          }
+         },
+         "type": "object"
+        },
+        "enabled": {
+         "$ref": "#/properties/intents/items/anyOf/0/properties/enabled"
+        },
+        "kind": {
+         "const": "claim_rewards",
+         "type": "string"
+        },
+        "position_id": {
+         "$ref": "#/properties/intents/items/anyOf/0/properties/position_id"
+        }
+       },
+       "required": [
+        "kind"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "enabled": {
+         "$ref": "#/properties/intents/items/anyOf/0/properties/enabled"
+        },
+        "kind": {
+         "const": "add_to_lp",
+         "type": "string"
+        },
+        "position_id": {
+         "$ref": "#/properties/intents/items/anyOf/0/properties/position_id"
+        },
+        "tokens": {
+         "description": "Which pool tokens' idle account balance to fold into the LP. Omit for both. Folding is opt-in per token, and a folded token cannot be the buy_token of a claim_rewards convert.",
+         "items": {
+          "enum": [
+           "token0",
+           "token1"
+          ],
+          "type": "string"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "kind"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "config": {
+         "additionalProperties": false,
+         "default": {},
+         "properties": {
+          "destination": {
+           "default": "account",
+           "enum": [
+            "account",
+            "wallet"
+           ],
+           "type": "string"
+          },
+          "reward_recipient": {
+           "description": "Explicit recipient address. Overrides destination when set.",
+           "type": "string"
+          }
+         },
+         "type": "object"
+        },
+        "enabled": {
+         "$ref": "#/properties/intents/items/anyOf/0/properties/enabled"
+        },
+        "kind": {
+         "const": "claim_merkl",
+         "type": "string"
+        },
+        "position_id": {
+         "$ref": "#/properties/intents/items/anyOf/0/properties/position_id"
+        }
+       },
+       "required": [
+        "kind"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "enabled": {
+         "$ref": "#/properties/intents/items/anyOf/0/properties/enabled"
+        },
+        "kind": {
+         "const": "rebalance",
+         "type": "string"
+        },
+        "max_tolerance": {
+         "description": "Max price deviation (MEV/slippage cap), 1e18-scaled: 1e18 = 100%, so 5000000000000000 = 0.5% (the default) and 50000000000000000 = 5%. Omit for the pool's default. AAA pools are floored at 5%.",
+         "maximum": 1000000000000000000,
+         "minimum": 0,
+         "type": "integer"
+        },
+        "min_liquidity_ratio": {
+         "description": "Min fraction of liquidity that must survive a rebalance, 1e18-scaled: 990000000000000000 = 99% (the default), i.e. at most 1% value loss. Omit for the default.",
+         "maximum": 1000000000000000000,
+         "minimum": 0,
+         "type": "integer"
+        },
+        "position_id": {
+         "$ref": "#/properties/intents/items/anyOf/0/properties/position_id"
+        },
+        "strategy": {
+         "anyOf": [
+          {
+           "additionalProperties": false,
+           "properties": {
+            "kind": {
+             "const": "out_of_range",
+             "type": "string"
+            },
+            "max_rebalance_time": {
+             "default": 1000000000000,
+             "description": "Seconds before a rebalance is forced. Default is effectively disabled.",
+             "type": "integer"
+            },
+            "min_rebalance_time": {
+             "default": 3600,
+             "description": "Cooldown in seconds between rebalances.",
+             "type": "integer"
+            },
+            "optimal_token0_ratio": {
+             "default": 500000,
+             "description": "Target token0 composition after a rebalance, 1e6-scaled: 500000 = 50% (balanced, the default), 750000 = 75% token0, 0 = all token1.",
+             "maximum": 1000000,
+             "minimum": 0,
+             "type": "integer"
+            },
+            "trigger_lower_tick_ratio": {
+             "default": 0,
+             "description": "Offset from tick_lower as a fraction of the position's tick range, 1e6-scaled. This is TICK distance, not price: 50000 shifts the trigger by 5% of (tick_upper - tick_lower) ticks, which is not 5% of price. 0 = trigger exactly at the boundary. Positive (e.g. 50000) puts the trigger outside the position so price must travel further beyond the range before rebalancing. Negative (e.g. -50000) puts it inside, firing preemptively while price is still in range.",
+             "type": "integer"
+            },
+            "trigger_upper_tick_ratio": {
+             "default": 0,
+             "description": "Same as trigger_lower_tick_ratio, for tick_upper. The two are independent, so asymmetric configs are valid (e.g. lower -50000, upper 0 rebalances early on the downside but only at the boundary on the upside).",
+             "type": "integer"
+            }
+           },
+           "required": [
+            "kind"
+           ],
+           "type": "object"
+          },
+          {
+           "additionalProperties": false,
+           "properties": {
+            "base_range": {
+             "default": 50000,
+             "type": "integer"
+            },
+            "deadzone": {
+             "default": 20000,
+             "type": "integer"
+            },
+            "fraction_excess_to_limit_order": {
+             "default": 500000,
+             "type": "integer"
+            },
+            "initial_range": {
+             "default": 200000,
+             "type": "integer"
+            },
+            "k1": {
+             "default": 0,
+             "type": "integer"
+            },
+            "k2": {
+             "default": 0,
+             "type": "integer"
+            },
+            "kind": {
+             "const": "protocol_owned_liquidity",
+             "type": "string"
+            },
+            "limit_order_withdrawal_threshold": {
+             "default": 50000,
+             "type": "integer"
+            },
+            "rebalance_threshold": {
+             "default": 25000,
+             "type": "integer"
+            },
+            "target_token0_ratio": {
+             "default": 500000,
+             "type": "integer"
+            }
+           },
+           "required": [
+            "kind"
+           ],
+           "type": "object"
+          },
+          {
+           "additionalProperties": false,
+           "properties": {
+            "has_reversal": {
+             "default": false,
+             "type": "boolean"
+            },
+            "kind": {
+             "const": "take_profit",
+             "type": "string"
+            },
+            "profit_token": {
+             "default": "token0",
+             "enum": [
+              "token0",
+              "token1"
+             ],
+             "type": "string"
+            },
+            "reversal_reposition_mode": {
+             "default": "",
+             "enum": [
+              "",
+              "anchor_tick",
+              "shift_range"
+             ],
+             "type": "string"
+            },
+            "reversal_trigger_threshold": {
+             "default": 0,
+             "type": "integer"
+            },
+            "reversal_trigger_type": {
+             "default": "",
+             "enum": [
+              "",
+              "fixed",
+              "relative"
+             ],
+             "type": "string"
+            },
+            "take_profit_reposition_mode": {
+             "default": "anchor_tick",
+             "enum": [
+              "",
+              "anchor_tick",
+              "shift_range"
+             ],
+             "type": "string"
+            },
+            "take_profit_trigger_threshold": {
+             "default": 0,
+             "type": "integer"
+            },
+            "take_profit_trigger_type": {
+             "default": "fixed",
+             "enum": [
+              "",
+              "fixed",
+              "relative"
+             ],
+             "type": "string"
+            }
+           },
+           "required": [
+            "kind"
+           ],
+           "type": "object"
+          }
+         ],
+         "default": {
+          "kind": "out_of_range"
+         },
+         "description": "out_of_range repositions when price leaves the range; take_profit runs on the dedicated profit-taker contract; protocol_owned_liquidity is the POL strategy."
+        }
+       },
+       "required": [
+        "kind"
+       ],
+       "type": "object"
+      }
+     ],
+     "description": "One user-facing automation intent."
+    },
+    "minItems": 1,
+    "type": "array"
+   },
+   "is_staked": {
+    "description": "Whether the LP position is staked. Implied by a staked_* protocol value.",
+    "type": "boolean"
+   },
+   "mode": {
+    "default": "save",
+    "description": "save diffs against on-chain state and returns a signable transaction that also disables anything omitted. preview resolves and validates only, returning a plan and no transaction.",
+    "enum": [
+     "save",
+     "preview"
+    ],
+    "type": "string"
+   },
+   "owner": {
+    "description": "Account owner EOA. Used to resolve wallet payout targets.",
+    "type": "string"
+   },
+   "position_id": {
+    "description": "LP position (NFT) id, as listed in assets[] by read.account.info. Supply this and the backend fetches protocol, staked flag, tokens and reward tokens for you. Strongly preferred over passing the position fields by hand.",
+    "type": "integer"
+   },
+   "protocol": {
+    "description": "Position's DEX protocol. Only needed when position_id is omitted. Accepts the dex_protocol values the read tools return (slipstream, staked_slipstream_v3, uniV3, ...), which imply is_staked, as well as the canonical slipstream_v1 / uniswap_v3 spellings.",
+    "enum": [
+     "slipstream_v1",
+     "slipstream_v2",
+     "slipstream_v3",
+     "uniswap_v3",
+     "uniswap_v4",
+     "slipstream",
+     "staked_slipstream",
+     "staked_slipstream_v2",
+     "staked_slipstream_v3",
+     "uniV3",
+     "uniV4"
+    ],
+    "type": "string"
+   },
+   "reward_tokens": {
+    "description": "Staking reward token addresses.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "token0": {
+    "description": "Pool token0 address.",
+    "type": "string"
+   },
+   "token1": {
+    "description": "Pool token1 address.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "account_address",
+   "intents"
+  ],
+  "type": "object"
+ },
+ "name": "write.account.automations",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "description": {
+    "type": "string"
+   },
+   "diff": {
+    "additionalProperties": false,
+    "properties": {
+     "added": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "address": {
+         "type": "string"
+        },
+        "enabled": {
+         "type": "boolean"
+        },
+        "manager": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "manager",
+        "address",
+        "enabled"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "removed": {
+      "items": {
+       "$ref": "#/properties/diff/properties/added/items"
+      },
+      "type": "array"
+     },
+     "updated": {
+      "items": {
+       "$ref": "#/properties/diff/properties/added/items"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "added",
+     "removed",
+     "updated"
+    ],
+    "type": "object"
+   },
+   "errors": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "reason": {
+       "type": "string"
+      },
+      "rule": {
+       "type": "string"
+      },
+      "severity": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "rule",
+      "severity",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "human_summary": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "no_changes_needed": {
+    "type": "boolean"
+   },
+   "plan": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "address": {
+       "type": "string"
+      },
+      "enabled": {
+       "type": "boolean"
+      },
+      "manager": {
+       "type": "string"
+      },
+      "serving_intents": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "strategy": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "manager",
+      "address",
+      "enabled",
+      "serving_intents"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "preview_only": {
+    "type": "boolean"
+   },
+   "simulation_url": {
+    "type": "string"
+   },
+   "tenderly_sim_status": {
+    "enum": [
+     "success",
+     "failure",
+     "unavailable"
+    ],
+    "type": "string"
+   },
+   "transaction": {
+    "additionalProperties": false,
+    "properties": {
+     "chainId": {
+      "type": "number"
+     },
+     "data": {
+      "type": "string"
+     },
+     "to": {
+      "type": "string"
+     },
+     "value": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "to",
+     "data",
+     "value",
+     "chainId"
+    ],
+    "type": "object"
+   },
+   "valid": {
+    "type": "boolean"
+   },
+   "warnings": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "description",
+   "valid",
+   "errors",
+   "warnings",
+   "human_summary",
+   "plan"
+  ],
+  "type": "object"
+ }
+}

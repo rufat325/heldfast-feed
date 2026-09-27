@@ -1,0 +1,470 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Poll cached messages from one or more ntfy topics with optional filters. Returns a snapshot, not a live stream \u2014 use it to confirm delivery, replay missed alerts, or audit topic activity. Multiple topics are passed as a comma-separated list. Long bodies are truncated client-side to keep list responses bounded; refetch with that message `id` to read one in full, or pass the `id` as `since` to page from that point.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "base_url": {
+    "description": "Override `NTFY_BASE_URL` for this call \u2014 an absolute `http(s)://` URL. When the override differs from the configured base URL, server-configured auth credentials are NOT forwarded.",
+    "pattern": "^$|^https?:\\/\\/\\S+$",
+    "type": "string"
+   },
+   "id": {
+    "description": "Exact-match a single message ID. Pinning one message this way also returns its body in full \u2014 the ~500-char cap that applies to list results is lifted. `since` still bounds which cached messages are searched, so widen it when the target is older than the default window.",
+    "type": "string"
+   },
+   "limit": {
+    "default": 20,
+    "description": "Client-side cap on returned messages. Default 20, max 100. When more match, the newest `limit` of the window are kept (still listed oldest-first) and the `truncated` enrichment flag is set.",
+    "exclusiveMinimum": 0,
+    "maximum": 100,
+    "type": "integer"
+   },
+   "message": {
+    "description": "Exact-match against the message body.",
+    "type": "string"
+   },
+   "priority": {
+    "description": "Match any priority in the list (logical OR). Empty/omitted matches all priorities.",
+    "items": {
+     "description": "Single priority value (1=min, 5=max).",
+     "maximum": 5,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "type": "array"
+   },
+   "scheduled": {
+    "default": false,
+    "description": "Include delayed/not-yet-delivered messages.",
+    "type": "boolean"
+   },
+   "since": {
+    "default": "10m",
+    "description": "Default `10m`. Tighter than ntfy's default to keep the common 'did my recent notification land?' lookup cheap. Accepts a duration (`30s`, `10m`, `2h`, `1d`), a Unix timestamp, a message ID, or the keywords `all` (every cached message \u2014 up to ~12h on ntfy.sh) or `latest` (most recent only).",
+    "type": "string"
+   },
+   "tags": {
+    "description": "Match all tags in the list (logical AND). Empty/omitted matches all messages regardless of tags.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "title": {
+    "description": "Exact-match against the title string.",
+    "type": "string"
+   },
+   "topic": {
+    "description": "Single topic or comma-separated list (e.g., `alerts` or `alerts,backups,phil_alerts`). Required unless `NTFY_DEFAULT_TOPIC` is set.",
+    "minLength": 1,
+    "pattern": "^[a-zA-Z0-9_-]+(?:,[a-zA-Z0-9_-]+)*$",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "ntfy_fetch_messages",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "messages",
+     "topic",
+     "since",
+     "count",
+     "truncated"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "appliedFilters": {
+    "additionalProperties": false,
+    "description": "Active filter inputs the server applied; absent when no filters were set.",
+    "properties": {
+     "id": {
+      "description": "Echo of the input id filter; absent when not set.",
+      "type": "string"
+     },
+     "message": {
+      "description": "Echo of the input message filter; absent when not set.",
+      "type": "string"
+     },
+     "priority": {
+      "description": "Echo of the input priority filter; absent when not set.",
+      "items": {
+       "description": "Single priority value (1=min, 5=max).",
+       "maximum": 5,
+       "minimum": 1,
+       "type": "integer"
+      },
+      "type": "array"
+     },
+     "tags": {
+      "description": "Echo of the input tag filter; absent when not set.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "title": {
+      "description": "Echo of the input title filter; absent when not set.",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "count": {
+    "description": "Number of messages returned in this response.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `forbidden_topic`: Auth required for the target topic. `invalid_since`: `since` value could not be parsed by ntfy (bad duration, malformed timestamp, or unknown message ID). `upstream_unreachable`: DNS, connection, or network failure reaching the ntfy server after retries were exhausted. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "forbidden_topic",
+         "invalid_since",
+         "upstream_unreachable"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "messages": {
+    "description": "Cached messages matching the filters, oldest-first (chronological order from ntfy).",
+    "items": {
+     "additionalProperties": false,
+     "description": "A single cached ntfy message envelope.",
+     "properties": {
+      "actions": {
+       "description": "Action buttons echoed by ntfy. Discriminated by `action`. Absent when no actions were set.",
+       "items": {
+        "description": "Action button echoed by ntfy. Discriminated by `action` (`view`, `broadcast`, `http`, `copy`).",
+        "oneOf": [
+         {
+          "additionalProperties": false,
+          "description": "Open a URL or app on tap.",
+          "properties": {
+           "action": {
+            "const": "view",
+            "description": "Discriminator \u2014 `view`.",
+            "type": "string"
+           },
+           "clear": {
+            "description": "Whether the notification dismisses on tap.",
+            "type": "boolean"
+           },
+           "label": {
+            "description": "Button label.",
+            "type": "string"
+           },
+           "url": {
+            "description": "URL opened on tap.",
+            "type": "string"
+           }
+          },
+          "required": [
+           "action",
+           "label",
+           "url"
+          ],
+          "type": "object"
+         },
+         {
+          "additionalProperties": false,
+          "description": "Send an Android broadcast intent on tap.",
+          "properties": {
+           "action": {
+            "const": "broadcast",
+            "description": "Discriminator \u2014 `broadcast`.",
+            "type": "string"
+           },
+           "clear": {
+            "description": "Whether the notification dismisses on tap.",
+            "type": "boolean"
+           },
+           "extras": {
+            "additionalProperties": {
+             "type": "string"
+            },
+            "description": "String extras passed alongside the broadcast.",
+            "propertyNames": {
+             "type": "string"
+            },
+            "type": "object"
+           },
+           "intent": {
+            "description": "Android intent name.",
+            "type": "string"
+           },
+           "label": {
+            "description": "Button label.",
+            "type": "string"
+           }
+          },
+          "required": [
+           "action",
+           "label"
+          ],
+          "type": "object"
+         },
+         {
+          "additionalProperties": false,
+          "description": "Fire an HTTP request on tap.",
+          "properties": {
+           "action": {
+            "const": "http",
+            "description": "Discriminator \u2014 `http`.",
+            "type": "string"
+           },
+           "body": {
+            "description": "Request body.",
+            "type": "string"
+           },
+           "clear": {
+            "description": "Whether the notification dismisses when the request succeeds.",
+            "type": "boolean"
+           },
+           "headers": {
+            "additionalProperties": {
+             "type": "string"
+            },
+            "description": "Headers attached to the request.",
+            "propertyNames": {
+             "type": "string"
+            },
+            "type": "object"
+           },
+           "label": {
+            "description": "Button label.",
+            "type": "string"
+           },
+           "method": {
+            "description": "HTTP method (defaults POST upstream).",
+            "type": "string"
+           },
+           "url": {
+            "description": "URL the request goes to.",
+            "type": "string"
+           }
+          },
+          "required": [
+           "action",
+           "label",
+           "url"
+          ],
+          "type": "object"
+         },
+         {
+          "additionalProperties": false,
+          "description": "Copy a value to the clipboard on tap.",
+          "properties": {
+           "action": {
+            "const": "copy",
+            "description": "Discriminator \u2014 `copy`.",
+            "type": "string"
+           },
+           "clear": {
+            "description": "Whether the notification dismisses on tap.",
+            "type": "boolean"
+           },
+           "label": {
+            "description": "Button label.",
+            "type": "string"
+           },
+           "value": {
+            "description": "Value copied to the device clipboard on tap.",
+            "type": "string"
+           }
+          },
+          "required": [
+           "action",
+           "label",
+           "value"
+          ],
+          "type": "object"
+         }
+        ]
+       },
+       "type": "array"
+      },
+      "attachment": {
+       "additionalProperties": false,
+       "description": "Attachment metadata; absent when the message had no attachment.",
+       "properties": {
+        "expires": {
+         "description": "Unix seconds when the hosted attachment ages out.",
+         "type": "number"
+        },
+        "name": {
+         "description": "Attachment display filename.",
+         "type": "string"
+        },
+        "size": {
+         "description": "Attachment size in bytes.",
+         "type": "number"
+        },
+        "type": {
+         "description": "Mime type \u2014 present only when ntfy hosted the upload.",
+         "type": "string"
+        },
+        "url": {
+         "description": "Attachment URL.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "name",
+        "url"
+       ],
+       "type": "object"
+      },
+      "click": {
+       "description": "Click URL; absent when no click action was set.",
+       "type": "string"
+      },
+      "event": {
+       "description": "Event type.",
+       "enum": [
+        "message",
+        "message_clear",
+        "message_delete",
+        "poll_request"
+       ],
+       "type": "string"
+      },
+      "expires": {
+       "description": "ISO 8601 timestamp when the message ages out of cache.",
+       "type": "string"
+      },
+      "id": {
+       "description": "Message ID \u2014 pass back as `since` to paginate from this point or as `sequence_id` to manage.",
+       "type": "string"
+      },
+      "message": {
+       "description": "Notification body. Truncated client-side to ~500 chars; see `messageTruncated` for the count of dropped chars. Returned whole when the call pinned a single message via `id`. Absent on clear/delete events.",
+       "type": "string"
+      },
+      "messageTruncated": {
+       "description": "Count of additional characters dropped from `message`. To read the whole body, call this tool again with `id` set to this message's `id` and a `since` window that still covers it \u2014 a single-message fetch skips truncation. Absent when the full body fit within the cap or truncation was skipped.",
+       "type": "number"
+      },
+      "priority": {
+       "description": "Notification priority; absent when default (3).",
+       "maximum": 5,
+       "minimum": 1,
+       "type": "integer"
+      },
+      "sequence_id": {
+       "description": "Present on update/clear/delete events pointing back to the original message; absent on initial publishes.",
+       "type": "string"
+      },
+      "tags": {
+       "description": "Tags applied to the notification; absent when none.",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "time": {
+       "description": "ISO 8601 timestamp when ntfy accepted the message.",
+       "type": "string"
+      },
+      "title": {
+       "description": "Notification title; absent when no title was set.",
+       "type": "string"
+      },
+      "topic": {
+       "description": "Topic the message was published to.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "id",
+      "time",
+      "event",
+      "topic"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "notice": {
+    "description": "Guidance when the result is empty or truncated \u2014 echoes the criteria and suggests how to broaden or paginate.",
+    "type": "string"
+   },
+   "since": {
+    "description": "Echo of the resolved `since` value (input or default `10m`).",
+    "type": "string"
+   },
+   "topic": {
+    "description": "Echo of the resolved topic (or comma-separated list) \u2014 useful when `NTFY_DEFAULT_TOPIC` filled in for an omitted `topic`.",
+    "type": "string"
+   },
+   "truncated": {
+    "description": "True when more messages matched than `limit` allowed. The newest `limit` of the window are kept and the older head is dropped \u2014 widen `limit`, use a tighter `since`, or target a specific message by `id` to reach the rest.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Ntfy Fetch Messages"
+}

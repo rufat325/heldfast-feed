@@ -1,0 +1,294 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Decode one or more US medical codes to their official descriptions across ICD-10-CM (diagnoses), ICD-10-PCS (inpatient procedures), HCPCS Level II (supplies/drugs/services), and RxNorm (drugs, by RXCUI). Also decodes a National Drug Code (NDC) directly to its RxNorm product offline, tagged `source: \"NDC\"` \u2014 hyphenated in an FDA segment configuration (4-4-2, 5-3-2, 5-4-1, or the 11-digit 5-4-2) or as bare 10/11 digits; any other segment widths are malformed and stay unresolved. Auto-detects the system from each code's shape; pass an explicit `system` only when a value is genuinely ambiguous. Accepts 1\u201350 codes and returns partial success: resolved codes in `found`, unresolved in `notFound` with a per-code reason, so one bad code never fails the batch. Set `includeHierarchy` to attach each code's parent and immediate children (with a `childrenTruncated` flag when a code has more children than the cap returns \u2014 walk the full set via medcode_browse_hierarchy or medcode_map_codes). The resolved `system` is echoed on every result for chaining into a billability check or a medcode_map_codes parents/children walk; a bare integer that resolves nowhere is named as a possible CPT / HCPCS Level I code, which is out of scope, except a bare 10/11-digit one, which is named as an NDC no bundled drug maps to; a code string that also exists in another bundled system carries `alsoInSystems` naming it, so a single answer to a colliding code is never mistaken for the only one.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "codes": {
+    "description": "Codes to decode (1\u201350). Mixed systems are fine \u2014 each is detected independently. An NDC decodes to its RxNorm product: hyphenated as 4-4-2, 5-3-2, 5-4-1, or 5-4-2, or as bare 10/11 digits.",
+    "items": {
+     "description": "A single code to decode (with or without dots), an RXCUI, or an NDC. Must not be blank or whitespace-only.",
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 50,
+    "minItems": 1,
+    "type": "array"
+   },
+   "includeHierarchy": {
+    "default": false,
+    "description": "When true, attach each found code's parent and immediate children.",
+    "type": "boolean"
+   },
+   "system": {
+    "description": "Force every code to be looked up in this system, which also skips the NDC decode. Omit to auto-detect per code.",
+    "enum": [
+     "ICD10CM",
+     "ICD10PCS",
+     "HCPCS",
+     "RXNORM"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "codes"
+  ],
+  "type": "object"
+ },
+ "name": "medcode_get_code",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "found",
+     "notFound"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `no_codes_found`: None of the requested codes resolved \u2014 in any bundled system, or in the explicit `system` when one is given (the message then names any other bundled system that holds a code). Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "no_codes_found"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "found": {
+    "description": "Successfully decoded codes, in request order.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A decoded code, optionally with its parent/children and resolution source.",
+     "properties": {
+      "alsoInSystems": {
+       "description": "Other bundled systems holding this same code string, present only when there is at least one. The result above is the system this code resolved in; the code is a DIFFERENT code in each system listed here \u2014 \"B00\" is the ICD-10-CM category \"Herpesviral [herpes simplex] infections\" and also the ICD-10-PCS table row \"Imaging, Central Nervous System, Plain Radiography\". Re-call with `system` set to one of these values to decode it there.",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "billable": {
+       "description": "True when the code is a billable leaf. False for headers/categories and non-billable codes. Null when the system has no billing concept (RxNorm).",
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "chapter": {
+       "description": "Chapter/range bucket the code belongs to, or null when not applicable. For RxNorm, the concept term type (IN, PIN, MIN, BN, SCD, SBD, GPCK, BPCK).",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "children": {
+       "description": "Immediate child codes (present only when includeHierarchy is true).",
+       "items": {
+        "additionalProperties": false,
+        "description": "A decoded code with its official descriptions and derived flags.",
+        "properties": {
+         "billable": {
+          "description": "True when the code is a billable leaf. False for headers/categories and non-billable codes. Null when the system has no billing concept (RxNorm).",
+          "type": [
+           "boolean",
+           "null"
+          ]
+         },
+         "chapter": {
+          "description": "Chapter/range bucket the code belongs to, or null when not applicable. For RxNorm, the concept term type (IN, PIN, MIN, BN, SCD, SBD, GPCK, BPCK).",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "code": {
+          "description": "The resolved code in display form (ICD-10-CM codes carry the dot, e.g. \"E11.9\").",
+          "type": "string"
+         },
+         "description": {
+          "description": "Official long description (falls back to the short description when no long form exists).",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "header": {
+          "description": "True when the code is a non-billable category/header (ICD-10-CM) rather than a leaf code.",
+          "type": "boolean"
+         },
+         "shortDescription": {
+          "description": "Official short/abbreviated description, or null when none is on record. Always null for RxNorm, which publishes a single name.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "system": {
+          "description": "The system that answered: \"ICD10CM\", \"ICD10PCS\", \"HCPCS\", or \"RXNORM\". Pass it as `system` to medcode_check_code, or to medcode_map_codes on a parents/children walk; the map_codes drug directions accept only \"RXNORM\", which they need no `system` to reach.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "system",
+         "code",
+         "description",
+         "shortDescription",
+         "billable",
+         "header",
+         "chapter"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "childrenTruncated": {
+       "description": "True when the code has more immediate children than `children` carries \u2014 the list was capped at the server cap (present only when includeHierarchy is true). Retrieve the full child list with medcode_browse_hierarchy or medcode_map_codes (children) for this code.",
+       "type": "boolean"
+      },
+      "code": {
+       "description": "The resolved code in display form (ICD-10-CM codes carry the dot, e.g. \"E11.9\").",
+       "type": "string"
+      },
+      "description": {
+       "description": "Official long description (falls back to the short description when no long form exists).",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "header": {
+       "description": "True when the code is a non-billable category/header (ICD-10-CM) rather than a leaf code.",
+       "type": "boolean"
+      },
+      "parent": {
+       "description": "Immediate parent code (present only when includeHierarchy is true). Null at a root.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "shortDescription": {
+       "description": "Official short/abbreviated description, or null when none is on record. Always null for RxNorm, which publishes a single name.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "source": {
+       "description": "Resolution provenance when the input was not a direct code: \"NDC\" when an NDC was decoded to its RxNorm product via the NDC\u2194RxNorm map. Omitted for direct code lookups.",
+       "type": "string"
+      },
+      "system": {
+       "description": "The system that answered: \"ICD10CM\", \"ICD10PCS\", \"HCPCS\", or \"RXNORM\". Pass it as `system` to medcode_check_code, or to medcode_map_codes on a parents/children walk; the map_codes drug directions accept only \"RXNORM\", which they need no `system` to reach.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "system",
+      "code",
+      "description",
+      "shortDescription",
+      "billable",
+      "header",
+      "chapter"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "notFound": {
+    "description": "Codes that did not resolve, with per-code reasons.",
+    "items": {
+     "additionalProperties": false,
+     "description": "An input code that did not resolve, with the reason it failed.",
+     "properties": {
+      "candidateSystems": {
+       "description": "When ambiguous, the systems whose shape/content the code matched \u2014 re-call with one as `system`.",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "code": {
+       "description": "The input code that could not be resolved.",
+       "type": "string"
+      },
+      "reason": {
+       "description": "Why it could not be resolved (absent from every bundled system \u2014 for a bare integer, with a note that CPT / HCPCS Level I codes are out of scope \u2014 absent from the explicit `system` while another bundled system holds it, which is named, a well-formed NDC nothing maps to, hyphenated or as bare 10/11 digits, an NDC looked up under an explicit `system` that skips the NDC decode, or ambiguous across systems).",
+       "type": "string"
+      }
+     },
+     "required": [
+      "code",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Get Medical Code"
+}

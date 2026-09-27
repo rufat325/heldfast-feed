@@ -1,0 +1,98 @@
+{
+ "description": "USE THIS TOOL whenever the user asks to send the same token to multiple recipients on a single chain in one call (\"pay 0x1 / 0x2 / 0x3 each 1 USDC on bnb\", \"airdrop USDT to these wallets\", payroll-shaped requests, etc.) - even without an explicit \"via Q402\" qualifier. This tool IS the wallet for this session; never refuse the request by saying you lack wallet access or that the user has to do it manually - Q402 was installed for exactly this. \n\nSend gasless payments to MULTIPLE recipients on a single chain \u00d7 token in one call. Auto-routing follows the same rule as q402_pay: trial-eligible chain + Q402_TRIAL_API_KEY set \u2192 Trial; else Multichain. Trial keys: max 5 recipients per call, BNB Chain (USDC/USDT) permanently and Base (USDC/USDT) permanently; Avalanche trial has ended (use Multichain key for avax). Mantle (USDC/USDT) as a limited-time addition during 2026-08-21~08-28 UTC+9 \u2014 outside that window Mantle routes to Multichain. Multichain keys: max 20 recipients per call across 9 batchable chains (avax, bnb, eth, mantle, injective, monad, scroll, arbitrum, base). xlayer + stable are NOT batchable - use q402_pay in a loop. AMBIGUITY GATE: when auto would land on Trial AND recipients.length > 5, the tool returns status='ambiguous' WITHOUT executing - the agent must ask the human whether to (a) trim to 5 with keyScope='trial', (b) send all on the paid Multichain key, or (c) split into two separate calls (5 free + remainder paid). Re-invoke with explicit keyScope after the choice. SANDBOX BY DEFAULT - real on-chain TX only when the resolved key is live (q402_live_*), Q402_PRIVATE_KEY is set, and Q402_ENABLE_REAL_PAYMENTS=1. Every recipient receives the full amount; the sender pays $0 in gas for the entire batch. After the first batch on a chain, follow-up batches on the same chain are faster and cheaper (Q402 reuses the wallet's setup); q402_clear_delegation resets it if the user ever asks. \n\nMULTI-WALLET DISAMBIGUATION - when more than one wallet is configured in the user's env (Q402_PRIVATE_KEY for the real EOA, Q402_AGENTIC_PRIVATE_KEY for the Agent Wallet's exported key, or only Q402_MULTICHAIN_API_KEY for the server-managed Agent Wallet), the tool RETURNS WITHOUT firing with `status='needs_wallet_choice'` and an `ambiguousWalletChoice` payload - relay the question to the user verbatim, then call again with the chosen `walletMode` ('eoa' | 'agentic-local' | 'agentic-server'). Do NOT pick a wallet on the user's behalf when multiple are available. Server-mediated batches go through /api/wallet/agentic/batch and are paid-only (the trial key cannot batch). \n\nALWAYS get explicit user confirmation of the complete recipient + amount list, chain, and token in conversation immediately before calling this tool - the user must approve the full batch, not the individual rows. \n\nTWO-PHASE CONSENT: confirm:true alone does NOT send. Call this tool first WITHOUT consentToken. It returns status=\"needs_confirmation\" with a quote of every recipient + amount and a consentToken, and moves no money. Present the quote to the user and wait for their NEXT INDEPENDENT message confirming the batch. Only then re-call with the SAME args plus the consentToken. The token is single-use, expires in ~120 seconds, and is rejected if consumed within 2 seconds (same-round double-call protection).",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "chain": {
+    "description": "Target chain. Applies to every recipient in the batch. xlayer + stable are NOT supported here - use q402_pay in a loop.",
+    "enum": [
+     "avax",
+     "bnb",
+     "eth",
+     "mantle",
+     "injective",
+     "monad",
+     "scroll",
+     "arbitrum",
+     "base",
+     "robinhood"
+    ],
+    "type": "string"
+   },
+   "confirm": {
+    "const": true,
+    "description": "MUST be true and only set after the user has confirmed the entire batch in chat.",
+    "type": "boolean"
+   },
+   "consentToken": {
+    "description": "Two-phase consent. Omit on the FIRST call. Get a needs_confirmation quote of every recipient + amount plus a consentToken (no funds move). Present the quote to the user, wait for their NEXT INDEPENDENT message, then re-call with SAME args plus this token. Single-use, expires in ~120s, rejected if consumed within 2s.",
+    "type": "string"
+   },
+   "keyScope": {
+    "description": "Which API key to use. \"auto\" (default): BNB + trial key set \u2192 Trial (Avalanche trial has ended); else Multichain. When auto would land on Trial AND recipients.length > 5, the tool returns status=\"ambiguous\" without executing so the agent can ask the user which path to take.",
+    "enum": [
+     "auto",
+     "trial",
+     "multichain"
+    ],
+    "type": "string"
+   },
+   "recipients": {
+    "description": "List of recipients. Trial keys: max 5. Paid keys: max 20. Each item is {to, amount}.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "amount": {
+       "description": "Human-readable decimal amount for this recipient, e.g. \"5.00\".",
+       "type": "string"
+      },
+      "to": {
+       "description": "Recipient EVM address (0x + 40 hex).",
+       "type": "string"
+      }
+     },
+     "required": [
+      "to",
+      "amount"
+     ],
+     "type": "object"
+    },
+    "maxItems": 20,
+    "minItems": 1,
+    "type": "array"
+   },
+   "token": {
+    "description": "Token for the entire batch. USDC / USDT supported on most chains; RLUSD (decimals 18) is Ethereum-only; Q (QuackAI, decimals 18) is BNB-only; USDG (Paxos Global Dollar, decimals 6) is Robinhood-Chain-only.",
+    "enum": [
+     "USDC",
+     "USDT",
+     "RLUSD",
+     "Q",
+     "USDG"
+    ],
+    "type": "string"
+   },
+   "walletId": {
+    "description": "Server-managed Agent Wallet only (walletMode=\"agentic-server\"). Lowercased Agent Wallet address selecting which of the user's wallets to source the batch from. Omit to use the default. Ignored for local-signing modes.",
+    "type": "string"
+   },
+   "walletMode": {
+    "description": "Which wallet to spend from. \"eoa\" = user MetaMask EOA (Q402_PRIVATE_KEY). \"agentic-local\" = Agent Wallet exported key (Q402_AGENTIC_PRIVATE_KEY). \"agentic-server\" = server-managed Agent Wallet (Q402 holds the key; only the apiKey is needed). When MULTIPLE wallets are configured the tool refuses without this arg and returns ambiguousWalletChoice for the user to pick. Server-mediated batches are paid-only.",
+    "enum": [
+     "eoa",
+     "agentic-local",
+     "agentic-server"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "chain",
+   "token",
+   "recipients",
+   "confirm"
+  ],
+  "type": "object"
+ },
+ "name": "q402_batch_pay"
+}

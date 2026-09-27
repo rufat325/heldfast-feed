@@ -1,0 +1,984 @@
+{
+ "annotations": {
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Revenue breakdown by dimension"
+ },
+ "description": "Consolidated breakdown tool. Pick `dimension`: 'channel' returns per-channel sessions/revenue/RPS plus engagement (visitors, avg dwell seconds, bounce rate) and bot_excluded_count (bot sessions removed from human metrics; a channel with sessions=0 but bot_excluded_count>0 is bot-only traffic, kept so it is not mistaken for 'no traffic') and \u2014 when ad spend is connected (Path B) \u2014 spend/ROAS/saturation; plus an 'Unattributed' row (is_unattributed=true) for purchase revenue not tied to any channel, with a revenue_breakdown summary (total_event_jpy/attributed_jpy/unattributed_jpy); pass attribution_model ('last_touch' default / 'first_touch' / 'linear' / 'time_decay') to switch how purchase revenue and orders are attributed across channels \u2014 same models as the dashboard's attribution selector; revenue_jpy/rps_jpy/orders/aov_jpy/cvr change, while sessions/engagement/bot/spend/ROAS are model-independent [ad-platform rows, is_ad_platform=true, are entirely model-independent, revenue_jpy and rps_jpy included \u2014 they are the spend-basis view, so on them revenue_jpy \u00f7 spend_jpy always equals roas, up to the rounding of roas to 2 decimals; under a non-default model their revenue_jpy/rps_jpy keep the database_statement_time_window boundary shown for roas rather than the reference_timestamp_window that presentation_hints lists for rows[*].revenue_jpy], so compare models to see e.g. how much an awareness channel gains under first_touch vs last_touch. each channel row also carries orders (purchase orders counted by our own tracker), aov_jpy and cvr derived from it \u2014 withheld as null below 10 orders, and always null on ad-platform / Unattributed rows; do NOT divide revenue_jpy by `conversions` to rebuild AOV, `conversions` is the ad platform's self-reported count, a different denominator. pass filter.channel to drill into that channel's campaigns (utm_campaign) with RPS/AOV/CVR \u2014 the value must be a channel name exactly as this tool returns it, case included (e.g. 'Google Ads', 'Meta', 'Criteo', 'Google\u691c\u7d22'), since the match is exact and a lowercase slug returns nothing. 'page' returns per-page pageviews/unique visitors/avg time/bounce plus the page `title` (what the page IS, so a row reads as an article name rather than a slug; null for pages with no visit since 2026-08-21 \u2014 it does not backfill) ranked by pageviews (limit default 20, max 200; query strings stripped, bots excluded; each row also carries GSC Google-search impressions/clicks/ctr/avg_position merged by normalized path \u2014 null when the page has no GSC row, and a DIFFERENT denominator from pageviews, see notes). 'session_attribute' returns the device / time-of-day (4h JST) / day-of-week (ISO) / new-vs-returning (with AOV) / country (top-15 by sessions + 'Other', ISO2 code, share_pct; from first-party session geo, 'Unknown' when IP unresolved) breakdowns in one call. site_id is OPTIONAL when OAuth-authenticated. Default period is the last 30 days; pass period='today'/'7d'/'90d' or a raw day count (1-365). To match the dashboard exactly, pass start_date and end_date (YYYY-MM-DD, calendar dates in the SITE's analysis time zone, both inclusive; end_date may be today) and optionally compare_start_date/compare_end_date (dimension='page' uses them for pageviews_change; default = the equal-length range right before); when given they replace period and period.timezone reports the site time zone. For dimension='channel' with dates, rows come from the dashboard's channel RPC and carry no spend/ROAS/ad-platform rows (see notes); path reflects whether the range has ad spend. `filter` only applies to dimension='channel'; `limit` only applies to dimension='page'. Pass optional country (ISO2, e.g. 'JP') and/or device ('mobile'/'desktop'/'tablet') to scope session-derived metrics across any dimension (omit = all). For dimension='channel' you can also pass visitor_type ('new'/'returning') to split the channel table by first-time vs returning visits \u2014 the split uses the DATE-based rule (no visit by the same visitor on an earlier JST day = new), the same rule the dashboard's KPI card uses, NOT the tracker's stored is_new_visitor flag; under it engagement fields, bot counts, ad-platform aggregate rows, Unattributed, and revenue_breakdown are omitted because their sources have no visitor_type dimension. Session rows keep ad_platform mapping metadata. Combining visitor_type with filter.channel is rejected with InvalidParams because campaign drill-down has no visitor-type axis. dimension='page' rows include pageviews_change (period-over-period % vs the previous equal-length window, null = new page).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "attribution_model": {
+    "default": "last_touch",
+    "enum": [
+     "last_touch",
+     "first_touch",
+     "linear",
+     "time_decay"
+    ],
+    "type": "string"
+   },
+   "compare_end_date": {
+    "$ref": "#/properties/start_date"
+   },
+   "compare_start_date": {
+    "$ref": "#/properties/start_date"
+   },
+   "country": {
+    "maxLength": 2,
+    "minLength": 2,
+    "type": "string"
+   },
+   "device": {
+    "enum": [
+     "mobile",
+     "desktop",
+     "tablet"
+    ],
+    "type": "string"
+   },
+   "dimension": {
+    "enum": [
+     "channel",
+     "page",
+     "session_attribute"
+    ],
+    "type": "string"
+   },
+   "end_date": {
+    "$ref": "#/properties/start_date"
+   },
+   "filter": {
+    "additionalProperties": false,
+    "properties": {
+     "channel": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "channel"
+    ],
+    "type": "object"
+   },
+   "limit": {
+    "maximum": 200,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "period": {
+    "anyOf": [
+     {
+      "const": "today",
+      "type": "string"
+     },
+     {
+      "const": "7d",
+      "type": "string"
+     },
+     {
+      "const": "30d",
+      "type": "string"
+     },
+     {
+      "const": "90d",
+      "type": "string"
+     },
+     {
+      "maximum": 365,
+      "minimum": 1,
+      "type": "integer"
+     }
+    ],
+    "default": "30d"
+   },
+   "site_id": {
+    "format": "uuid",
+    "type": "string"
+   },
+   "start_date": {
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   },
+   "visitor_type": {
+    "enum": [
+     "new",
+     "returning"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "dimension"
+  ],
+  "type": "object"
+ },
+ "name": "get_breakdown",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "assumptions": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "attribution_model": {
+    "enum": [
+     "last_touch",
+     "first_touch",
+     "linear",
+     "time_decay"
+    ],
+    "type": "string"
+   },
+   "basis": {
+    "type": "string"
+   },
+   "data_freshness": {
+    "additionalProperties": false,
+    "properties": {
+     "bot_classification_delay_definitions": {
+      "additionalProperties": false,
+      "properties": {
+       "burst_cluster_fallback": {
+        "type": "string"
+       },
+       "burst_cluster_primary": {
+        "type": "string"
+       },
+       "single_page_zero_dwell": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "burst_cluster_primary",
+       "burst_cluster_fallback",
+       "single_page_zero_dwell"
+      ],
+      "type": "object"
+     },
+     "bot_classification_delay_minutes_max_by_rule": {
+      "additionalProperties": false,
+      "properties": {
+       "burst_cluster_fallback": {
+        "const": 480,
+        "type": "number"
+       },
+       "burst_cluster_primary": {
+        "const": 20,
+        "type": "number"
+       },
+       "single_page_zero_dwell": {
+        "const": 480,
+        "type": "number"
+       }
+      },
+      "required": [
+       "burst_cluster_primary",
+       "burst_cluster_fallback",
+       "single_page_zero_dwell"
+      ],
+      "type": "object"
+     },
+     "delay_bounds_assume_scheduled_jobs_operational": {
+      "const": true,
+      "type": "boolean"
+     },
+     "generated_at": {
+      "format": "date-time",
+      "type": "string"
+     },
+     "may_change_because": {
+      "items": {
+       "enum": [
+        "live_ingestion",
+        "open_window",
+        "moving_window",
+        "delayed_bot_classification"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "provisional": {
+      "const": true,
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "generated_at",
+     "provisional",
+     "may_change_because",
+     "bot_classification_delay_minutes_max_by_rule",
+     "bot_classification_delay_definitions",
+     "delay_bounds_assume_scheduled_jobs_operational"
+    ],
+    "type": "object"
+   },
+   "dimension": {
+    "enum": [
+     "channel",
+     "page",
+     "session_attribute"
+    ],
+    "type": "string"
+   },
+   "filter": {
+    "additionalProperties": false,
+    "properties": {
+     "channel": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "channel"
+    ],
+    "type": "object"
+   },
+   "limitations": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "notes": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "path": {
+    "enum": [
+     "A",
+     "B"
+    ],
+    "type": "string"
+   },
+   "period": {
+    "additionalProperties": false,
+    "properties": {
+     "calendar_dates_touched": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "days": {
+      "type": "number"
+     },
+     "duration_hours": {
+      "type": "number"
+     },
+     "end": {
+      "type": "string"
+     },
+     "reference_bounds": {
+      "const": "start_inclusive_end_exclusive",
+      "type": "string"
+     },
+     "reference_end_at": {
+      "format": "date-time",
+      "type": "string"
+     },
+     "reference_start_at": {
+      "format": "date-time",
+      "type": "string"
+     },
+     "source_alignment": {
+      "enum": [
+       "exact",
+       "mixed"
+      ],
+      "type": "string"
+     },
+     "source_boundaries": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "applies_to": {
+         "items": {
+          "type": "string"
+         },
+         "minItems": 1,
+         "type": "array"
+        },
+        "boundary": {
+         "enum": [
+          "reference_timestamp_window",
+          "database_statement_time_window",
+          "jst_calendar_dates_from_reference_start",
+          "jst_calendar_dates_from_database_window_start",
+          "jst_calendar_dates_inclusive",
+          "account_registry_not_period_scoped",
+          "derived_previous_daily_window",
+          "derived_from_current_and_previous",
+          "defined_per_output_item"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "applies_to",
+        "boundary"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "start": {
+      "type": "string"
+     },
+     "timezone": {
+      "type": "string"
+     },
+     "window_type": {
+      "enum": [
+       "rolling",
+       "calendar_to_date",
+       "comparison",
+       "calendar_range"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "start",
+     "end",
+     "days",
+     "reference_start_at",
+     "reference_end_at",
+     "window_type",
+     "reference_bounds",
+     "timezone",
+     "duration_hours",
+     "calendar_dates_touched",
+     "source_alignment",
+     "source_boundaries"
+    ],
+    "type": "object"
+   },
+   "period_boundary_definitions": {
+    "additionalProperties": false,
+    "properties": {
+     "account_registry_not_period_scoped": {
+      "type": "string"
+     },
+     "database_statement_time_window": {
+      "type": "string"
+     },
+     "defined_per_output_item": {
+      "type": "string"
+     },
+     "derived_from_current_and_previous": {
+      "type": "string"
+     },
+     "derived_previous_daily_window": {
+      "type": "string"
+     },
+     "jst_calendar_dates_from_database_window_start": {
+      "type": "string"
+     },
+     "jst_calendar_dates_from_reference_start": {
+      "type": "string"
+     },
+     "jst_calendar_dates_inclusive": {
+      "type": "string"
+     },
+     "path_syntax": {
+      "const": "dot_path_with_array_wildcard",
+      "type": "string"
+     },
+     "reference_timestamp_window": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "path_syntax",
+     "reference_timestamp_window",
+     "database_statement_time_window",
+     "jst_calendar_dates_from_reference_start",
+     "jst_calendar_dates_from_database_window_start",
+     "jst_calendar_dates_inclusive",
+     "account_registry_not_period_scoped",
+     "derived_previous_daily_window",
+     "derived_from_current_and_previous",
+     "defined_per_output_item"
+    ],
+    "type": "object"
+   },
+   "presentation_hints": {
+    "additionalProperties": false,
+    "properties": {
+     "avoid_long_prose": {
+      "const": true,
+      "type": "boolean"
+     },
+     "prefer_compact_visual_summary": {
+      "const": true,
+      "type": "boolean"
+     },
+     "primary_metric": {
+      "type": "string"
+     },
+     "recommended_followup_tools": {
+      "items": {
+       "enum": [
+        "get_breakdown",
+        "get_priority_insights"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "recommended_sections": {
+      "items": {
+       "enum": [
+        "kpi_summary",
+        "trend",
+        "ad_spend_context",
+        "breakdown",
+        "priority_insights",
+        "recommended_actions"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "response_type": {
+      "enum": [
+       "analytics_summary",
+       "analytics_breakdown",
+       "priority_insights"
+      ],
+      "type": "string"
+     },
+     "show_breakdown": {
+      "type": "boolean"
+     },
+     "show_period_comparison": {
+      "type": "boolean"
+     },
+     "show_priority_insights": {
+      "type": "boolean"
+     },
+     "show_trend": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "response_type",
+     "primary_metric",
+     "show_period_comparison",
+     "show_trend",
+     "show_breakdown",
+     "show_priority_insights",
+     "prefer_compact_visual_summary",
+     "avoid_long_prose",
+     "recommended_followup_tools",
+     "recommended_sections"
+    ],
+    "type": "object"
+   },
+   "previous_period": {
+    "$ref": "#/properties/period"
+   },
+   "revenue_breakdown": {
+    "additionalProperties": false,
+    "properties": {
+     "attributed_jpy": {
+      "type": "number"
+     },
+     "total_event_jpy": {
+      "type": "number"
+     },
+     "unattributed_jpy": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "total_event_jpy",
+     "attributed_jpy",
+     "unattributed_jpy"
+    ],
+    "type": "object"
+   },
+   "rows": {
+    "anyOf": [
+     {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "aov_jpy": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "avg_dwell_seconds": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "bot_excluded_count": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "bounce_rate_pct": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "channel": {
+         "type": "string"
+        },
+        "clicks": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "conversion_value_jpy": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "conversions": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "cvr": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "impressions": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "is_unattributed": {
+         "type": "boolean"
+        },
+        "orders": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "revenue_jpy": {
+         "type": "number"
+        },
+        "roas": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "rps_jpy": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "saturation_pct": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "sessions": {
+         "type": "number"
+        },
+        "spend_jpy": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "visitors": {
+         "type": [
+          "number",
+          "null"
+         ]
+        }
+       },
+       "required": [
+        "channel",
+        "sessions",
+        "revenue_jpy",
+        "rps_jpy",
+        "visitors",
+        "avg_dwell_seconds",
+        "bounce_rate_pct",
+        "bot_excluded_count",
+        "orders",
+        "aov_jpy",
+        "cvr",
+        "spend_jpy",
+        "impressions",
+        "clicks",
+        "conversions",
+        "conversion_value_jpy",
+        "roas",
+        "saturation_pct"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "aov_jpy": {
+         "type": "number"
+        },
+        "campaign": {
+         "type": "string"
+        },
+        "cvr": {
+         "type": "number"
+        },
+        "revenue_jpy": {
+         "type": "number"
+        },
+        "rps_jpy": {
+         "type": "number"
+        },
+        "sessions": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "campaign",
+        "sessions",
+        "revenue_jpy",
+        "rps_jpy",
+        "aov_jpy",
+        "cvr"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "avg_position": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "avg_time_on_page_seconds": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "bounce_rate": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "clicks": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "ctr": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "impressions": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "page": {
+         "type": "string"
+        },
+        "pageviews": {
+         "type": "number"
+        },
+        "pageviews_change": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "title": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "unique_visitors": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "page",
+        "pageviews",
+        "unique_visitors",
+        "avg_time_on_page_seconds",
+        "bounce_rate",
+        "pageviews_change",
+        "title",
+        "impressions",
+        "clicks",
+        "ctr",
+        "avg_position"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    ]
+   },
+   "session_attributes": {
+    "additionalProperties": false,
+    "properties": {
+     "countries": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "country": {
+         "type": "string"
+        },
+        "name": {
+         "type": "string"
+        },
+        "revenue": {
+         "type": "number"
+        },
+        "rps": {
+         "type": "number"
+        },
+        "sessions": {
+         "type": "number"
+        },
+        "share_pct": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "country",
+        "name",
+        "sessions",
+        "revenue",
+        "rps",
+        "share_pct"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "dayofweek": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "day": {
+         "type": "string"
+        },
+        "iso_dow": {
+         "type": "number"
+        },
+        "revenue": {
+         "type": "number"
+        },
+        "rps": {
+         "type": "number"
+        },
+        "sessions": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "day",
+        "iso_dow",
+        "sessions",
+        "revenue",
+        "rps"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "devices": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "cvr": {
+         "type": "number"
+        },
+        "device": {
+         "type": "string"
+        },
+        "revenue": {
+         "type": "number"
+        },
+        "rps": {
+         "type": "number"
+        },
+        "sessions": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "device",
+        "sessions",
+        "revenue",
+        "rps",
+        "cvr"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "timeslots": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "hour_start": {
+         "type": "number"
+        },
+        "revenue": {
+         "type": "number"
+        },
+        "rps": {
+         "type": "number"
+        },
+        "sessions": {
+         "type": "number"
+        },
+        "slot": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "slot",
+        "hour_start",
+        "sessions",
+        "revenue",
+        "rps"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "visitor_types": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "aov": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "cvr": {
+         "type": "number"
+        },
+        "is_new_visitor": {
+         "type": "boolean"
+        },
+        "revenue": {
+         "type": "number"
+        },
+        "rps": {
+         "type": "number"
+        },
+        "sessions": {
+         "type": "number"
+        },
+        "type": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "is_new_visitor",
+        "sessions",
+        "revenue",
+        "rps",
+        "cvr",
+        "aov"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "devices",
+     "timeslots",
+     "dayofweek",
+     "visitor_types",
+     "countries"
+    ],
+    "type": "object"
+   },
+   "site_id": {
+    "type": "string"
+   },
+   "total_pages": {
+    "type": "number"
+   },
+   "total_pageviews": {
+    "type": "number"
+   },
+   "truncated": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "omitted_pages": {
+        "type": "number"
+       },
+       "omitted_pageviews": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "omitted_pages",
+       "omitted_pageviews"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   }
+  },
+  "required": [
+   "site_id",
+   "dimension",
+   "period",
+   "data_freshness",
+   "period_boundary_definitions",
+   "presentation_hints"
+  ],
+  "type": "object"
+ },
+ "title": "Revenue breakdown by dimension"
+}
