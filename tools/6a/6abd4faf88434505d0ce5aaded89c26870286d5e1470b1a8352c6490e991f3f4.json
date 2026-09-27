@@ -1,0 +1,115 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Manage Attachments"
+ },
+ "description": "Binary attachments (images, PDFs, audio, video) referenced from event payloads and input_data via `format: homespun-attachment-id`. Actions: upload, fetch, presign, finalize, download, show, list, delete, mint_token, revoke_token, list_tokens.\n\nChoosing an upload path matters for cost. An inline upload with `content_base64` carries the bytes in the tool-call arguments, so they enter the model context at a token cost proportional to file size, paid again on every retry; a few-hundred-KB image is already expensive. Two paths avoid that entirely: fetch, when the bytes are reachable at a URL, and presign plus finalize, when the client can PUT the raw bytes out of band. Inline upload suits small assets and clients that have neither a URL nor an out-of-band PUT.\n\nfetch takes { source_url (https), scope } and the relay downloads the URL itself behind an SSRF guard (https only, no private, loopback or metadata hosts, DNS pinned, redirects refused, size-capped and timed out), then runs the same byte-sniff, allowlist, size, quota and scan checks as any upload. It works on any storage backend. upload takes either `content_base64` (base64 bytes, no filesystem) or `file_path` (an absolute path read on the relay host, so it only applies when the file is local to the relay). presign plus finalize is token-free: presign with { mime, size, sha256, scope } returns { put_url, attachment_id }, the caller PUTs the raw bytes to put_url over plain HTTP out of band, then finalize with the attachment_id. At finalize the relay re-reads the stored bytes, sniffs the real type, and enforces the same allowlist, size, sha256, quota and scan checks, so a presign that misstates its mime is caught and never served inline. The presigned path requires the Azure storage backend; a filesystem-backed relay returns a clear not-supported error and fetch or inline upload apply there instead. download writes to an absolute out_path or returns base64. An upload is scoped to agent (the default, reusable) or app. mint_token returns a /b/<token> capability URL, shown once, that a browser can GET without the caller's API key.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "action": {
+    "description": "Binary attachment operations. The upload path affects token cost: `fetch` and presign plus finalize keep the bytes out of the model context entirely, while upload with `content_base64` carries them in the tool-call arguments at a cost proportional to file size, paid again on every retry. fetch takes { source_url, scope } and the relay downloads the bytes itself (https only, SSRF-guarded), running the same sniff, allowlist, size, quota and scan checks as any upload. upload takes `content_base64` (base64 bytes, no filesystem) or `file_path` (absolute, read on the relay host), scoped agent or app. presign plus finalize is three steps: presign with { mime, size, sha256, scope }, PUT the bytes to put_url out of band, then finalize, which re-sniffs and re-checks them. download fetches bytes by attachment_id to an absolute out_path or returns base64. show returns metadata only. list returns the agent's attachments. delete is a soft-delete. mint_token mints a /b/<token> capability URL, returned once. revoke_token and list_tokens manage those tokens.",
+    "enum": [
+     "upload",
+     "fetch",
+     "presign",
+     "finalize",
+     "download",
+     "show",
+     "list",
+     "delete",
+     "mint_token",
+     "revoke_token",
+     "list_tokens"
+    ],
+    "type": "string"
+   },
+   "app_id": {
+    "description": "Required when scope=app.",
+    "type": "string"
+   },
+   "attachment_id": {
+    "description": "Attachment id. Required for download/show/delete/mint_token/revoke_token/list_tokens.",
+    "type": "string"
+   },
+   "content_base64": {
+    "description": "upload: the file bytes as base64, sent inline with no filesystem access. The base64 rides in the tool-call arguments and enters the model context, costing tokens proportional to file size; a few-hundred-KB image is already expensive, and the cost repeats on every retry. presign plus finalize avoids that for any real image or media whenever the client can do an out-of-band HTTP PUT, which leaves `content_base64` suited to small assets such as a tiny icon, and to clients that cannot PUT out of band. If both `content_base64` and `file_path` are given, `content_base64` wins. The relay sniffs the real type and enforces the same size, allowlist and quota checks as a file upload.",
+    "type": "string"
+   },
+   "cursor": {
+    "description": "list pagination cursor.",
+    "type": "string"
+   },
+   "file_path": {
+    "description": "upload: absolute path to a file read on the server host running this MCP connector (the relay), not the calling agent's machine. It resolves only when the file is local to the relay (e.g. a locally-run CLI); a hosted or remote agent supplies the bytes as `content_base64` instead.",
+    "type": "string"
+   },
+   "filename": {
+    "description": "upload: display filename (defaults to the file's basename).",
+    "type": "string"
+   },
+   "limit": {
+    "description": "list page size (1..100).",
+    "exclusiveMinimum": 0,
+    "maximum": 100,
+    "type": "integer"
+   },
+   "mime": {
+    "description": "upload/presign: advisory Content-Type. The relay byte-sniffs the actual bytes and stores/serves that sniffed type regardless (a lying mime is caught, never served inline). Required for presign (scopes the upload URL + fails fast against the allowlist).",
+    "type": "string"
+   },
+   "once": {
+    "description": "mint_token: token self-deletes on first GET.",
+    "type": "boolean"
+   },
+   "out_path": {
+    "description": "download: absolute path to write the bytes to. If omitted, the bytes are returned base64-encoded in the result.",
+    "type": "string"
+   },
+   "scope": {
+    "description": "upload scope (default agent).",
+    "enum": [
+     "agent",
+     "app"
+    ],
+    "type": "string"
+   },
+   "sha256": {
+    "description": "presign: the hex SHA-256 (64 chars) of the exact bytes you will PUT. Committed at presign and re-verified against the uploaded bytes at finalize.",
+    "type": "string"
+   },
+   "size": {
+    "description": "presign: the exact byte length you will PUT. Committed at presign and re-verified against the uploaded bytes at finalize.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "source_url": {
+    "description": "fetch: an https URL the relay downloads server-side, so the bytes do not enter the model context and cost no tokens. SSRF-guarded: https only, no private, loopback, link-local or metadata hosts, DNS pinned, redirects refused, size-capped and timed out. The downloaded bytes run the same byte-sniff, allowlist, size, quota and scan checks as any upload. This and presign plus finalize are the zero-context paths for real images and media.",
+    "type": "string"
+   },
+   "token_id": {
+    "description": "revoke_token: the token id to revoke.",
+    "type": "string"
+   },
+   "ttl_seconds": {
+    "description": "mint_token: per-token TTL (clamped by scope default).",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "action"
+  ],
+  "type": "object"
+ },
+ "name": "attachments",
+ "title": "Manage Attachments"
+}
