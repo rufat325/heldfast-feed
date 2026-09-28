@@ -1,0 +1,54 @@
+{
+ "_meta": {
+  "ui": {
+   "visibility": [
+    "model",
+    "app"
+   ]
+  }
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false
+ },
+ "description": "Puts a VIDEO OR IMAGE FILE FROM THE USER'S OWN MACHINE onto their aicut account, so the generation tools can use it. Returns an upload target in two forms - a ready-to-run curl command for you, and a `browser_upload_url` for the user - then you call `confirm_upload`. IF THE USER IS LOOKING AT A RENDERED CARD, YOU ARE ON THE WRONG TOOL. In claude.ai, Claude Desktop or the mobile apps, call `upload_media_widget` instead and stop - it opens a file picker inside the conversation, the person presses a button, and the file is on their account with no link, no page and nothing for you to paste. This tool is for a caller that has no card surface: a terminal, a script, a shell agent, an automation. Reaching for it in a card-capable client is how the user ends up reading 900 characters of base64 in the chat. WHEN: the user refers to a video or image file on their computer - 'upscale the clip in my Downloads folder', 'extend that video I just recorded', 'make my character dance like this clip', 'upscale this photo', 'use that picture as the character'. Every other tool takes a URL, so without this a local file cannot be used at all. WHEN NOT: the file is already a URL. A url an earlier aicut generation returned, or any public https url, goes straight into the tool that needs it - `generate_image`, `generate_video`, `upscale_image`, `upscale_video`, `extend_video`, `motion_control` all fetch an external url themselves. Uploading it first would store the same bytes twice against the account's allowance. TWO ROUTES, AND YOU PICK BEFORE YOU START. The `curl_template` needs your environment to reach the storage host named in `upload.host` on the open internet - a shell alone is not enough. IF YOU ARE IN A SANDBOXED CODE ENVIRONMENT (claude.ai's code sandbox is the known case), YOU DO NOT HAVE THAT: its network allowlist is package registries only, so the curl dies with HTTP code `000` - no response at all, because the connection never happens - and no retry, no longer timeout and no different host will change it. In that case DO NOT RUN THE CURL. Give the user the `browser_upload_url` from the response instead, as a link, and say in one line that opening it lets their own browser send the file. Their browser has no allowlist; yours does. Then wait for them to say it is done and call `confirm_upload`. If you are in Claude Code, Cursor or any terminal on the user's own machine, run the curl - that is the faster route and it is what this tool is for. Never report an upload that did not happen. THE SEQUENCE, ALL OF IT: (1) call `upload_media` with the file's content type and its size in bytes; (2) MOVE THE BYTES, by exactly one of the two routes above - either run the `curl_template`, substituting the real path for `<FILE_PATH>` (it prints the response body and then an HTTP status; 204 with an empty body is success), or hand the user `browser_upload_url` and wait; (3) call `confirm_upload` with the `id`. Only after step 3 is the file usable. The `url` is handed back by BOTH steps, but it is not real media until the confirm returns - never pass it to a generation tool before then. ABOUT `browser_upload_url`: it opens a small aicut page that already holds this one upload target, so the user only picks the file - there is nothing for them to paste and no login. It is good for one file, of the type and size this call declared, for 15 minutes; it is time-bounded rather than single-use, so a failed pick can simply be retried on the same page. It grants nothing but writing that one file - it carries no API key and cannot spend the account. Treat it as private to this user: it is a write capability on their own storage for those 15 minutes. PUT IT IN A MARKDOWN LINK AND NEVER ON THE PAGE AS TEXT. It is roughly 900 characters, almost all of it base64, and a person should never see that: write it as `[Open the upload page](<the url>)` with short anchor text, exactly once, and never inside a code block, a quote, or a bare paste. THE WHOLE URL GOES INSIDE THE PARENTHESES - everything after the `#` IS the upload, so a truncated or re-wrapped url is a dead page - but the reader sees six words. DO NOT REPEAT IT. If they have not finished yet, say so in one line without the link; restating it is what turned one upload into a wall of base64 the owner reported. And do not call `upload_media` again to get another one: a second call inside the same 15 minutes hands back THE SAME target, so a re-mint buys nothing and a lapsed one is the only reason to ask for a new target at all. SUBSTITUTING THE PATH IS YOUR RESPONSIBILITY, and it is a shell command on the USER'S OWN MACHINE. `<FILE_PATH>` sits inside single quotes, so an ordinary path - spaces included - can be pasted as-is. A path containing a SINGLE QUOTE would break out of them and run whatever follows as a command, which is a real risk for a file the user downloaded rather than named. If the path contains a single quote, quote it properly for the shell yourself, or move the file somewhere with a plain name. Never paste a path you have not looked at. ACCEPTED TYPES AND THEIR TWO DIFFERENT CEILINGS: `video/mp4` and `video/quicktime` (.mov) up to 50 MB; `image/png`, `image/jpeg` and `image/webp` up to 20 MB. Declaring more `bytes` than the ceiling for that type is refused before anything is signed. WEBM IS NOT ACCEPTED: aicut measures a clip's length from its container to price transforms, and it cannot read WebM - re-encode to MP4 (`ffmpeg -i in.webm -c:v libx264 -c:a aac out.mp4`) and upload that. AVIF, HEIC, TIFF AND GIF ARE NOT ACCEPTED for the same reason on the picture side - a photo's dimensions are read from its header to price an upscale - so re-encode one of those to PNG or JPEG. `bytes` MUST BE THE FILE'S REAL SIZE. Read it off disk (`stat -f%z <file>` on macOS, `stat -c%s <file>` on Linux) - never estimate it. It is signed into the upload as a hard limit the storage itself enforces, so a file bigger than the number you give is rejected by the upload with an `EntityTooLarge` error, and it is also what is charged against the account's daily media allowance - so a number far larger than the file wastes that allowance for nothing. COSTS NO TOKENS. What it does consume is the account's daily media allowance, which counts both the number of files and their total size over a rolling 24 hours. CALLING THIS TWICE FOR ONE FILE IS FREE AND POINTLESS. The target expires 15 minutes after this call, and inside that window a second call declaring the SAME content type and the SAME byte count hands back the SAME `id` and the SAME target - it is not a fresh reservation and it does not spend a second slot of the daily allowance. So a retry after a failed upload costs nothing, and it also achieves nothing: the target you already have is the one you get. Only call again once the 15 minutes have actually lapsed, at which point the old id is dead and a genuinely new reservation is made. A DIFFERENT file - different type or different size - is always a new target, as it must be, because the size is signed as a hard ceiling. OUTPUT: this returns JSON for you to read. `browser_upload_url` is the ONE url that may reach the conversation, only on the browser route, and only ever as the target of a markdown link with short anchor text - see the rule above. `url` is the opposite: it is where the file WILL live and it serves nothing until `confirm_upload` returns, so never show it here and never pass it on. Do not paste the raw JSON, the reservation id, the signed fields, or the curl command into the conversation.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "bytes": {
+    "description": "The file's size in bytes, read off disk. Signed into the upload as its hard size limit AND charged against the daily media allowance - so it must be the real number, not a guess. The ceiling depends on the type: 50 MB for a video, 20 MB for an image.",
+    "exclusiveMinimum": 0,
+    "type": "integer"
+   },
+   "content_type": {
+    "description": "The file's real type. Take it from the file itself, not from its name - a `.mp4` extension on a WebM file, or a `.png` name on a JPEG, is rejected when the upload is confirmed, because the contents are checked against this, and the refusal names what the file actually is.",
+    "enum": [
+     "video/mp4",
+     "video/quicktime",
+     "image/png",
+     "image/jpeg",
+     "image/webp",
+     "image/jpg"
+    ],
+    "type": "string"
+   },
+   "file_name": {
+    "description": "The local file name, for your own bookkeeping across the two steps. It does not influence where the file is stored and is not kept.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "content_type",
+   "bytes"
+  ],
+  "type": "object"
+ },
+ "name": "upload_media",
+ "title": "Upload a file from this machine"
+}

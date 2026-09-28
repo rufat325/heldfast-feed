@@ -1,0 +1,739 @@
+{
+ "_meta": {
+  "ui": {
+   "resourceUri": "ui://well/widget/f9b427b8"
+  },
+  "ui/resourceUri": "ui://well/widget/f9b427b8"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Preview invoice fetch"
+ },
+ "description": "Preview which vendors a past period is still missing supplier invoices from, where each one's invoices are, and which route would obtain them. Use it for \"what would happen if I fetched <month>'s missing invoices?\" before anything runs.\n\nName the period ONE way: `{ calendar_year, calendar_month }` (the calendar month, e.g. June 2026 \u2192 2026, 6), `{ fiscal_year, fiscal_period }`, or `periods: [{ calendar_year, calendar_month }, \u2026]` for SEVERAL months in one call (1-12), or name NO period at all to use the months the user selected on the period card in this conversation (well_list_periods \u2192 the user clicks \u2192 well_switch_workspace records them). With no period named and no months selected, the call refuses and tells you to run the period step first. Every month must have ended: a current or future month is refused, and so is the adjustment period (13). Duplicate months are refused.\n\nCOST: there is no batch endpoint, so each named month is a separate read of that month's spend. Ask for the months the user actually named, not a whole year \"to be safe\".\n\nReturns `vendors` \u2014 EVERY vendor of the rows THIS CALL covers, one entry per supplier portal ACROSS the whole window (one portal is one place to go, however many months it spans), or one per counterparty where no portal matched: `name`, `provider_id`, `domain`, `url` and `url_source`, the `counterparties` it covers (each tagged with `calendar_year`, `calendar_month`, `period_label` and `suggested_route`), `tx_count`, `base_total_amount` in `base_currency`. THE ROUTE NEVER FILTERS `vendors`: a vendor Well has no published flow and no connector for is listed exactly like the rest, with its route on its counterparties. WHAT the call covers is a separate question, and two fields answer it: a counterparty pick narrows the rows to the picked companies (see `scoped_to_selected_counterparties` below), and a `hints` line names any group the projection could produce no vendor for. So `vendors` is every vendor of the rows THIS CALL covers, which is the whole period only when neither of those is present. `upload_rows` (the user must supply the file) and `connect_rows` (connecting the named service fetches it) carry the same counterparties again, split by route, with the same month tags.\n\nWHERE A VENDOR'S INVOICES ARE: `url_source` says how much `url` knows. \"blueprint\" is the page Well's own published flow opens, so it IS the billing page. \"enrichment\" is the vendor's front door \u2014 the catalog entry address or the company's domain \u2014 so the user still has to find the invoices on it. \"none\" means no address at all and `url` is null. Never present an \"enrichment\" address as the invoice page. `url_source` informs and gates nothing: an \"enrichment\" vendor is offered for the pick, and carried on the link, exactly like a \"blueprint\" one.\n\nROUTES DESCRIBE HOW, NOT WHETHER: a counterparty Well holds a connector for is in `connect_rows` AND under its vendor, where its entry reads `suggested_route: \"connect\"` and `connect_routed_counterparties` counts it. Connecting is the route to suggest; the agent run stays available so the user has a way through when the connector does not work for them. A counterparty on `suggested_route: \"upload\"` is in `upload_rows` too. Never present the same counterparty as two separate gaps \u2014 it is one gap seen twice, so count it once.\n\n`counts` covers the rows this call actually read, and every field states its own unit: `vendors` and `agents` count PORTALS, `agent_tx` counts TRANSACTIONS, `upload` and `connect` count COUNTERPARTY ROWS \u2014 one counterparty per month. They are not summable with each other: never add them into one total, and `vendors` is never the sum of the other four, because every counterparty reaches the vendor list whichever route it takes. A total over the whole window counts the DISTINCT counterparties named in `vendors`, and a counterparty appearing again in `upload_rows` or `connect_rows` is the same gap seen by its route. Across several months a counterparty counts once per month in `upload` and `connect`, while `vendors` and `agents` count each portal once for the window, so neither is the sum of the months' own. WHEN `scoped_to_selected_counterparties` IS PRESENT, `vendors`, `upload_rows`, `connect_rows`, `counts` AND `months` COVER ONLY THE PICKED COUNTERPARTIES, NOT THE WHOLE WINDOW: for the months the pick bounded, every row and every figure here is built from the picked rows alone, and `selection_scope` says how many counterparty rows it left out. Never report those rows as every vendor the period is missing an invoice from, and never report those counts as the period's own \u2014 state the truncation and its size, and point at `well_list_missing_invoices` for a fresh card that drops the pick. Without that field the counts cover the whole window. `months` gives each month's own counts; `periods_covered` names the months. A sum is `null` when any member of it had no FX rate, never a partial figure. The single-month fields `calendar_year`, `calendar_month`, `fiscal_year`, `fiscal_period` and `period_label` appear ONLY when the call named exactly one month.\n\nTHIS TOOL LAUNCHES NOTHING. It creates no task, starts no run, and fetches no invoice \u2014 `mode` is always `\"preview\"` and `nothing_launched` is always `true`. Launching the agents is NOT available on this surface, so present the preview as information and do not promise to run it.\n\n`collect_url` is the ONE link to hand the user: the `/collect` page, which asks the Well browser extension to run these portals. It names each portal by its `provider_id`, and that id is the only field that decides which portal runs \u2014 a name or an address in the link labels a row and nothing more. Give the link as returned and never build one or edit its parameters. The page starts nothing until the user acts on it, it reports which portals the extension accepted, and it never reports that an invoice arrived. The link also names this workspace, and that name gates WHO may act on the link: the page starts nothing until the reader is signed in to Well as a member of it. It does NOT choose where the invoices land \u2014 the extension files into whichever workspace it is signed in to \u2014 so never tell the user the link picks the destination. THE LINK CARRIES EVERY VENDOR THAT HAS AN ADDRESS, whatever its `url_source` and whether or not Well holds a published flow for it. Deciding what a vendor's invoices need once the page opens belongs to the app and the extension, not to this read, so `url_source` labels a vendor and never withholds it. Two things still keep a vendor off the link: no address at all, and no `provider_id` the link can address. `collect_url` is null when the window holds no addressed vendor at all; `collect_url_omits` names the vendors a full window pushed past the 25-portal ceiling, and `collect_url_unaddressable` names the ones the link cannot name. A vendor on either list is still missing its invoice, so say the link cannot carry it, and offer the upload or the connect route from `upload_rows` and `connect_rows` instead. Never say it has nothing outstanding.\n\nOnly CATEGORIZED expense transactions are considered \u2014 uncategorized spend is not counted, so poor categorization coverage under-reports what an agent run would cover; disclose the `hints`.\n\nCall this directly \u2014 no other tool call is needed first (workspace is resolved from the caller's authorized token, same as every other well_* tool).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "calendar_month": {
+    "description": "Calendar month, 1 = January \u2026 12 = December.",
+    "maximum": 12,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "calendar_year": {
+    "description": "Calendar year, e.g. 2026.",
+    "maximum": 2100,
+    "minimum": 2000,
+    "type": "integer"
+   },
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "counterparty_ids": {
+    "description": "Scope the preview to these counterparties, copied from the `company_id` of the missing-invoices rows. It REPLACES the pick a card recorded in this session and bounds every month this call reads, so `scoped_to_selected_counterparties` and `selection_scope` report it the same way. Omit to cover every counterparty of the months read, or to honour the session's own pick where one exists.",
+    "items": {
+     "format": "uuid",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+     "type": "string"
+    },
+    "maxItems": 200,
+    "minItems": 1,
+    "type": "array"
+   },
+   "fiscal_period": {
+    "description": "Fiscal period, 1-12. The adjustment period (13) is refused: it has no calendar month.",
+    "maximum": 13,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "fiscal_year": {
+    "description": "Fiscal year (the calendar year the workspace's fiscal year STARTED in).",
+    "maximum": 2100,
+    "minimum": 2000,
+    "type": "integer"
+   },
+   "periods": {
+    "description": "Several calendar months in one call, 1-12. Each month costs one separate read, so name only the months you need. Duplicates are refused.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "calendar_month": {
+       "description": "Calendar month, 1 = January \u2026 12 = December.",
+       "maximum": 12,
+       "minimum": 1,
+       "type": "integer"
+      },
+      "calendar_year": {
+       "description": "Calendar year, e.g. 2026.",
+       "maximum": 2100,
+       "minimum": 2000,
+       "type": "integer"
+      }
+     },
+     "required": [
+      "calendar_year",
+      "calendar_month"
+     ],
+     "type": "object"
+    },
+    "maxItems": 12,
+    "minItems": 1,
+    "type": "array"
+   },
+   "workspace_id": {
+    "description": "Target workspace. This read reports one workspace's own data. Omit it and the token's primary workspace answers, which may not be the one you mean; the result names the workspace that did.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "well_preview_invoice_fetch",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "base_currency": {
+    "type": "string"
+   },
+   "calendar_month": {
+    "description": "Present only when the call named exactly one month.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "calendar_year": {
+    "description": "Present only when the call named exactly one month.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "collect_url": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "The `/collect` entry that hands these vendors to the Well browser extension, naming each one by its `provider_id` and naming this workspace as the link's authorization scope. The page starts nothing until the reader is signed in to Well as a member of it. It carries every vendor that has an address, whatever that address's `url_source`, because what a vendor's invoices need once the page opens is the app's and the extension's decision rather than this read's. Null in three unrelated cases: no vendor of the window carries an address, none of the addressed vendors carries an id the link can address, or this read could not name the workspace the link authorizes. The hints name which one, and only the first is a verdict on the vendors. Opening it starts nothing on its own: the user acts on the page."
+   },
+   "collect_url_omits": {
+    "description": "The portals `collect_url` does NOT name, because one link carries at most 25. Present only when the ceiling left some out. Report those vendors as outside the link \u2014 it starts nothing for them.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "provider_id": {
+       "type": "string"
+      },
+      "provider_name": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "provider_id",
+      "provider_name"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "collect_url_unaddressable": {
+    "description": "The vendors `collect_url` does not name: the vendor carries no address at all, or it carries one but no catalog id the link can address. A missing published flow is NOT among the reasons, because the link takes an enrichment address exactly like a blueprint one. Present only when the window holds some. They are real gaps and they are listed in `vendors`; report them as vendors the link cannot carry, never as absent.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "connect_rows": {
+    "description": "Counterparties whose invoice arrives by connecting a service.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "base_total_amount": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Sum in base_currency; null when an FX rate was missing for any transaction in the sum."
+      },
+      "calendar_month": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "calendar_year": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "matched_provider_name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "The service to connect, when the read matched one."
+      },
+      "name": {
+       "type": "string"
+      },
+      "period_label": {
+       "description": "The month this row belongs to, e.g. \"June 2026\".",
+       "type": "string"
+      },
+      "tx_count": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      }
+     },
+     "required": [
+      "name",
+      "calendar_year",
+      "calendar_month",
+      "period_label",
+      "tx_count",
+      "base_total_amount",
+      "matched_provider_name"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "counts": {
+    "additionalProperties": false,
+    "description": "The whole window's counts. `vendors` and `agents` count the distinct portals across it, so neither is the sum of the months' own. `upload` and `connect` add each month's counterparty rows, so a counterparty missing an invoice in two of the months read counts once per month.",
+    "properties": {
+     "agent_tx": {
+      "description": "Transactions those agent runs would fetch.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "agents": {
+      "description": "Portals Well holds a published flow for, one per distinct provider, the connector-covered ones included. It marks the shorter route and is NOT the link's own set: `collect_url` names every addressed vendor it can name by id, so it routinely carries portals this count leaves out.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "connect": {
+      "description": "Counterparties whose suggested route is connecting a service.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "upload": {
+      "description": "Counterparties whose invoice only a manual upload can obtain.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "vendors": {
+      "description": "Vendors the card lists \u2014 one per distinct portal, or per counterparty where none matched.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "vendors",
+     "agents",
+     "agent_tx",
+     "upload",
+     "connect"
+    ],
+    "type": "object"
+   },
+   "error": {
+    "type": "string"
+   },
+   "fiscal_period": {
+    "description": "Present only when the call named exactly one month.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "fiscal_year": {
+    "description": "Present only when the call named exactly one month.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "hints": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "mode": {
+    "const": "preview",
+    "type": "string"
+   },
+   "months": {
+    "description": "Per-month route counts, oldest first.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "calendar_month": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "calendar_year": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "counts": {
+       "additionalProperties": false,
+       "properties": {
+        "agent_tx": {
+         "description": "Transactions those agent runs would fetch.",
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "agents": {
+         "description": "Portals Well holds a published flow for, one per distinct provider, the connector-covered ones included. It marks the shorter route and is NOT the link's own set: `collect_url` names every addressed vendor it can name by id, so it routinely carries portals this count leaves out.",
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "connect": {
+         "description": "Counterparties whose suggested route is connecting a service.",
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "upload": {
+         "description": "Counterparties whose invoice only a manual upload can obtain.",
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "vendors": {
+         "description": "Vendors the card lists \u2014 one per distinct portal, or per counterparty where none matched.",
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        }
+       },
+       "required": [
+        "vendors",
+        "agents",
+        "agent_tx",
+        "upload",
+        "connect"
+       ],
+       "type": "object"
+      },
+      "fiscal_period": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "fiscal_year": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "period_label": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "calendar_year",
+      "calendar_month",
+      "period_label",
+      "fiscal_year",
+      "fiscal_period",
+      "counts"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "next_step": {
+    "description": "What to do with the card this result renders. Added by the dispatcher when the card asks for a click.",
+    "type": "string"
+   },
+   "nothing_launched": {
+    "const": true,
+    "description": "Always true \u2014 this tool never starts anything.",
+    "type": "boolean"
+   },
+   "period_label": {
+    "description": "Human-readable label of the period, e.g. \"June 2026\". Present only when the call named one month.",
+    "type": "string"
+   },
+   "periods_covered": {
+    "description": "The months the result covers, oldest first.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "calendar_month": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "calendar_year": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "period_label": {
+       "description": "The month this row belongs to, e.g. \"June 2026\".",
+       "type": "string"
+      }
+     },
+     "required": [
+      "calendar_year",
+      "calendar_month",
+      "period_label"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "periods_requested": {
+    "description": "How many calendar months the call named.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "rows_dropped_by_ownership": {
+    "description": "Counterparty rows this preview dropped because the current user owns none of their gaps \u2014 a fetch runs as the current user and can only collect the invoices of counterparties they own. Counted apart from `selection_scope.rows_dropped_by_filter` (the pick's own shortfall), and present only when it dropped at least one. The matching `hints` line names it.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "scoped_to_selected_counterparties": {
+    "const": true,
+    "description": "Present when a counterparty pick narrowed this preview: for the months the pick was made against, every route below covers only those companies. A month outside the pick is covered in full.",
+    "type": "boolean"
+   },
+   "selection_scope": {
+    "additionalProperties": false,
+    "description": "What the pick removed. Present with `scoped_to_selected_counterparties`, so the size of the truncation is readable beside the result.",
+    "properties": {
+     "row_count_before_filter": {
+      "description": "Counterparty rows the months read hold in total, before the pick narrowed them. Includes the months the pick does not bound, which are reported in full.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "rows_dropped_by_filter": {
+      "description": "How many of those rows the pick left out \u2014 gaps the routes and the counts below do not cover.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "row_count_before_filter",
+     "rows_dropped_by_filter"
+    ],
+    "type": "object"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "upload_rows": {
+    "description": "Counterparties whose invoice only a manual upload can obtain.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "base_total_amount": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Sum in base_currency; null when an FX rate was missing for any transaction in the sum."
+      },
+      "calendar_month": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "calendar_year": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "name": {
+       "type": "string"
+      },
+      "period_label": {
+       "description": "The month this row belongs to, e.g. \"June 2026\".",
+       "type": "string"
+      },
+      "tx_count": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      }
+     },
+     "required": [
+      "name",
+      "calendar_year",
+      "calendar_month",
+      "period_label",
+      "tx_count",
+      "base_total_amount"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "vendors": {
+    "description": "EVERY vendor of the rows THIS CALL covers, whatever route its invoice would arrive by \u2014 one entry per supplier portal across the whole window, or per counterparty where no portal matched. The ROUTE never filters this list: a vendor Well has no published flow and no connector for is listed exactly like the rest. What the call covers can still be narrower than the period, and the envelope says so: when `scoped_to_selected_counterparties` is present these are the picked counterparties alone and `selection_scope` sizes the remainder, and a `hints` line names any group the projection could produce no vendor for.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "base_total_amount": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Sum in base_currency; null when an FX rate was missing for any transaction in the sum."
+      },
+      "connect_routed_counterparties": {
+       "description": "How many of `counterparties` the preview suggests connecting instead. They are counted in `tx_count` and `base_total_amount`, and they are ALSO in `connect_rows`, where they are counted as connect counterparties.",
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "counterparties": {
+       "description": "The counterparties this one vendor covers, each tagged with the month it belongs to and with the route the preview suggests for it.",
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "base_total_amount": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "Sum in base_currency; null when an FX rate was missing for any transaction in the sum."
+         },
+         "calendar_month": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "calendar_year": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "name": {
+          "type": "string"
+         },
+         "period_label": {
+          "description": "The month this row belongs to, e.g. \"June 2026\".",
+          "type": "string"
+         },
+         "suggested_route": {
+          "description": "\"agent\" when the agent run is the suggested route. \"connect\" when a Well connector is suggested instead \u2014 the counterparty is ALSO in `connect_rows`. \"upload\" when Well holds neither a connector nor a published flow for it \u2014 the counterparty is ALSO in `upload_rows`.",
+          "enum": [
+           "agent",
+           "connect",
+           "upload"
+          ],
+          "type": "string"
+         },
+         "tx_count": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         }
+        },
+        "required": [
+         "name",
+         "calendar_year",
+         "calendar_month",
+         "period_label",
+         "tx_count",
+         "base_total_amount",
+         "suggested_route"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "domain": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "The vendor's own bare host, e.g. \"aws.amazon.com\" \u2014 the catalog provider's host, or the counterparty company's. It identifies the vendor and its mark; it is NOT `url` reduced, because `url` may point deeper into the portal."
+      },
+      "key": {
+       "description": "Stable identity for this entry across a re-read: the portal when one matched, else the counterparty row. Two vendors sharing a display name have different keys, so key rows on this and never on `name`.",
+       "type": "string"
+      },
+      "logo_url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "The provider's logo as Well stores it. Null when the provider is unmatched or Well holds no stored mark for it, in which case the card still renders one from `domain`."
+      },
+      "name": {
+       "description": "The vendor as the card names it: the matched provider's name, or the counterparty's own when none matched.",
+       "type": "string"
+      },
+      "provider_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "The catalog id, and the only field that can put this vendor on `collect_url`. Necessary but NOT sufficient: the link also needs the vendor to carry a `url`, and the vendor has to fit the link's own ceiling. Null when no provider matched. A vendor off the link is still listed and is still offered for the pick, so report it as one the link cannot carry, never as one Well leaves out."
+      },
+      "tx_count": {
+       "description": "Transactions still missing an invoice, over every counterparty listed above.",
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Where this vendor's invoices are, e.g. \"https://www.dropbox.com/manage/billing\". `url_source` says how close that address stands to the invoices. Null only when `url_source` is \"none\". An address is what makes a vendor offerable at all: a vendor carrying one is offered for the pick, and with a `provider_id` it is also named on `collect_url`, whatever its `url_source`. The address itself never travels, because the id is the only field the extension acts on."
+      },
+      "url_source": {
+       "description": "Where `url` came from. \"blueprint\" \u2014 the provider's published flow, so it opens the billing page itself. \"enrichment\" \u2014 the catalog's entry address or the company's own domain, so it is the vendor's front door and the user still has to find the invoices on it. \"none\" \u2014 no address at all, and `url` is null. It says where the address came from and gates nothing: an \"enrichment\" vendor is offered, and carried on the link, exactly like a \"blueprint\" one.",
+       "enum": [
+        "blueprint",
+        "enrichment",
+        "none"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "key",
+      "name",
+      "provider_id",
+      "domain",
+      "url",
+      "url_source",
+      "logo_url",
+      "counterparties",
+      "connect_routed_counterparties",
+      "tx_count",
+      "base_total_amount"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "workspace_id": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "vendors",
+   "upload_rows",
+   "connect_rows",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Preview invoice fetch"
+}

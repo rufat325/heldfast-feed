@@ -1,0 +1,802 @@
+{
+ "_meta": {
+  "openai/outputTemplate": "ui://views/ext-apps/tariff-results.html?v=77bb9b0f",
+  "openai/toolInvocation/invoked": "Energy tariffs found",
+  "openai/toolInvocation/invoking": "Comparing energy tariffs\u2026",
+  "ui": {
+   "resourceUri": "ui://views/ext-apps/tariff-results.html?v=77bb9b0f"
+  },
+  "ui/resourceUri": "ui://views/ext-apps/tariff-results.html?v=77bb9b0f"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Compares German electricity and gas tariffs with live market data for a postal code and an annual consumption, and returns one page of the ranked market: prices with and without bonus, monthly average, savings against the local default supplier (Grundversorgung) or the user's current contract, contract terms, price guarantee, eco status and customer ratings. Covers tariff comparison only, not general energy questions. Prices come live from the market data and can change at any time. Keywords: Stromvergleich, Gasvergleich, Stromtarif, Gastarif, Stromanbieter wechseln, Gasanbieter wechseln, \u00d6kostrom, Strompreise, Energiekosten senken, electricity tariff, gas tariff, switch energy provider, Germany. Inputs: postalCode (5 digits) and annualConsumptionKwh. Both come from the user: the ranking is only valid for the household's actual consumption, which is printed on the last bill, and the tool has no default for it. The typical values by household size in the parameter description help a user who does not know the figure; a comparison run on a household size alone is approximate. energyType selects gas; electricity is the default. Without filters the result covers the whole market. An energy bill contains every input: postal code, annual consumption, and the reference for the savings comparison, which is the future monthly payment (Abschlag) if the bill states one, otherwise the Arbeitspreis and Grundpreis lines (see the current* parameters). The bill total belongs to the past period and may include a one-time bonus, so it is not a reference. The bill's provider, customer number and meter number are the fields the booking form asks for later. Each offer carries its complete data (prices, bonuses, contract terms, flags such as dynamic or eco, ratings, remarks); tariff-details adds the cost breakdown, energy mix and provider details. Only offers with an `eco` object are eco tariffs. Their `eco.statement` and `eco.proof` are legally required wording (EU EmpCo, Directive 2024/825): quote both verbatim when describing a green tariff. Offers without `eco` are not green, eco, renewable or climate-neutral. The ranking method, bonus handling, price guarantees and eco labels are explained at https://commerceforagents.com/comparison-basis. The response states totalResults and how to reach the rest of the ranking (page, providers, filters). Dynamic (spot-price) tariffs are included only with includeDynamicTariffs. The result renders as tariff cards with filters (eco, contract length, price guarantee, bonus handling, providers) below the message, so the list does not need repeating in text. Each offer has a `ref`: tariff-details shows its full conditions, and start-booking opens the booking form in which the user enters the contract data, IBAN and consent. `language` sets the language of the cards and their buttons.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "annualConsumptionKwh": {
+    "description": "The household's actual annual consumption in kWh, from the user or their last bill; no default. The ranking depends on it. Typical values by household size: electricity ~1500 (1 person), 2500 (2), 3500 (3), 4500 (4+); gas ~9000 (flat), ~20000 (house).",
+    "exclusiveMinimum": 0,
+    "maximum": 1000000,
+    "type": "integer"
+   },
+   "bonusMode": {
+    "description": "How one-time bonuses count in prices and ranking. \"compliant\" (default): only bonuses meeting consumer-protection guidelines; \"all\": every bonus; \"none\": prices without any bonus.",
+    "enum": [
+     "compliant",
+     "all",
+     "none"
+    ],
+    "type": "string"
+   },
+   "cancellationMax": {
+    "description": "Maximum cancellation period (K\u00fcndigungsfrist). Omit = no filter.",
+    "enum": [
+     "1_month",
+     "6_weeks",
+     "3_months"
+    ],
+    "type": "string"
+   },
+   "contractMonthsMax": {
+    "anyOf": [
+     {
+      "const": 1,
+      "type": "number"
+     },
+     {
+      "const": 3,
+      "type": "number"
+     },
+     {
+      "const": 6,
+      "type": "number"
+     },
+     {
+      "const": 12,
+      "type": "number"
+     },
+     {
+      "const": 24,
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Maximum initial contract duration in months (1, 3, 6, 12 or 24). Default: no limit."
+   },
+   "currentAnnualCostEur": {
+    "description": "The user's ONGOING yearly cost on their current contract in EUR: current prices, one-time bonuses EXCLUDED. Not the bill total: a new-customer bonus is paid once, so the total of a bonus year understates what they pay next year. Compute Arbeitspreis \u00d7 kWh / 100 + 12 \u00d7 Grundpreis (post-increase prices if the bill announces one), or better: pass currentWorkingPriceCtKwh + currentBasePriceEurMonth and let the server compute it. When given, savings are computed against this instead of the default utility tariff.",
+    "exclusiveMinimum": 0,
+    "maximum": 100000,
+    "type": "number"
+   },
+   "currentBasePriceEurMonth": {
+    "description": "Grundpreis of the user's current contract in EUR per month, gross (a yearly Grundpreis divided by 12).",
+    "maximum": 1000,
+    "minimum": 0,
+    "type": "number"
+   },
+   "currentMonthlyPaymentEur": {
+    "description": "The FUTURE monthly payment (Abschlag) stated on the bill for the coming period, e.g. 'Ihr monatlicher Zahlbetrag betr\u00e4gt zuk\u00fcnftig 159,00 \u20ac'. It already reflects price changes after the billing period, which the bill's Arbeitspreis/Grundpreis lines predate. Takes precedence over the price components.",
+    "exclusiveMinimum": 0,
+    "maximum": 10000,
+    "type": "number"
+   },
+   "currentProvider": {
+    "description": "The user's current provider, if known (e.g. from the bill).",
+    "maxLength": 150,
+    "type": "string"
+   },
+   "currentTariff": {
+    "description": "The user's current tariff name, if known (e.g. from the bill).",
+    "maxLength": 150,
+    "type": "string"
+   },
+   "currentWorkingPriceCtKwh": {
+    "description": "Arbeitspreis of the user's current contract in ct/kWh, gross, as printed on the bill (the new price if an increase is announced). Together with currentBasePriceEurMonth the server computes the ongoing yearly cost itself \u2014 preferred over currentAnnualCostEur.",
+    "exclusiveMinimum": 0,
+    "maximum": 500,
+    "type": "number"
+   },
+   "district": {
+    "description": "City district (Ortsteil), only needed when the response reports multiple districts for the postal code and the user's district changes the result.",
+    "maxLength": 100,
+    "type": "string"
+   },
+   "energyType": {
+    "description": "Which energy contract to compare: \"electricity\" (Strom) or \"gas\". Default: \"electricity\".",
+    "enum": [
+     "electricity",
+     "gas"
+    ],
+    "type": "string"
+   },
+   "goodRatingOnly": {
+    "description": "Only providers with good customer ratings (market operator's threshold). Default: false.",
+    "type": "boolean"
+   },
+   "greenOnly": {
+    "description": "Only eco tariffs (EU EmpCo definition): electricity from 100% renewable energy proven by guarantees of origin; gas with a declared biogas/hydrogen share. CO2-compensated (\"Klimagas\", \"klimaneutral\") tariffs are NOT eco. Default: false.",
+    "type": "boolean"
+   },
+   "includeDeposit": {
+    "description": "Include tariffs requiring a deposit (Kaution). Default: false.",
+    "type": "boolean"
+   },
+   "includeDynamicTariffs": {
+    "description": "Include dynamic (spot-price) tariffs whose first-year price is only a forecast. Default: false, since most German households book fixed-price tariffs.",
+    "type": "boolean"
+   },
+   "includePackageTariffs": {
+    "description": "Include kWh-package tariffs (Pakettarife). Default: false.",
+    "type": "boolean"
+   },
+   "includePrepayment": {
+    "description": "Include tariffs requiring prepayment (Vorauskasse). Default: false.",
+    "type": "boolean"
+   },
+   "language": {
+    "description": "Language of the conversation. The widget's texts and its follow-up messages use it; omit only if unsure, then the user's interface locale is used.",
+    "enum": [
+     "de",
+     "en"
+    ],
+    "type": "string"
+   },
+   "limit": {
+    "description": "Tariffs per page. Default: 10, max 20.",
+    "maximum": 20,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "maxTariffsPerProvider": {
+    "description": "Tariffs per provider in the ranking. Default 1 (best per provider); 0 = all tariffs of every provider.",
+    "maximum": 5,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "page": {
+    "description": "Result page (1-based). The response reports totalResults; request further pages to see more of the ranking.",
+    "maximum": 20,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "postalCode": {
+    "description": "German postal code (Postleitzahl) \u2014 5 digits, e.g. \"10115\" for Berlin.",
+    "pattern": "^\\d{5}$",
+    "type": "string"
+   },
+   "priceGuaranteeMonthsMin": {
+    "anyOf": [
+     {
+      "const": 6,
+      "type": "number"
+     },
+     {
+      "const": 12,
+      "type": "number"
+     },
+     {
+      "const": 24,
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Minimum price-guarantee duration in months. null = no filter (default)."
+   },
+   "providers": {
+    "description": "Only offers from these providers (names, e.g. [\"Vattenfall\", \"E WIE EINFACH\"]). Restricts the ranking to these providers.",
+    "items": {
+     "maxLength": 100,
+     "type": "string"
+    },
+    "maxItems": 10,
+    "type": "array"
+   },
+   "regionalOnly": {
+    "description": "Only regional providers / local utilities. Default: false.",
+    "type": "boolean"
+   },
+   "sortBy": {
+    "description": "Market-wide sort: \"price\" (first-year total, default), \"rating\" (customer rating, best first), \"providerName\".",
+    "enum": [
+     "price",
+     "rating",
+     "providerName"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "postalCode",
+   "annualConsumptionKwh"
+  ],
+  "type": "object"
+ },
+ "name": "compare-tariffs",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "city": {
+    "additionalProperties": false,
+    "properties": {
+     "district": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "zipcode": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "zipcode"
+    ],
+    "type": "object"
+   },
+   "coverageNote": {
+    "type": "string"
+   },
+   "hiddenDynamicTariffs": {
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "otherDistricts": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "page": {
+    "maximum": 9007199254740991,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "priceSpanEur": {
+    "additionalProperties": false,
+    "properties": {
+     "max": {
+      "type": "number"
+     },
+     "min": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "min",
+     "max"
+    ],
+    "type": "object"
+   },
+   "query": {
+    "additionalProperties": false,
+    "properties": {
+     "annualConsumptionKwh": {
+      "description": "The household's actual annual consumption in kWh, from the user or their last bill; no default. The ranking depends on it. Typical values by household size: electricity ~1500 (1 person), 2500 (2), 3500 (3), 4500 (4+); gas ~9000 (flat), ~20000 (house).",
+      "exclusiveMinimum": 0,
+      "maximum": 1000000,
+      "type": "integer"
+     },
+     "bonusMode": {
+      "description": "How one-time bonuses count in prices and ranking. \"compliant\" (default): only bonuses meeting consumer-protection guidelines; \"all\": every bonus; \"none\": prices without any bonus.",
+      "enum": [
+       "compliant",
+       "all",
+       "none"
+      ],
+      "type": "string"
+     },
+     "cancellationMax": {
+      "description": "Maximum cancellation period (K\u00fcndigungsfrist). Omit = no filter.",
+      "enum": [
+       "1_month",
+       "6_weeks",
+       "3_months"
+      ],
+      "type": "string"
+     },
+     "contractMonthsMax": {
+      "anyOf": [
+       {
+        "const": 1,
+        "type": "number"
+       },
+       {
+        "const": 3,
+        "type": "number"
+       },
+       {
+        "const": 6,
+        "type": "number"
+       },
+       {
+        "const": 12,
+        "type": "number"
+       },
+       {
+        "const": 24,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Maximum initial contract duration in months (1, 3, 6, 12 or 24). Default: no limit."
+     },
+     "currentAnnualCostEur": {
+      "description": "The user's ONGOING yearly cost on their current contract in EUR: current prices, one-time bonuses EXCLUDED. Not the bill total: a new-customer bonus is paid once, so the total of a bonus year understates what they pay next year. Compute Arbeitspreis \u00d7 kWh / 100 + 12 \u00d7 Grundpreis (post-increase prices if the bill announces one), or better: pass currentWorkingPriceCtKwh + currentBasePriceEurMonth and let the server compute it. When given, savings are computed against this instead of the default utility tariff.",
+      "exclusiveMinimum": 0,
+      "maximum": 100000,
+      "type": "number"
+     },
+     "currentBasePriceEurMonth": {
+      "description": "Grundpreis of the user's current contract in EUR per month, gross (a yearly Grundpreis divided by 12).",
+      "maximum": 1000,
+      "minimum": 0,
+      "type": "number"
+     },
+     "currentMonthlyPaymentEur": {
+      "description": "The FUTURE monthly payment (Abschlag) stated on the bill for the coming period, e.g. 'Ihr monatlicher Zahlbetrag betr\u00e4gt zuk\u00fcnftig 159,00 \u20ac'. It already reflects price changes after the billing period, which the bill's Arbeitspreis/Grundpreis lines predate. Takes precedence over the price components.",
+      "exclusiveMinimum": 0,
+      "maximum": 10000,
+      "type": "number"
+     },
+     "currentProvider": {
+      "description": "The user's current provider, if known (e.g. from the bill).",
+      "maxLength": 150,
+      "type": "string"
+     },
+     "currentTariff": {
+      "description": "The user's current tariff name, if known (e.g. from the bill).",
+      "maxLength": 150,
+      "type": "string"
+     },
+     "currentWorkingPriceCtKwh": {
+      "description": "Arbeitspreis of the user's current contract in ct/kWh, gross, as printed on the bill (the new price if an increase is announced). Together with currentBasePriceEurMonth the server computes the ongoing yearly cost itself \u2014 preferred over currentAnnualCostEur.",
+      "exclusiveMinimum": 0,
+      "maximum": 500,
+      "type": "number"
+     },
+     "district": {
+      "description": "City district (Ortsteil), only needed when the response reports multiple districts for the postal code and the user's district changes the result.",
+      "maxLength": 100,
+      "type": "string"
+     },
+     "energyType": {
+      "description": "Which energy contract to compare: \"electricity\" (Strom) or \"gas\". Default: \"electricity\".",
+      "enum": [
+       "electricity",
+       "gas"
+      ],
+      "type": "string"
+     },
+     "goodRatingOnly": {
+      "description": "Only providers with good customer ratings (market operator's threshold). Default: false.",
+      "type": "boolean"
+     },
+     "greenOnly": {
+      "description": "Only eco tariffs (EU EmpCo definition): electricity from 100% renewable energy proven by guarantees of origin; gas with a declared biogas/hydrogen share. CO2-compensated (\"Klimagas\", \"klimaneutral\") tariffs are NOT eco. Default: false.",
+      "type": "boolean"
+     },
+     "includeDeposit": {
+      "description": "Include tariffs requiring a deposit (Kaution). Default: false.",
+      "type": "boolean"
+     },
+     "includeDynamicTariffs": {
+      "description": "Include dynamic (spot-price) tariffs whose first-year price is only a forecast. Default: false, since most German households book fixed-price tariffs.",
+      "type": "boolean"
+     },
+     "includePackageTariffs": {
+      "description": "Include kWh-package tariffs (Pakettarife). Default: false.",
+      "type": "boolean"
+     },
+     "includePrepayment": {
+      "description": "Include tariffs requiring prepayment (Vorauskasse). Default: false.",
+      "type": "boolean"
+     },
+     "language": {
+      "description": "Language of the conversation. The widget's texts and its follow-up messages use it; omit only if unsure, then the user's interface locale is used.",
+      "enum": [
+       "de",
+       "en"
+      ],
+      "type": "string"
+     },
+     "limit": {
+      "description": "Tariffs per page. Default: 10, max 20.",
+      "maximum": 20,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "maxTariffsPerProvider": {
+      "description": "Tariffs per provider in the ranking. Default 1 (best per provider); 0 = all tariffs of every provider.",
+      "maximum": 5,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "page": {
+      "description": "Result page (1-based). The response reports totalResults; request further pages to see more of the ranking.",
+      "maximum": 20,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "postalCode": {
+      "description": "German postal code (Postleitzahl) \u2014 5 digits, e.g. \"10115\" for Berlin.",
+      "pattern": "^\\d{5}$",
+      "type": "string"
+     },
+     "priceGuaranteeMonthsMin": {
+      "anyOf": [
+       {
+        "const": 6,
+        "type": "number"
+       },
+       {
+        "const": 12,
+        "type": "number"
+       },
+       {
+        "const": 24,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Minimum price-guarantee duration in months. null = no filter (default)."
+     },
+     "providers": {
+      "description": "Only offers from these providers (names, e.g. [\"Vattenfall\", \"E WIE EINFACH\"]). Restricts the ranking to these providers.",
+      "items": {
+       "maxLength": 100,
+       "type": "string"
+      },
+      "maxItems": 10,
+      "type": "array"
+     },
+     "regionalOnly": {
+      "description": "Only regional providers / local utilities. Default: false.",
+      "type": "boolean"
+     },
+     "sortBy": {
+      "description": "Market-wide sort: \"price\" (first-year total, default), \"rating\" (customer rating, best first), \"providerName\".",
+      "enum": [
+       "price",
+       "rating",
+       "providerName"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "postalCode",
+     "annualConsumptionKwh"
+    ],
+    "type": "object"
+   },
+   "referenceNote": {
+    "type": "string"
+   },
+   "referenceTariff": {
+    "additionalProperties": false,
+    "properties": {
+     "annualTotalEur": {
+      "type": "number"
+     },
+     "basis": {
+      "enum": [
+       "monthlyPayment",
+       "priceComponents",
+       "statedAnnualCost"
+      ],
+      "type": "string"
+     },
+     "monthlyPaymentEur": {
+      "type": "number"
+     },
+     "name": {
+      "type": "string"
+     },
+     "provider": {
+      "type": "string"
+     },
+     "source": {
+      "enum": [
+       "default",
+       "current"
+      ],
+      "type": "string"
+     },
+     "workingPriceCtKwh": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "provider",
+     "name",
+     "annualTotalEur",
+     "source"
+    ],
+    "type": "object"
+   },
+   "tariffs": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "badges": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "contract": {
+       "additionalProperties": false,
+       "properties": {
+        "cancellationPeriod": {
+         "type": "string"
+        },
+        "durationMonths": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "priceGuaranteeMonths": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "priceGuaranteeType": {
+         "type": "string"
+        },
+        "priceGuaranteeUntil": {
+         "type": "string"
+        },
+        "prolongation": {
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "eco": {
+       "additionalProperties": false,
+       "properties": {
+        "biogasPercent": {
+         "type": "number"
+        },
+        "certificates": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "hydrogenPercent": {
+         "type": "number"
+        },
+        "kind": {
+         "enum": [
+          "electricity",
+          "gas"
+         ],
+         "type": "string"
+        },
+        "proof": {
+         "description": "Proof text that belongs to the marker (guarantees of origin, or the biogas/hydrogen shares). Legally required wording (EmpCo): quote verbatim.",
+         "type": "string"
+        },
+        "statement": {
+         "description": "Marker text in the request language. Legally required wording (EmpCo): quote verbatim.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "kind",
+        "statement",
+        "proof"
+       ],
+       "type": "object"
+      },
+      "flags": {
+       "additionalProperties": false,
+       "properties": {
+        "imminentPriceChange": {
+         "type": "boolean"
+        },
+        "isDynamic": {
+         "type": "boolean"
+        },
+        "isEco": {
+         "type": "boolean"
+        },
+        "isLocalUtility": {
+         "type": "boolean"
+        },
+        "isMostFairTariff": {
+         "type": "boolean"
+        },
+        "isSecureTariff": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "isDynamic",
+        "isEco",
+        "isSecureTariff",
+        "isMostFairTariff",
+        "imminentPriceChange",
+        "isLocalUtility"
+       ],
+       "type": "object"
+      },
+      "name": {
+       "type": "string"
+      },
+      "price": {
+       "additionalProperties": false,
+       "properties": {
+        "basePriceEurMonth": {
+         "type": "number"
+        },
+        "bonusEur": {
+         "type": "number"
+        },
+        "bonuses": {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "amountEur": {
+            "type": "number"
+           },
+           "label": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "label",
+           "amountEur"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "effectiveCtKwh": {
+         "type": "number"
+        },
+        "monthlyAvgEur": {
+         "type": "number"
+        },
+        "paymentMonthsPerYear": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "savingsVsCurrentEur": {
+         "type": "number"
+        },
+        "savingsVsDefaultEur": {
+         "type": "number"
+        },
+        "workingPriceCtKwh": {
+         "type": "number"
+        },
+        "yearlyEur": {
+         "type": "number"
+        },
+        "yearlyWithoutBonusEur": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "yearlyEur",
+        "monthlyAvgEur",
+        "yearlyWithoutBonusEur",
+        "bonusEur",
+        "bonuses"
+       ],
+       "type": "object"
+      },
+      "provider": {
+       "type": "string"
+      },
+      "providerId": {
+       "type": "string"
+      },
+      "providerLogoUrl": {
+       "format": "uri",
+       "type": "string"
+      },
+      "rating": {
+       "additionalProperties": false,
+       "properties": {
+        "pricePct": {
+         "type": "number"
+        },
+        "reviews": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "servicePct": {
+         "type": "number"
+        },
+        "stars": {
+         "type": "number"
+        },
+        "switchingPct": {
+         "type": "number"
+        },
+        "wouldSwitchAgainPct": {
+         "type": "number"
+        }
+       },
+       "type": "object"
+      },
+      "ref": {
+       "type": "string"
+      },
+      "remarks": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "resultPosition": {
+       "maximum": 9007199254740991,
+       "minimum": 0,
+       "type": "integer"
+      },
+      "tariffId": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "ref",
+      "tariffId",
+      "resultPosition",
+      "provider",
+      "providerId",
+      "name",
+      "price",
+      "contract",
+      "flags",
+      "rating",
+      "badges",
+      "remarks"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "totalResults": {
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "query",
+   "city",
+   "totalResults",
+   "page",
+   "hiddenDynamicTariffs",
+   "coverageNote",
+   "tariffs"
+  ],
+  "type": "object"
+ },
+ "title": "Compare German Energy Tariffs"
+}

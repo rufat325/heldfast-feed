@@ -1,0 +1,431 @@
+{
+ "_meta": {
+  "ui": {
+   "resourceUri": "ui://well/widget/f9b427b8"
+  },
+  "ui/resourceUri": "ui://well/widget/f9b427b8"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "List periods"
+ },
+ "description": "List the recent accounting months of the workspace, with each month's close status, its invoice-retrieval state, and the counts that describe how much work it holds. Use this to ask the user WHICH month or months to work on before any close, review, or month-scoped read \u2014 do not guess a month, and do not derive one from today's date yourself.\n\nEach entry carries:\n- calendar_year / calendar_month: the month itself.\n- fiscal_year / fiscal_period: the same month in the workspace's fiscal calendar \u2014 this is the pair every close endpoint and close tool takes.\n- label: the month written out, e.g. \"March 2026\".\n- is_complete: the calendar month has ended. A still-accruing month is never a valid close target.\n- selectable: the month can be CLOSED. False for a month that has not ended, one already closed, one with nothing to close, and a December whose year-end close is not supported yet. Read this one for a close pick.\n- analyzable: the month can be REPORTED ON. True once the month has ENDED and while it remains inside the window the canvas endpoints serve; false for the month in progress, for a future month, and for one too far back. It does NOT ask for a close verdict, because a report reads transactions and an unchecked month still has them. Read this one for an analysis pick.\n- inspectable: the month can be LOOKED INTO. A reader can open its transactions, its missing invoices and its days. True for EVERY month that has begun, the month in progress included. False only for a month that has not begun. It reads no close verdict and no activity count, so a closed month, an empty month and a workspace with no accounting connector at all still have readable months. An empty month answers with an empty list, which is an answer. Read this one for a retrieval or review pick; every selectable month is also inspectable.\n- close_status: \"closeable\" (ready), \"not_ready\" (work remains), \"closed\" (already locked), \"nothing_to_close\" (no activity), or null when the workspace has no verdict for that month.\n- close_reason: the blocking reason behind the status, or null.\n- invoice_state: \"missing_invoices\" (at least one counterparty still owes a supplier invoice), \"has_invoices\" (checked, and nothing is missing), or \"none\" (no state: no activity, the month has not begun, or the check could not run). Never read \"none\" as \"nothing missing\".\n- missing_invoice_count: how many counterparties owe an invoice for the month \u2014 the rows `well_list_missing_invoices` would return. 0 whenever invoice_state is \"none\", including when the check did not run.\n- transaction_count: how many transactions the month holds, dated on the basis this purpose measures on. `analysis` counts on `executed_at`, the same column `well_sum_transactions` ranges, so a month's count and a reporting figure cover the same WINDOW. It is not the same row set, and must never be quoted as the figure's row count: the sum can also drop internal transfers and exempt categories on request, and it widens to a parent's granted transactions where this count does not. Read it as a presence signal for the month. `close` and `collect` count on the books date, `COALESCE(value_date, booking_date)`, which a transaction the bank has not booked does not carry \u2014 so a zero under those purposes means no BOOKED transaction, never an empty month.\n- bank_transaction_count: the subset of transaction_count delivered by a connector the workspace actually BANKS with, meaning a bank, a neobank, or a treasury or spend platform whose product is an account. An accounting platform and a payment processor deliver transactions too, so transaction_count is NOT a bank signal. Only this field answers \"has a bank fed this month\". A transaction counts as not-bank when its source connector is unknown, or when that connector has since been disconnected, so a zero here never licenses skipping a bank-connection step.\n- unposted_invoice_count: invoices the month HAS that have not posted to the ledger. This is a posting gap, not a missing invoice \u2014 do not present it as one.\n- uncategorized_transactions: transactions in the month not yet categorized \u2014 the \"help categorize\" errand behind a not-ready close. Dated on the books, so it is ABSENT under `analysis` rather than 0 \u2014 that purpose counts on execution and never measures this errand, and a 0 would read as \"nothing left to categorize\". It is also absent on a month the coverage read did not cover. Never read an absent count as \"nothing left to categorize\": say the month was not measured, or read it again.\n- categorized_unposted_transactions: categorized transactions not yet posted to the ledger \u2014 part of the \"review and book\" errand. Dated on the books, absent under `analysis`, and absent on an unmeasured month for the same reason.\n- invoice_state / missing_invoice_count: the month's invoice-retrieval verdict and the count behind it. Both are ABSENT on a month a `analysis` list skipped \u2014 that purpose bounds its invoice read by execution-dated activity while the errand is dated on the books, so the two disagree and a \"none\" there would be a claim nothing measured. Absent is not \"owes nothing\"; read it from a `close` or `collect` list.\n- days: the DAYS of the month that carry a retrieval state, ascending, each `{ day, state }` over the same vocabulary as invoice_state. A day is \"missing_invoices\" when it holds settled expense spend still missing its supplier invoice, and \"has_invoices\" when it holds activity and no such gap. Days with neither are OMITTED, so an absent day means \"none\". `days` is empty for every month whose invoice_state is \"none\" \u2014 an unchecked month has no day the tool can call clean \u2014 and it is empty for EVERY month on a `purpose: \"analysis\"` call, whatever that month's invoice_state, because the reporting axis paints no day. On that purpose an empty `days` therefore says nothing about invoice coverage, and neither does an absent invoice_state. This is calendar detail for a picker to paint; quote the month's own counts, not a day list, when answering in prose.\n- analysis_days: present ONLY for a `purpose: \"analysis\"` call \u2014 the DAYS and whether a breakdown can name what each holds, ascending, each `{ day, state }` over \"categorized\" / \"uncategorized\" / \"neutral\". An \"uncategorized\" day holds a transaction with no category. It still COUNTS toward a burn total, which filters on no category at all; a cost breakdown just reports it as uncategorised rather than under a named category. Never say a total is short because of it. Unlike the other two axes a quiet day IS listed, as \"neutral\". Calendar detail for the reporting picker.\n- close_days: present ONLY for a `purpose: \"close\"` call \u2014 the DAYS carrying a non-neutral close-readiness state, ascending, each `{ day, state }` over \"posted\" / \"progress\". A day absent from it is \"neutral\" (nothing to close). Calendar detail for the close picker, like `days` is for retrieval.\n\n`default_period` is the oldest month that is ready to close, falling back to the oldest still in progress. Offer it as the default choice. It reads `selectable`, so it is null whenever no month in the window can be CLOSED, and a null one does not mean the window is empty: an inspectable month can still be worked on for invoice retrieval. On a `purpose: \"analysis\"` call it is instead the NEWEST `analyzable` month, because a figure describes the latest ended period and a month outside the reporting window would be refused by the endpoints that serve it.\n\nPURPOSE: pass `purpose: \"close\"` when the user is closing the books, so the picker paints close readiness and each month carries its `close_days` and the categorize / review counts. Pass `purpose: \"analysis\"` when a REPORTING SKILL is already running and is choosing the month its figure will cover, so the picker offers only `analyzable` months and paints the CATEGORIZATION day axis: neither invoice coverage nor close readiness is the decision being made, but an uncategorized day is one a breakdown cannot attribute. A user who merely mentions a report, a burn figure or a cost breakdown is NOT the trigger \u2014 naming one of those is phrasing, and phrasing never sets this field. Example: \"What months do you have for me? I'm trying to work out my average burn.\" is a plain listing request that names a reason \u2014 it is NOT a reporting skill calling for its own period pick, so this call OMITS `purpose`. Only a caller that IS the reporting flow itself (an `avg-burn`/`cost-structure`/`cash-flow-waterfall` skill run, already past its own gates, now needing the month to compute against) passes \"analysis\" \u2014 never derive it from words in the user's own message, no matter how closely they match a report. Omit it (or `purpose: \"collect\"`) for invoice retrieval, the default. This is the calling skill's intent \u2014 set it from the flow, never from the user's phrasing.\n\nWINDOW: by default the `months` most recent calendar months, ending with the current one. Pass `year` instead to get ONE calendar year in full \u2014 all twelve of its months, December back to January \u2014 which is how you reach a year the recent window does not cover, backwards or forwards. `navigable_years` reports the range `year` is answered for.\n\nA year ahead of today comes back in full and every month of it is `selectable: false` and `inspectable: false` with `close_reason` \"period_not_ended\": books close on a month that has ENDED, and a month that has not begun holds nothing to read. Show such months when the user asks to look ahead, and say why they cannot be picked. Never omit them.\n\nCOST: the invoice state is read per month from a separate endpoint, so a wide window costs one extra read for every month that holds activity, plus one day-coverage read per calendar year those months touch. A `purpose: \"analysis\"` call pays the same day-coverage read, dated on the execution basis, because it paints the categorization day axis. Ask for the months the user needs, not 24 by default. A wholly future or wholly empty `year` is cheap \u2014 no month in it can hold a settled gap, so none is read.\n\nCall this directly \u2014 no other tool call is needed first (the workspace is resolved from the caller's authorized token, same as every other well_* tool).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "months": {
+    "default": 12,
+    "description": "How many recent calendar months to return, ending with the current month. Each month holding activity costs one extra read for its invoice state. Ignored when `year` is given.",
+    "maximum": 24,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "purpose": {
+    "description": "Why the months are being listed, set by the calling skill's own flow \u2014 never inferred from this message. \"close\" is book closure: the card paints close readiness, and each month carries its per-day `close_days` and the counts behind its \"why not ready\" errands. \"analysis\" is reporting: the card offers only the months a canvas can report on, paints the categorization day axis, counts on the execution date the canvas aggregates measure on, and therefore omits the books-dated errand counts entirely rather than reporting them as 0 \u2014 set it ONLY when a reporting skill is already running its own period-pick step, not just because this message names one (a burn figure, a cost breakdown, \"my report\"). Naming a report is phrasing; it never sets this field on its own. Omit or \"collect\" for invoice retrieval (the default, and the right choice for a plain \"what months do you have\" question, even one that mentions why) \u2014 this paints the retrieval axis and skips the close-readiness fields.",
+    "enum": [
+     "close",
+     "collect",
+     "analysis"
+    ],
+    "type": "string"
+   },
+   "reply": {
+    "description": "One sentence, IN THE LANGUAGE THE USER IS WRITING IN, that the click sends into the conversation as their own message. Write what the PERSON would say about the months they pick, in their words, not an instruction to yourself. You write it BEFORE they click, so you cannot know what they will choose: put {picked} where the pick belongs and the card replaces it with the names they actually picked, one or several. In English it would read \"Let's work on {picked}.\" Write the same shape in the user's language. {picked} is required: a sentence that names a pick itself names the one you guessed, so the card refuses it and sends its own English instead. At most 160 characters. Omitted sends an English sentence the card builds itself, which is wrong for any reader not writing in English.",
+    "maxLength": 160,
+    "minLength": 1,
+    "type": "string"
+   },
+   "subtitle": {
+    "description": "Supporting line under the picker card's heading. At most 240 characters.",
+    "maxLength": 240,
+    "type": "string"
+   },
+   "title": {
+    "description": "Heading for the picker card shown to the user. At most 120 characters.",
+    "maxLength": 120,
+    "type": "string"
+   },
+   "workspace_id": {
+    "description": "Target workspace. This read reports one workspace's own data. Omit it and the token's primary workspace answers, which may not be the one you mean; the result names the workspace that did.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   },
+   "year": {
+    "description": "One calendar year to return in full \u2014 all twelve of its months, December back to January, instead of the recent window. Use it to reach a year the recent window does not cover, in either direction; future months come back visible but never selectable. Accepted range: 2000-2100, also reported as `navigable_years`.",
+    "maximum": 2100,
+    "minimum": 2000,
+    "type": "integer"
+   }
+  },
+  "type": "object"
+ },
+ "name": "well_list_periods",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "base_currency": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "default_period": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "calendar_month": {
+        "type": "number"
+       },
+       "calendar_year": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "calendar_year",
+       "calendar_month"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "error": {
+    "type": "string"
+   },
+   "fiscal_year_start_month": {
+    "type": "number"
+   },
+   "hints": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "detected_gap": {
+       "type": "string"
+      },
+      "field": {
+       "type": "string"
+      },
+      "severity": {
+       "enum": [
+        "warn",
+        "info"
+       ],
+       "type": "string"
+      },
+      "suggested_action": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "detected_gap",
+      "suggested_action",
+      "severity"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "navigable_years": {
+    "additionalProperties": false,
+    "description": "The calendar years a `year` request is answered for. A picker's year steppers stop here.",
+    "properties": {
+     "earliest": {
+      "type": "number"
+     },
+     "latest": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "earliest",
+     "latest"
+    ],
+    "type": "object"
+   },
+   "next_step": {
+    "description": "What to do with the card this result renders. Added by the dispatcher when the card asks for a click.",
+    "type": "string"
+   },
+   "periods": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "analysis_days": {
+       "description": "Days of the month and whether a breakdown can name what each one holds, ascending. Present ONLY for a \"analysis\" call. \"uncategorized\" means the day holds a transaction with no category \u2014 still counted in a burn total, but reported as uncategorised in a breakdown rather than under a named category; \"categorized\" means they all carry one; \"neutral\" means the day holds no transaction. Unlike the other two axes, a quiet day IS listed, as \"neutral\" \u2014 so a day absent from a non-empty list is one the read did not reach. An EMPTY list means the month was not measured at all, never that it holds nothing to categorize: check transaction_count, which is read separately, and treat a positive count beside an empty list as unmeasured. Calendar detail for the picker; quote the month's own counts in prose, not a day list.",
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "day": {
+          "maximum": 31,
+          "minimum": 1,
+          "type": "integer"
+         },
+         "state": {
+          "enum": [
+           "categorized",
+           "uncategorized",
+           "neutral"
+          ],
+          "type": "string"
+         }
+        },
+        "required": [
+         "day",
+         "state"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "analyzable": {
+       "description": "The month can be REPORTED ON \u2014 an average-burn, cost-structure or cash-bridge figure can be computed for it. True once the month has ENDED and while it stays inside the window the canvas endpoints serve. Read this one for an analysis pick.",
+       "type": "boolean"
+      },
+      "bank_transaction_count": {
+       "description": "The transaction_count subset delivered by a connector the workspace BANKS with, meaning its category is `banks` or its service id is on the bank-account list. An accounting platform and a payment processor deliver transactions too and are not counted. A transaction whose source connector is unknown, or since disconnected, is not counted either, so a 0 never licenses skipping a bank-connection step.",
+       "type": "number"
+      },
+      "calendar_month": {
+       "type": "number"
+      },
+      "calendar_year": {
+       "type": "number"
+      },
+      "categorized_unposted_transactions": {
+       "description": "Categorized transactions not yet posted to the ledger \u2014 part of the 'review and book' close errand. Dated on the books, and likewise ABSENT rather than 0 on a \"analysis\" call and on a month the coverage read did not cover.",
+       "type": "number"
+      },
+      "close_days": {
+       "description": "Days of the month carrying a non-neutral close-readiness state, ascending. Present ONLY for a \"close\" call; a day absent from it is \"neutral\" (nothing to close).",
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "day": {
+          "maximum": 31,
+          "minimum": 1,
+          "type": "integer"
+         },
+         "state": {
+          "enum": [
+           "posted",
+           "progress",
+           "neutral"
+          ],
+          "type": "string"
+         }
+        },
+        "required": [
+         "day",
+         "state"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "close_reason": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "close_status": {
+       "anyOf": [
+        {
+         "enum": [
+          "closeable",
+          "closed",
+          "not_ready",
+          "nothing_to_close"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "days": {
+       "description": "Days of the month carrying a retrieval state, ascending. A day absent from this list is \"none\"; the list is empty whenever invoice_state is \"none\", and is ALWAYS empty on a \"analysis\" call, which paints the categorization axis instead \u2014 so an empty list there carries no invoice claim.",
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "day": {
+          "maximum": 31,
+          "minimum": 1,
+          "type": "integer"
+         },
+         "state": {
+          "enum": [
+           "has_invoices",
+           "missing_invoices",
+           "none"
+          ],
+          "type": "string"
+         }
+        },
+        "required": [
+         "day",
+         "state"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "fiscal_period": {
+       "type": "number"
+      },
+      "fiscal_year": {
+       "type": "number"
+      },
+      "inspectable": {
+       "description": "The month can be LOOKED INTO. A reader can open its transactions, missing invoices and days. True for every month that has begun, the month in progress included, whatever its close verdict and however little it holds. False only for a month that has not begun. Every selectable month is also inspectable.",
+       "type": "boolean"
+      },
+      "invoice_state": {
+       "description": "The month's invoice-retrieval verdict. ABSENT on a month that has BEGUN and whose verdict nothing measured, which only a purpose counting on the execution date produces \u2014 its activity read and this books-dated errand disagree, so \"none\" there would be a claim nothing wrote. A month still ahead of today keeps \"none\" on every purpose, because it owes nothing on every basis. Read an absent one from a \"close\" or \"collect\" list.",
+       "enum": [
+        "has_invoices",
+        "missing_invoices",
+        "none"
+       ],
+       "type": "string"
+      },
+      "is_complete": {
+       "type": "boolean"
+      },
+      "label": {
+       "type": "string"
+      },
+      "missing_invoice_count": {
+       "description": "Counterparties owing a supplier invoice for the month; 0 when invoice_state is \"none\". Absent whenever invoice_state is, and for the same reason.",
+       "type": "number"
+      },
+      "selectable": {
+       "description": "The month can be CLOSED. False while it is still running.",
+       "type": "boolean"
+      },
+      "transaction_count": {
+       "description": "How many transactions the month holds, dated on the basis this purpose measures on: \"analysis\" counts on execution, every other purpose on the books. A presence signal for the month, never the row count behind a reported figure.",
+       "type": "number"
+      },
+      "uncategorized_transactions": {
+       "description": "Transactions in the month not yet categorized \u2014 the 'help categorize' close errand. Dated on the books, so it is ABSENT on a \"analysis\" call rather than 0: that purpose counts on execution and never measures this errand. Absent too on a month the coverage read did not cover. An absent count is never \"nothing left to categorize\".",
+       "type": "number"
+      },
+      "unposted_invoice_count": {
+       "description": "Invoices the month holds that have not posted to the ledger \u2014 NOT missing invoices.",
+       "type": "number"
+      }
+     },
+     "required": [
+      "calendar_year",
+      "calendar_month",
+      "fiscal_year",
+      "fiscal_period",
+      "label",
+      "is_complete",
+      "selectable",
+      "inspectable",
+      "analyzable",
+      "close_status",
+      "close_reason",
+      "transaction_count",
+      "bank_transaction_count",
+      "unposted_invoice_count",
+      "days"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "workspace_id": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   }
+  },
+  "required": [
+   "workspace_id",
+   "fiscal_year_start_month",
+   "base_currency",
+   "periods",
+   "default_period",
+   "navigable_years",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "List periods"
+}

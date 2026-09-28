@@ -1,0 +1,2123 @@
+{
+ "_meta": {
+  "securitySchemes": [
+   {
+    "type": "noauth"
+   }
+  ]
+ },
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Live carrier quotes"
+ },
+ "description": "Purpose: confirm quote estimates on the carriers' own quote sites, via Foresee agents completing their real quote flows.\n\n        IDEMPOTENT, keyed on the profile: the first call commissions the\n        walks; calling again with the same profile collects progress and\n        results instead of re-submitting anything \u2014 whatever the ask. A\n        profile that has already been walked returns those results (the\n        carriers are never asked twice): the envelope's\n        ``coverage_selection`` names the ask the walk typed, and each quote\n        carries the carrier's other recorded coverage options as\n        ``variants``, so a new ask reads the same run. So call once to\n        start, then re-call after a few minutes to collect; agents still\n        working report their stage.\n\n        No sign-in is required. The one hard requirement is the user's own\n        consent, captured in-band: BEFORE the commissioning call, you MUST\n        tell the user, plainly: Foresee will submit their details to the\n        named carriers; the carriers may obtain their credit-based insurance\n        score (a soft pull, with no impact on your credit score); and the\n        carriers may contact them by email or phone. Then get their explicit\n        go-ahead and pass their affirmation VERBATIM as ``user_authorization``\n        (e.g. \"yes, go ahead\"). The affirmation is stored as the durable\n        consent record for the dispatch; without one the call is refused with\n        ``authorization_required``. Foresee only collects quotes; it does\n        not take payment or bind insurance.\n\n        Collect the ``identity`` fields in chat. They may be omitted only\n        when the session is signed in to Foresee and the user has saved their\n        profile on the Foresee site \u2014 then their consented profile-of-record\n        is used, refined by anything passed in ``profile``.\n\n        A ``missing_facts`` response is normal: carrier forms insist on facts\n        (body style, purchase date, age first licensed\u2026) that Foresee will not\n        invent. Each ``needs`` entry carries the carrier (``scope``), the\n        facts in the walk's own words (``need``), and ``fields[]`` \u2014 per\n        fact, the ``ask`` beside the exact schema path to pass the answer\n        under (``field``, e.g. ``auto.vehicles[].purchase_date``;\n        ``identity.\u2026`` paths go on ``identity``). Ask the user for exactly\n        those facts, then call again with the answers merged in at those\n        paths. A fact with no ``field`` has no profile home yet \u2014 relay\n        that carrier's ask as unavailable rather than guessing a key. When\n        the dispatch was PARTIAL (some carriers walked, some skipped over\n        missing facts), follow the receipt's ``recover`` block: re-call\n        with the new facts merged AND ``carriers`` set to exactly\n        ``recover.carriers`` \u2014 a changed profile is a new dispatch, and an\n        unscoped re-call would re-submit the already-walked carriers too.\n\n        Unasserted MINOR facts are not asked: a form field that is really a\n        claim nobody made (an anti-theft device, a defensive-driving course,\n        years licensed abroad) is answered with the declared no-claim value \u2014\n        never a discount claim \u2014 and every one comes back in ``assumptions``\n        (``field`` + the ``assumed`` value submitted). Relay them with the\n        results; if the user corrects one, re-call with the real value at\n        that path.\n\n        ``lines`` names WHICH line to walk, exactly one per call (a fan-out\n        drives one form family): ``{\"auto\": {...the ask...}}``,\n        ``{\"home\": null}``, or ``{\"renters\": {\"coverage_c\": 30000,\n        \"coverage_e\": 100000, \"coverage_f\": 1000, \"deductible\": 500}}``. An\n        AUTO walk's ask is REQUIRED \u2014 the limits and deductibles the agents\n        ask the carriers for, as actual numbers (`bi` \"100/300\", `pd` 100,\n        `coll_deductible` 500, `comp_deductible` 500, the same four axes as\n        quote_insurance); without it the tool answers with the\n        selection-required message; ask the user, then call again. A HOME\n        walk takes NO ask \u2014 the carrier's own form prices its package\n        (dwelling amount from its replacement-cost estimate) and the agents\n        report what it chose. A RENTERS walk requires its four axes as\n        actual dollars \u2014 ``coverage_c`` (personal-property/contents),\n        ``coverage_e`` (personal liability), ``coverage_f`` (guest medical)\n        and ``deductible`` \u2014 the agents type the user's numbers on the form\n        instead of accepting its defaults, and Foresee never invents them.\n\n        Quotes come back with evidence. ``quote.premium`` is VERBATIM as\n        the carrier's page printed it, and ``term_months`` says what it\n        covers \u2014 a 6-month figure is not a monthly one. When term_months\n        is known, present the monthly equivalent (premium \u00f7 term_months)\n        so carriers compare on one basis, the page's own figure beside it;\n        without it, relay the printed premium and say the monthly\n        equivalent is unknown. A carrier may\n        also decline the risk \u2014 a real answer to relay, not an error.\n        ``skipped`` and ``not_dispatched`` name the carriers NOT walked,\n        each with the reason \u2014 relay those too; a carrier never silently\n        vanishes.\n        ",
+ "inputSchema": {
+  "$defs": {
+   "AccidentInput": {
+    "additionalProperties": true,
+    "description": "One accident, dated, on the driver who had it.",
+    "properties": {
+     "amount": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Total damage paid out in dollars, if known",
+      "title": "Amount"
+     },
+     "at_fault": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Whether this driver was at fault",
+      "title": "At Fault"
+     },
+     "on": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "When it happened \u2014 ISO 8601, reduced precision welcome (\"2023\").",
+      "title": "On"
+     }
+    },
+    "title": "AccidentInput",
+    "type": "object"
+   },
+   "ApplicantIdentity": {
+    "description": "The real applicant's identifying details \u2014 required for a live\ncarrier submission, never for instant quotes. No SSN: it is\nstructurally rejected everywhere in this system and no carrier flow\nrequires one to quote. A driver's license number is identity too,\nbut it is per-driver, so it never rides here: every rated driver's\nnumber, the applicant's included, goes on their own\n``auto.drivers[]`` entry \u2014 and only when a carrier's ``needs``\nentry asks for it (some carrier forms insist on one before\nquoting); never volunteer it.",
+    "properties": {
+     "city": {
+      "description": "City",
+      "title": "City",
+      "type": "string"
+     },
+     "dob": {
+      "description": "Date of birth, YYYY-MM-DD",
+      "title": "Dob",
+      "type": "string"
+     },
+     "email": {
+      "description": "Email address \u2014 carriers send the quote here",
+      "title": "Email",
+      "type": "string"
+     },
+     "first_name": {
+      "description": "Legal first name",
+      "title": "First Name",
+      "type": "string"
+     },
+     "last_name": {
+      "description": "Legal last name",
+      "title": "Last Name",
+      "type": "string"
+     },
+     "phone": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Phone number, if the user shares one",
+      "title": "Phone"
+     },
+     "street": {
+      "description": "Street address (line 1)",
+      "title": "Street",
+      "type": "string"
+     },
+     "unit": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Apartment/unit number (address line 2), if any",
+      "title": "Unit"
+     },
+     "zip_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "5-digit ZIP, if it differs from the profile's",
+      "title": "Zip Code"
+     }
+    },
+    "required": [
+     "first_name",
+     "last_name",
+     "dob",
+     "street",
+     "city",
+     "email"
+    ],
+    "title": "ApplicantIdentity",
+    "type": "object"
+   },
+   "AutoBlock": {
+    "additionalProperties": true,
+    "description": "The auto line's facts: who drives, and what. Omit the whole block for a\nhousehold that isn't asking about a car \u2014 nothing about a vehicle is ever\nassumed for a profile without one.",
+    "properties": {
+     "drivers": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/$defs/DriverInput"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Drivers"
+     },
+     "vehicles": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/$defs/VehicleInput"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Vehicles"
+     }
+    },
+    "title": "AutoBlock",
+    "type": "object"
+   },
+   "CoverageSelectionInput": {
+    "additionalProperties": true,
+    "description": "The coverage to price, as actual numbers on named axes \u2014 the value type\nof every entry in the ``lines`` map, so it publishes each line's axes side\nby side (a line reads only its own; the map key says which apply).\n\nTyped for the same reason as ``QuoteProfile``: with a bare dict the schema\npublished ``additionalProperties: true`` and nothing else, so callers\nguessed key names (\"bodily_injury\") and burned a round trip on the\nselection-required refusal before learning the real ones. The fields are\nall optional HERE because completeness is judged server-side\n(``coverage_ask``, per line): an incomplete selection must reach the\nengines' rich ``coverage_selection_required`` payload \u2014 which names the\nmissing axes, a common choice, and (auto) the state's legal minimum \u2014 not\ndie as a generic schema validation error. ``extra=\"allow\"`` keeps the\nparser's accepted aliases (``bi_limit``, ``collision_deductible``,\n``uim``\u2026), the rarer home axes (B/C/D ratios, hurricane/water deductibles,\n``endorsements``), and wider overrides working.",
+    "properties": {
+     "aop_deductible": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "HOME: all-other-perils deductible in dollars, e.g. 1000",
+      "title": "Aop Deductible"
+     },
+     "bi": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Bodily-injury liability limit, per-person/per-accident in $000s, e.g. \"100/300\"",
+      "title": "Bi"
+     },
+     "coll_deductible": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Collision deductible in dollars, e.g. 500",
+      "title": "Coll Deductible"
+     },
+     "comp_deductible": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Comprehensive deductible in dollars, e.g. 500",
+      "title": "Comp Deductible"
+     },
+     "coverage_a": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "HOME: dwelling limit in dollars \u2014 set it to the dwelling's replacement cost (the profile's property.replacement_cost when known)",
+      "title": "Coverage A"
+     },
+     "coverage_c": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "RENTERS: personal-property (contents) limit in dollars, e.g. 30000 \u2014 the anchor an HO-4 rates off",
+      "title": "Coverage C"
+     },
+     "coverage_d": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "RENTERS: loss-of-use limit in dollars \u2014 omit to keep the engine's carrier default (commonly a fixed ratio of the contents limit)",
+      "title": "Coverage D"
+     },
+     "coverage_e": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "RENTERS/HOME: personal liability limit in dollars, e.g. 100000 (renters) / 300000 (home)",
+      "title": "Coverage E"
+     },
+     "coverage_f": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "RENTERS/HOME: guest medical (medical payments to others) limit in dollars, e.g. 1000",
+      "title": "Coverage F"
+     },
+     "deductible": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "RENTERS: all-perils deductible in dollars, e.g. 500",
+      "title": "Deductible"
+     },
+     "medpay": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Medical-payments limit in dollars, e.g. 5000 \u2014 omit to keep the carrier's default",
+      "title": "Medpay"
+     },
+     "pd": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Property-damage liability limit in $000s (NOT dollars), e.g. 100",
+      "title": "Pd"
+     },
+     "um": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Uninsured/underinsured-motorist BI limit in $000s, e.g. \"100/300\" \u2014 omit to keep the carrier's default",
+      "title": "Um"
+     }
+    },
+    "title": "CoverageSelectionInput",
+    "type": "object"
+   },
+   "DriverInput": {
+    "additionalProperties": true,
+    "description": "One driver on the policy. Exactly one driver is the applicant\n(`relation` omitted or \"self\") and takes their demographics from the\nprofile's top level \u2014 restating them here is fine when they agree,\nan error when they don't.",
+    "properties": {
+     "accidents": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/$defs/AccidentInput"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Accidents, each dated. An empty list means none.",
+      "title": "Accidents"
+     },
+     "age_first_licensed": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Age when first licensed, typically 16-18 (Liberty Mutual asks)",
+      "title": "Age First Licensed"
+     },
+     "date_first_licensed": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Date first licensed, YYYY-MM-DD (alternative to age_first_licensed)",
+      "title": "Date First Licensed"
+     },
+     "defensive_driving_course": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Completed a defensive-driving / accident-prevention course, last 3 years",
+      "title": "Defensive Driving Course"
+     },
+     "dob": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Date of birth, YYYY-MM-DD",
+      "title": "Dob"
+     },
+     "drivers_license_number": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Driver's license number \u2014 identity like the name, supplied only when a carrier's needs entry asks for it (some carrier forms insist on one for every rated driver before quoting). This entry is every driver's ONE home for it, the applicant's included",
+      "title": "Drivers License Number"
+     },
+     "education": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Highest education level: 'No High School' / 'High School' / 'Vocational' / 'Some College' / 'Associate' / 'Bachelors' / 'Masters' / 'Doctorate'",
+      "title": "Education"
+     },
+     "employment_status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'Employed' / 'Self-Employed' / 'Retired' / 'Student' / 'Unemployed'",
+      "title": "Employment Status"
+     },
+     "exclusion_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Why an excluded driver doesn't drive, e.g. 'never had a license' \u2014 carriers (Allstate) require it for an excluded spouse",
+      "title": "Exclusion Reason"
+     },
+     "first_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Legal first name \u2014 live carrier forms insist on naming every listed driver (a married applicant's spouse especially); the applicant's own name rides in `identity` instead (logged as PII, never echoed)",
+      "title": "First Name"
+     },
+     "gender": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Gender"
+     },
+     "industry": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Industry"
+     },
+     "last_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Legal last name (see first_name)",
+      "title": "Last Name"
+     },
+     "license_state": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Two-letter state that issued this driver's license",
+      "title": "License State"
+     },
+     "marital_status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Marital Status"
+     },
+     "occupation": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Occupation"
+     },
+     "relation": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "\"self\" (default for the first driver), \"spouse\", \"child\", \"parent\", \"other\"",
+      "title": "Relation"
+     },
+     "rideshare_use": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Drives for ride-share or delivery (Uber, Lyft\u2026) \u2014 personal policies exclude livery use, so this changes eligibility and rate",
+      "title": "Rideshare Use"
+     },
+     "sr22_required": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Needs an SR-22 / financial-responsibility filing",
+      "title": "Sr22 Required"
+     },
+     "status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'licensed' (default) / 'permit' / 'not licensed' / 'excluded' \u2014 an excluded driver is listed on the household but not rated",
+      "title": "Status"
+     },
+     "violations": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/$defs/ViolationInput"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Moving violations, each dated. An empty list means a clean record.",
+      "title": "Violations"
+     },
+     "years_licensed": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Years Licensed"
+     },
+     "years_licensed_outside_us": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Years licensed outside the US; 0 = never held a licence abroad \u2014 GEICO, The General and Dairyland's live quote forms require the answer",
+      "title": "Years Licensed Outside Us"
+     },
+     "years_licensed_us": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Years licensed in the US, when it differs from years_licensed",
+      "title": "Years Licensed Us"
+     }
+    },
+    "title": "DriverInput",
+    "type": "object"
+   },
+   "LossInput": {
+    "additionalProperties": true,
+    "description": "One prior property loss, dated.",
+    "properties": {
+     "amount": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Amount paid out in dollars, if known",
+      "title": "Amount"
+     },
+     "kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "\"water\", \"fire\", \"theft\", \"wind/hail\", \"liability\"\u2026",
+      "title": "Kind"
+     },
+     "on": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "When it happened \u2014 ISO 8601, reduced precision welcome",
+      "title": "On"
+     }
+    },
+    "title": "LossInput",
+    "type": "object"
+   },
+   "PriorInsuranceInput": {
+    "additionalProperties": true,
+    "description": "The insurance carried now. `since`/`until` are the fact behind every way\na form asks how long it ran \u2014 tenure is derived from the dates, never sent\nas its own number.",
+    "properties": {
+     "carrier": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Current carrier's name",
+      "title": "Carrier"
+     },
+     "insured": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Currently insured?",
+      "title": "Insured"
+     },
+     "lapse": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Any lapse in coverage in the last 12 months",
+      "title": "Lapse"
+     },
+     "limits": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Bodily-injury limits carried now, e.g. \"100/300\" \u2014 carriers ask it of the insured",
+      "title": "Limits"
+     },
+     "since": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "When this coverage started \u2014 ISO 8601, reduced precision welcome (\"2019\")",
+      "title": "Since"
+     },
+     "until": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "When it ends/ended \u2014 ISO 8601, reduced precision welcome; omit while the cover is still in force",
+      "title": "Until"
+     }
+    },
+    "title": "PriorInsuranceInput",
+    "type": "object"
+   },
+   "PropertyBlock": {
+    "additionalProperties": true,
+    "description": "The dwelling's facts \u2014 used by home AND renters. Accepted and recorded\ntoday; priced once a property line launches.",
+    "properties": {
+     "bathrooms": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Bathrooms"
+     },
+     "construction_type": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'frame' / 'masonry' / 'masonry veneer'\u2026",
+      "title": "Construction Type"
+     },
+     "devices": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Protective devices in the home: 'smoke alarm', 'deadbolts', 'fire extinguisher', 'central burglar alarm', 'sprinklers'\u2026 ['None'] means asked-and-none; omit the field if never asked",
+      "title": "Devices"
+     },
+     "foundation": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'slab' / 'raised' / 'basement' / 'crawlspace'\u2026",
+      "title": "Foundation"
+     },
+     "garage": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'attached 2 car' / 'detached 1 car' / 'carport' / 'none'\u2026",
+      "title": "Garage"
+     },
+     "household": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "How many people live in the home",
+      "title": "Household"
+     },
+     "losses": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/$defs/LossInput"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Prior property losses, each DATED (carrier forms ask when). [] means asked-and-loss-free; omit the field if never asked",
+      "title": "Losses"
+     },
+     "miles_to_fire_station": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Road miles to the responding fire station \u2014 a rating axis at several carriers",
+      "title": "Miles To Fire Station"
+     },
+     "occupancy": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'owner occupied' / 'tenant occupied' / 'seasonal' / 'vacant'",
+      "title": "Occupancy"
+     },
+     "protection_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "ISO fire protection class, 1-10",
+      "title": "Protection Class"
+     },
+     "purchased": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "When the home was purchased \u2014 ISO 8601, reduced precision welcome (\"2021\" / \"2021-06\"). Carrier forms ask it outright.",
+      "title": "Purchased"
+     },
+     "renovation_permit_year": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Year of the last permitted renovation (plumbing/electrical/heating/roof)",
+      "title": "Renovation Permit Year"
+     },
+     "replacement_cost": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Estimated dwelling replacement cost in dollars, if the user has one",
+      "title": "Replacement Cost"
+     },
+     "roof_layers": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "How many layers of roofing are on the house",
+      "title": "Roof Layers"
+     },
+     "roof_type": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'composition shingle' / 'tile' / 'metal'\u2026",
+      "title": "Roof Type"
+     },
+     "roof_year": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Year the roof was last fully replaced",
+      "title": "Roof Year"
+     },
+     "seismic_retrofit": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Whether an older home has been seismically retrofitted (asked in CA)",
+      "title": "Seismic Retrofit"
+     },
+     "square_feet": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Square Feet"
+     },
+     "stories": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Stories"
+     },
+     "swimming_pool": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Swimming Pool"
+     },
+     "units": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "How many families the building holds",
+      "title": "Units"
+     },
+     "year_built": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Year Built"
+     }
+    },
+    "title": "PropertyBlock",
+    "type": "object"
+   },
+   "QuoteProfile": {
+    "additionalProperties": true,
+    "description": "The household being quoted: a line-neutral core plus per-line blocks\n(#1106). Every fact has a declared posture (`foresee.postures`): a few\nare REQUIRED \u2014 the ZIP, the applicant's age (or dob), and, when quoting\nauto, each vehicle's year/make/model \u2014 because they have no neutral\nrateable value; YOU supply those, inventing a concrete value from context\nwhen the user was vague and telling them so. Everything else is optional:\nomissions become explicit, priced assumptions (`assumptions` /\n`tighten_by`), never a refusal.\n\nThe core carries facts about the people and where they live; the `auto`\nblock carries `drivers[]` and `vehicles[]`; the `property` block carries\nthe dwelling (home AND renters). A household that will only ever buy\nrenters simply has no `auto` block, and nothing about a car is assumed\nfor it.\n\nTyped (rather than a bare dict) so the connector schema tells the model the\nexact field names: an untyped profile made models guess keys (\"zip\"), the\nvalue was silently ignored, and the engines rated a default location.\n``extra=\"allow\"`` keeps two things working unadvertised: the legacy flat\nspellings (``vehicle_year``, ``spouse_dob``, ``currently_insured``,\n3-year incident counts\u2026), which fold onto the blocks \u2014 a flat key\ndisagreeing with a block is a hard error naming both \u2014 and richer keys\nflowing through to the engines unchanged.",
+    "properties": {
+     "age": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "REQUIRED unless dob is passed. If the user was vague ('mid-20s'), pass a concrete age and present it as your assumption.",
+      "title": "Age"
+     },
+     "auto": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/AutoBlock"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "The auto line's facts: drivers[] and vehicles[]"
+     },
+     "city": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "City"
+     },
+     "companion_policies": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Lines the household already HOLDS elsewhere, e.g. [\"home\"] \u2014 a held companion policy applies each carrier's multi-policy factor",
+      "title": "Companion Policies"
+     },
+     "credit_range": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'Excellent' / 'Good' / 'Fair' / 'Poor'. Not a rating input in CA, HI, MA, or MI (credit-based auto rating is banned there) \u2014 omit it and don't ask shoppers in those states.",
+      "title": "Credit Range"
+     },
+     "dob": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Date of birth, YYYY-MM-DD (alternative to age)",
+      "title": "Dob"
+     },
+     "education": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Highest education level: 'No High School' / 'High School' / 'Vocational' / 'Some College' / 'Associate' / 'Bachelors' / 'Masters' / 'Doctorate'",
+      "title": "Education"
+     },
+     "effective_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Desired start date for the new policy, YYYY-MM-DD",
+      "title": "Effective Date"
+     },
+     "employment_status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'Employed' / 'Self-Employed' / 'Retired' / 'Student' / 'Unemployed'",
+      "title": "Employment Status"
+     },
+     "gender": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Gender"
+     },
+     "home_ownership_status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'rent' / 'own with mortgage' / 'own outright' \u2014 bare 'own' is accepted; carrier forms ask which",
+      "title": "Home Ownership Status"
+     },
+     "industry": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Industry beside the occupation, e.g. 'Finance and Insurance' \u2014 GEICO's live quote form insists on it",
+      "title": "Industry"
+     },
+     "marital_status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'Single' / 'Married' / \u2026",
+      "title": "Marital Status"
+     },
+     "memberships": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Organizations the applicant belongs to, e.g. ['Costco', 'AAA'] \u2014 group/affinity plans (CA \u00a71861.12) discount on them",
+      "title": "Memberships"
+     },
+     "military_affiliation": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'active' / 'veteran' / 'family' / 'none' \u2014 USAA quotes only military-affiliated households",
+      "title": "Military Affiliation"
+     },
+     "military_branch": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Branch of service, e.g. 'Army', 'Navy' (USAA asks)",
+      "title": "Military Branch"
+     },
+     "military_rank_paygrade": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Rank / pay grade, e.g. 'E-5' (USAA asks)",
+      "title": "Military Rank Paygrade"
+     },
+     "military_service_end_year": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Military Service End Year"
+     },
+     "military_service_start_year": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Military Service Start Year"
+     },
+     "months_at_residence": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "How long at the current address, in months",
+      "title": "Months At Residence"
+     },
+     "occupation": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Occupation as carriers collect it, e.g. 'Accountant'",
+      "title": "Occupation"
+     },
+     "prior_insurance": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/PriorInsuranceInput"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "The insurance carried now \u2014 carrier, dates, limits held"
+     },
+     "property": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/PropertyBlock"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "The dwelling's facts \u2014 home and renters alike"
+     },
+     "residence_type": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'House' / 'Apartment' / 'Condominium' / 'Manufactured Home' / \u2026",
+      "title": "Residence Type"
+     },
+     "state": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Two-letter state code, e.g. 'CA' (derived from zip_code when omitted)",
+      "title": "State"
+     },
+     "street_address": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Street address (line 1) \u2014 sharpens territory rating and is required for live carrier submissions (logged as PII, never echoed)",
+      "title": "Street Address"
+     },
+     "unit": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Apartment/unit number (address line 2) \u2014 a renter or condo dweller in a multi-unit building needs it for live carrier submissions",
+      "title": "Unit"
+     },
+     "zip_code": {
+      "description": "REQUIRED \u2014 5-digit garaging/home ZIP. ALWAYS pass the ZIP here, never under another key. If the user named only a city, pass that city's best-known ZIP and tell them the assumption.",
+      "title": "Zip Code",
+      "type": "string"
+     }
+    },
+    "required": [
+     "zip_code"
+    ],
+    "title": "QuoteProfile",
+    "type": "object"
+   },
+   "VehicleInput": {
+    "additionalProperties": true,
+    "description": "One vehicle on the policy.",
+    "properties": {
+     "annual_mileage": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Annual Mileage"
+     },
+     "anti_lock_brakes": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Anti Lock Brakes"
+     },
+     "anti_theft": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'alarm' / 'active_disable' / 'passive_disable' / 'recovery_device'",
+      "title": "Anti Theft"
+     },
+     "body_style": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Trim / body style as the carrier lists it, e.g. \"XLT AWD 4D GAS\"",
+      "title": "Body Style"
+     },
+     "bought_new": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Whether the vehicle was new when bought (Allstate asks)",
+      "title": "Bought New"
+     },
+     "commute_days": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Commute days per week",
+      "title": "Commute Days"
+     },
+     "cost": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "What the vehicle cost new, whole dollars \u2014 some carriers' live quote forms (Kemper) insist on it",
+      "title": "Cost"
+     },
+     "daytime_running_lights": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Daytime Running Lights"
+     },
+     "garaging_zip": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "ZIP where THIS vehicle is garaged, when it differs from the household's zip_code \u2014 auto rating keys on the garaging territory, so a stated garaging ZIP is what gets rated",
+      "title": "Garaging Zip"
+     },
+     "make": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Make"
+     },
+     "model": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Model"
+     },
+     "one_way_miles": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "One-way commute distance, miles",
+      "title": "One Way Miles"
+     },
+     "ownership": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'owned' / 'financed' / 'leased'",
+      "title": "Ownership"
+     },
+     "primary_use": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'Personal' / 'Commute' / 'Business'",
+      "title": "Primary Use"
+     },
+     "purchase_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "When the vehicle was bought \u2014 ISO 8601, \"2021-06\" or \"2021\" welcome",
+      "title": "Purchase Date"
+     },
+     "trim": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Trim"
+     },
+     "vin": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "17-character VIN \u2014 live carrier forms prefer it over year/make/model",
+      "title": "Vin"
+     },
+     "year": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Year"
+     }
+    },
+    "title": "VehicleInput",
+    "type": "object"
+   },
+   "ViolationInput": {
+    "additionalProperties": true,
+    "description": "One citation, as it will be declared. Dated, because carriers\nprice WHEN it happened \u2014 counts and windows are derived, never sent.",
+    "properties": {
+     "kind": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "The violation in plain words: \"speeding\", \"DUI\", \"reckless \"\"driving\", \"running a red light\"\u2026",
+      "title": "Kind"
+     },
+     "on": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "When it happened \u2014 ISO 8601, reduced precision welcome: \"2024\", \"2024-06\", or \"2024-06-15\". A year IS a date.",
+      "title": "On"
+     }
+    },
+    "title": "ViolationInput",
+    "type": "object"
+   }
+  },
+  "properties": {
+   "carriers": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Carriers"
+   },
+   "identity": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/ApplicantIdentity"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "lines": {
+    "anyOf": [
+     {
+      "additionalProperties": {
+       "anyOf": [
+        {
+         "$ref": "#/$defs/CoverageSelectionInput"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Lines"
+   },
+   "profile": {
+    "$ref": "#/$defs/QuoteProfile",
+    "type": "object"
+   },
+   "user_authorization": {
+    "default": "",
+    "title": "User Authorization",
+    "type": "string"
+   }
+  },
+  "required": [
+   "profile"
+  ],
+  "title": "live_carrier_quotesArguments",
+  "type": "object"
+ },
+ "name": "live_carrier_quotes",
+ "outputSchema": {
+  "$defs": {
+   "AgentStatusSummary": {
+    "additionalProperties": true,
+    "description": "One live agent's status in a dispatch envelope's structuredContent.",
+    "properties": {
+     "carrier": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Carrier"
+     },
+     "carrier_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Carrier Key"
+     },
+     "declined": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Declined"
+     },
+     "detail": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Detail"
+     },
+     "eta_seconds_remaining": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Eta Seconds Remaining"
+     },
+     "line": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "The line this agent quotes \u2014 entry identity is (carrier, line): a bundled dispatch carries the same carrier once per line",
+      "title": "Line"
+     },
+     "premium": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Verbatim as the carrier's page printed it",
+      "title": "Premium"
+     },
+     "status": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'in_progress' / 'complete' / 'failed'",
+      "title": "Status"
+     },
+     "term_months": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "The term the printed premium covers, in months \u2014 when known, present the monthly equivalent (premium \u00f7 term_months), never a term figure as a monthly one; when absent, the monthly equivalent is unknown",
+      "title": "Term Months"
+     }
+    },
+    "title": "AgentStatusSummary",
+    "type": "object"
+   }
+  },
+  "additionalProperties": true,
+  "description": "structuredContent of live_carrier_quotes \u2014 one shape for both moments:\nthe commissioning receipt and the collected progress/results envelope.",
+  "properties": {
+   "agents": {
+    "anyOf": [
+     {
+      "items": {
+       "$ref": "#/$defs/AgentStatusSummary"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Agents"
+   },
+   "assumptions": {
+    "anyOf": [
+     {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Unasserted form facts this dispatch resolved to declared no-claim answers (never a discount claim) \u2014 each entry names the profile path (field) and the value submitted (assumed). Relay every one with the results; a user who corrects one re-calls with the real value in the profile",
+    "title": "Assumptions"
+   },
+   "authorization_recorded": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Authorization Recorded"
+   },
+   "coverage_selection": {
+    "anyOf": [
+     {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "The ask the walks TYPED \u2014 what each headline premium is for. A walked profile answers any ask without re-submitting: if the user's ask differs, read each quote's bound cover and variants (the carrier's other recorded options) and present the match",
+    "title": "Coverage Selection"
+   },
+   "detail": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Detail"
+   },
+   "error": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Error"
+   },
+   "example_arguments": {
+    "anyOf": [
+     {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "On a profile_required refusal: a correctly-wrapped call to imitate \u2014 re-call with the user's facts in this shape",
+    "title": "Example Arguments"
+   },
+   "needs": {
+    "anyOf": [
+     {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Facts carrier forms insist on that the profile does not carry, per carrier (scope). Each entry's fields[] pairs the walk's own ask with the exact profile/identity schema path to supply it under (field) \u2014 collect the answers from the user and re-call; never invent them",
+    "title": "Needs"
+   },
+   "note": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Note"
+   },
+   "recover": {
+    "anyOf": [
+     {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "On a partial receipt: how to add the skipped carriers without re-submitting the walked ones \u2014 re-call with the missing facts merged AND carriers set to exactly recover.carriers (a changed profile is a new dispatch; unscoped, it would re-walk everyone)",
+    "title": "Recover"
+   },
+   "skipped": {
+    "anyOf": [
+     {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Skipped"
+   },
+   "status": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "'in_progress' / 'partial' / 'complete' \u2014 re-call the tool with the same arguments to collect",
+    "title": "Status"
+   }
+  },
+  "title": "DispatchResult",
+  "type": "object"
+ },
+ "securitySchemes": [
+  {
+   "type": "noauth"
+  }
+ ],
+ "title": "Live carrier quotes"
+}

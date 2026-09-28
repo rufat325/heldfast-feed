@@ -1,0 +1,435 @@
+{
+ "_meta": {
+  "ui": {
+   "resourceUri": "ui://well/widget/f9b427b8"
+  },
+  "ui/resourceUri": "ui://well/widget/f9b427b8"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "List counterparties"
+ },
+ "description": "List the workspace's counterparty companies and how each one is CATEGORIZED \u2014 the company-level industry labels a counterparty carries. Use it for \"which suppliers have no category?\", \"what industries are my counterparties in?\", and before categorizing a counterparty so you name real ids instead of guessing.\n\nName a scope, and say whether to keep only the ones missing a category:\n- `periods: [{ calendar_year, calendar_month }, \u2026]` (1-12): the counterparties whose invoices those months are still missing, categorized ones included, each row tagged with its month and carrying `tx_count`, `base_total_amount` in `base_currency`, and `suggested_retrieval`. Every month must have ended.\n- `periods` PLUS `uncategorized_only: true`: the same months, keeping ONLY the counterparties that carry no category. Use this whenever the question is which of a period's suppliers still need one, and whenever a step asks the user to categorize them: the categorized ones are not the work, and listing them buries it.\n- `uncategorized_only: true` alone: a WORKSPACE-WIDE sweep for every counterparty that carries no category, no month involved. Returns 50 rows per page plus `total_count`; `tx_count`, `base_total_amount` and `suggested_retrieval` are null because the call names no period. When `next_cursor` is not null the sweep has more counterparties: call again with `cursor` set to it to read them. It is a POSITION, not a row offset, so categorizing the rows of one page never hides the rows of the next. Only this sweep pages: `cursor` is refused beside `periods`.\n- `missing_ledger_only: true` alone: the LEDGER-ASSIGNMENT worklist \u2014 the counterparties that have a bank transaction and still need a ledger account (COA) default set for the direction their transactions take. Its rows ride in `ledger_rows`, not `rows`, each carrying `needs_payable`/`needs_receivable` and the AP/AR default it holds now; a needed slot is empty, assigned from the chart of accounts. This is a DIFFERENT question from categorization: it assigns a ledger account, not an industry label. Set a default with `well_update_company({ account_payable_default_id | account_receivable_default_id })`; read the account ids with `well_list_ledger_accounts`. It returns the first 500 counterparties needing a default, so a worklist that fills 500 (`total_count` equal to `row_count` at 500) is a FLOOR: assign those and read the scope again for the rest. It is its own scope \u2014 never combine it with `periods`, `uncategorized_only`, or `cursor`.\n\nCOST: the period form has no batch endpoint, so each named month is a separate read of that month's spend. Ask for the months the user actually named, not a whole year \"to be safe\".\n\nEvery row carries `categories` (`[{ category_id, name }]`) and `is_categorized`. `categorized_count` and `uncategorized_count` count the COUNTERPARTIES OF THE SCOPE, once each however many months they appear in, not the rows returned. Under `uncategorized_only` the result lists the uncategorized ones alone while `categorized_count` still counts the ones it withheld, so the two together are the period's coverage and `uncategorized_count` is the work left. Report both: naming the listed rows as the period's whole counterparty set overstates how much is uncategorized.\n\nTO SET a counterparty's categories, call `well_update_company({ company_id, category_ids: [...] })` \u2014 that field REPLACES the company's whole set. Read the available labels first with `well_query_records({ root: \"categories\", whereClause: { category_type: { _eq: \"company\" } } })`: that is the company-category catalog. It has no curated allowlist \u2014 the labels are minted during enrichment \u2014 so pass ids from it rather than inventing a taxonomy.\n\n`suggested_retrieval` is derived from the PROVIDER match, not from the category. Categorizing a counterparty does not change it; do not tell the user otherwise.\n\nThis tool only reads. It categorizes nothing, mints no task, connects nothing and fetches no invoice.\n\nNo workspace read is needed first: the workspace is resolved from the caller's authorized token, same as every other well_* tool.\n\nWhen the user asks to see, list or fix these rows, call this tool directly: its card is the answer. \u26a0\ufe0f **This tool draws its card on EVERY call, the empty one included.** So when nobody asked for the list and you only need to CHECK whether anything is left (the first pass of a gate, or a re-check after a repair), call `well_get_worklist_status({ worklist: \"counterparties_to_categorize\", periods })` first, with the same scope you would pass here. It draws nothing. Call this tool after it only when it answers `open: true`.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "cursor": {
+    "description": "The next page of the workspace-wide uncategorized sweep: pass back the `next_cursor` the previous call returned. Only that sweep pages, so this needs `uncategorized_only: true` and NO `periods`, because a period scope returns every month it covers in one call.",
+    "type": "string"
+   },
+   "missing_ledger_only": {
+    "const": true,
+    "description": "A workspace-wide sweep for the counterparties that have a bank transaction and still need a ledger account (COA) default set for the direction their transactions take \u2014 the ledger-assignment worklist. It is its OWN scope: never pass it with `periods`, `uncategorized_only`, or `cursor`. Each row carries `needs_payable`/`needs_receivable` and the AP/AR defaults it holds now (a needed slot is empty), and rides in `ledger_rows` rather than `rows`.",
+    "type": "boolean"
+   },
+   "periods": {
+    "description": "The calendar months whose counterparties to list, 1-12. Each month costs one separate read of that month's spend. Duplicates are refused.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "calendar_month": {
+       "description": "Calendar month, 1 = January \u2026 12 = December.",
+       "maximum": 12,
+       "minimum": 1,
+       "type": "integer"
+      },
+      "calendar_year": {
+       "description": "Calendar year, e.g. 2026.",
+       "maximum": 2100,
+       "minimum": 2000,
+       "type": "integer"
+      }
+     },
+     "required": [
+      "calendar_year",
+      "calendar_month"
+     ],
+     "type": "object"
+    },
+    "maxItems": 12,
+    "minItems": 1,
+    "type": "array"
+   },
+   "uncategorized_only": {
+    "const": true,
+    "description": "Keep only the counterparties that carry no industry category. WITH `periods`: the uncategorized counterparties OF those months. Use it whenever the question is which of a period's suppliers still need a category. WITHOUT `periods`: a WORKSPACE-WIDE sweep for every uncategorized counterparty, 50 rows per page plus the total, with a `next_cursor` for the page after this one.",
+    "type": "boolean"
+   },
+   "workspace_id": {
+    "description": "Target workspace. This read reports one workspace's own data. Omit it and the token's primary workspace answers, which may not be the one you mean; the result names the workspace that did.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "well_list_counterparties",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "base_currency": {
+    "type": "string"
+   },
+   "categorized_count": {
+    "description": "COUNTERPARTIES of the scope that carry at least one category, counted over the whole scope, not over `rows`, and counted once however many months a counterparty appears in. Under `uncategorized_only` these are exactly the counterparties the result withheld, so a non-zero figure beside rows that are all uncategorized is the coverage, not a contradiction.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "error": {
+    "type": "string"
+   },
+   "hints": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "ledger_rows": {
+    "items": {
+     "additionalProperties": {},
+     "propertyNames": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "mode": {
+    "description": "Which SCOPE the call asked for; the row fields that are populated follow from it. `periods` whenever the call named months, whether or not it also filtered to the uncategorized ones. `missing_ledger_only` returns its rows in `ledger_rows`, not `rows`.",
+    "enum": [
+     "periods",
+     "uncategorized_only",
+     "missing_ledger_only"
+    ],
+    "type": "string"
+   },
+   "next_cursor": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "The uncategorized sweep's next page: pass it back as `cursor`. Null when this page ends the sweep, absent on the periods scope, which pages nothing."
+   },
+   "next_step": {
+    "description": "What to do with the card this result renders. Added by the dispatcher when the card asks for a click.",
+    "type": "string"
+   },
+   "periods_covered": {
+    "description": "The months the result covers, oldest first.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "calendar_month": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "calendar_year": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "period_label": {
+       "description": "The month this row belongs to, e.g. \"June 2026\".",
+       "type": "string"
+      }
+     },
+     "required": [
+      "calendar_year",
+      "calendar_month",
+      "period_label"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "row_count": {
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "rows": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "base_total_amount": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Sum in base_currency of the period's transactions missing an invoice. Null on the sweep, and null when an FX rate was missing."
+      },
+      "calendar_month": {
+       "anyOf": [
+        {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Null on the uncategorized sweep, which names no period."
+      },
+      "calendar_year": {
+       "anyOf": [
+        {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Null on the uncategorized sweep, which names no period."
+      },
+      "categories": {
+       "description": "The industry categories this counterparty carries; empty when none.",
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "category_id": {
+          "type": "string"
+         },
+         "name": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "category_id",
+         "name"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "company_id": {
+       "type": "string"
+      },
+      "domain": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "is_categorized": {
+       "type": "boolean"
+      },
+      "logo_url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "The company's stored logo; null when enrichment has not landed one."
+      },
+      "name": {
+       "type": "string"
+      },
+      "period_label": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "The month this row belongs to, e.g. \"June 2026\". Null on the sweep."
+      },
+      "suggested_categories": {
+       "description": "A stored classifier PROPOSAL is a candidate label, never a decision: `categories` is what this counterparty actually carries, and only a write makes a proposal true. Highest confidence first, at most three. Empty when the classifier has not run, abstained, or a human already resolved its proposal \u2014 an empty array is not evidence that no label fits. Present on both scopes. Report a proposal as a suggestion to the user, never as the counterparty's industry, and NOTE this is unrelated to `suggested_retrieval`, which is about fetching invoices.",
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "category_id": {
+          "description": "The catalog id of the proposed label \u2014 pass it straight to `well_update_company` to accept it.",
+          "type": "string"
+         },
+         "confidence": {
+          "description": "0..1, the classifier's own scale.",
+          "type": "number"
+         },
+         "name": {
+          "type": "string"
+         },
+         "rank": {
+          "description": "1 is the classifier's top proposal.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "reasoning": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "The classifier's own account of this proposal, or null when the run stored none."
+         }
+        },
+        "required": [
+         "category_id",
+         "name",
+         "confidence",
+         "rank",
+         "reasoning"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "suggested_retrieval": {
+       "anyOf": [
+        {
+         "enum": [
+          "agent",
+          "upload",
+          "connect"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "How the app currently offers to obtain this counterparty's invoices: agent (a browser agent runs the supplier portal), connect (connect the matched service and Well fetches them), upload (the user supplies the file). Derived from the PROVIDER match, NOT from the categories \u2014 the category does not select a retrieval path today. Null on the uncategorized sweep, which has no period to route."
+      },
+      "tx_count": {
+       "anyOf": [
+        {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Transactions missing an invoice in the period. Null on the sweep."
+      }
+     },
+     "required": [
+      "company_id",
+      "name",
+      "domain",
+      "logo_url",
+      "calendar_year",
+      "calendar_month",
+      "period_label",
+      "tx_count",
+      "base_total_amount",
+      "categories",
+      "is_categorized",
+      "suggested_categories",
+      "suggested_retrieval"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "total_count": {
+    "description": "Counterparties MATCHING the call, before the row cap, so a capped sweep says what it left out. On the periods scope: the DISTINCT counterparties `rows` names, and a multi-month call lists one counterparty on one row per month, so row_count can exceed it. Under `uncategorized_only` it counts the uncategorized ones alone; the scope's whole population is `categorized_count` plus `uncategorized_count`. Under `missing_ledger_only` it is the worklist actually returned and equals `row_count`: that scope reads the first 500 counterparties needing a default, so a worklist that fills 500 is a FLOOR, not a complete count. Assign those and read the scope again for the rest.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "uncategorized_count": {
+    "description": "COUNTERPARTIES of the scope that carry none, counted the same way. This is the outstanding work; with `categorized_count` it is the scope's whole population.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "uncategorized_only": {
+    "description": "Whether `rows` holds ONLY the counterparties that carry no category. True on the workspace-wide sweep and on a period scope the call filtered. When true, `categorized_count` counts counterparties the result did NOT list.",
+    "type": "boolean"
+   },
+   "workspace_id": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "rows",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "List counterparties"
+}

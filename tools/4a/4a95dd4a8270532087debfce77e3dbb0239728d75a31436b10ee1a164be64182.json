@@ -1,0 +1,478 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Insider transactions from SEC Form 4 filings (coverage starts July 2021; updated daily). One row per filing and transaction type: same-day lots are combined, avg_price_usd is value-weighted, value_usd is the USD total, shares_owned_after is the holding after the last lot, ownership_change_pct is the change in the insider's holding in percent (null = new position or not computable). Filter by ticker, insider_cik, filing-date range, codes, the primary insider's role and minimum value. Without ticker or insider_cik the query is market-wide and limited to 30 days of filings (default: last 7 days). Codes: P = open-market or private purchase, S = sale, A = grant or award, D = disposition to the issuer, F = shares withheld for taxes, G = gift, M = option exercise under a company plan, X = in-the-money exercise, C = conversion, W = inheritance, J = other. Default codes P and S. Dates are YYYY-MM-DD; filed_at is ISO 8601 UTC and filed_date its US Eastern date; backfilled filings may only have the date (filed_at at midnight Eastern). price_outlier is true when the reported price or value is not reliable (a typo, a wrong unit or a foreign company's home-market shares priced in local currency instead of US dollars); avg_price_usd and value_usd are then as filed, and the site leaves these rows out of rankings and totals. carried_from is set on rows that a Form 4/A carried over from the original filing: an amendment that restates only some lines leaves the original's other transactions standing, so they are listed under the amendment's accession (amendment true), with the original's accession in carried_from and the original's filed_at and sec_url; it is null otherwise. rule_10b5_1 is null for filings before 2023. Each row links to livermore.club (url) and the SEC filing that reports the transaction (sec_url). At most 200 rows per call; use page for more.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "codes": {
+    "anyOf": [
+     {
+      "const": "all",
+      "type": "string"
+     },
+     {
+      "items": {
+       "pattern": "^[A-Za-z]$",
+       "type": "string"
+      },
+      "maxItems": 20,
+      "minItems": 1,
+      "type": "array"
+     }
+    ],
+    "default": [
+     "P",
+     "S"
+    ],
+    "description": "Form 4 transaction codes to include, e.g. [\"P\"] for purchases only, or \"all\". Default [\"P\",\"S\"] (open-market purchases and sales)."
+   },
+   "from": {
+    "description": "Earliest SEC filing date, YYYY-MM-DD (US Eastern).",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   },
+   "insider_cik": {
+    "description": "Only filings on which this insider (reporting owner) appears, across all companies. Get the CIK from search.",
+    "pattern": "^(CIK)?\\d{1,10}$",
+    "type": "string"
+   },
+   "limit": {
+    "default": 25,
+    "description": "Maximum rows to return (1-200, default 25).",
+    "maximum": 200,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "min_value_usd": {
+    "description": "Minimum transaction value in USD (rows without a price are then excluded).",
+    "maximum": 10000000000000,
+    "minimum": 0,
+    "type": "number"
+   },
+   "page": {
+    "default": 1,
+    "description": "Page number starting at 1; each page has `limit` rows. Check has_more.",
+    "maximum": 500,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "roles": {
+    "default": [],
+    "description": "Keep rows whose primary reporting owner has any of these roles: ceo, cfo, director, officer, owner10 (10% owner). Empty = any role.",
+    "items": {
+     "enum": [
+      "ceo",
+      "cfo",
+      "director",
+      "officer",
+      "owner10"
+     ],
+     "type": "string"
+    },
+    "maxItems": 5,
+    "type": "array"
+   },
+   "sort": {
+    "default": "filed",
+    "description": "filed = newest filing first (default); trade_date = most recent trade date first; value = largest USD value first (rows flagged as price outliers or duplicate filings are left out).",
+    "enum": [
+     "filed",
+     "trade_date",
+     "value"
+    ],
+    "type": "string"
+   },
+   "ticker": {
+    "description": "Only this company's filings (all share classes of the issuer), e.g. AAPL or BRK.B.",
+    "maxLength": 12,
+    "minLength": 1,
+    "type": "string"
+   },
+   "to": {
+    "description": "Latest SEC filing date, YYYY-MM-DD, inclusive.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "get_insider_trades",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "filters": {
+    "additionalProperties": false,
+    "properties": {
+     "codes": {
+      "anyOf": [
+       {
+        "const": "all",
+        "type": "string"
+       },
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      ]
+     },
+     "from": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "min_value_usd": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "roles": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "sort": {
+      "type": "string"
+     },
+     "to": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "codes",
+     "roles",
+     "min_value_usd",
+     "from",
+     "to",
+     "sort"
+    ],
+    "type": "object"
+   },
+   "has_more": {
+    "type": "boolean"
+   },
+   "insider": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "cik": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       },
+       "url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "cik",
+       "name",
+       "url"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "limit": {
+    "type": "number"
+   },
+   "note": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "page": {
+    "type": "number"
+   },
+   "rows": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "accession": {
+       "type": "string"
+      },
+      "acquired_or_disposed": {
+       "anyOf": [
+        {
+         "enum": [
+          "acquired",
+          "disposed"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "amendment": {
+       "type": "boolean"
+      },
+      "avg_price_usd": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "carried_from": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "code": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "derivative": {
+       "type": "boolean"
+      },
+      "filed_at": {
+       "type": "string"
+      },
+      "filed_date": {
+       "type": "string"
+      },
+      "insider_cik": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "insider_name": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "insider_roles": {
+       "items": {
+        "enum": [
+         "director",
+         "officer",
+         "ten_percent_owner",
+         "other"
+        ],
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "insider_title": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "issuer_cik": {
+       "type": "string"
+      },
+      "issuer_name": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "lots": {
+       "type": "number"
+      },
+      "ownership": {
+       "anyOf": [
+        {
+         "enum": [
+          "direct",
+          "indirect"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "ownership_change_pct": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "price_outlier": {
+       "type": "boolean"
+      },
+      "reporting_owners": {
+       "type": "number"
+      },
+      "rule_10b5_1": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "sec_url": {
+       "type": "string"
+      },
+      "security_title": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "shares": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "shares_owned_after": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "ticker": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "trade_date_first": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "trade_date_last": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "url": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "value_usd": {
+       "type": [
+        "number",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "accession",
+      "filed_at",
+      "filed_date",
+      "trade_date_first",
+      "trade_date_last",
+      "ticker",
+      "issuer_cik",
+      "issuer_name",
+      "insider_cik",
+      "insider_name",
+      "insider_roles",
+      "insider_title",
+      "reporting_owners",
+      "code",
+      "acquired_or_disposed",
+      "derivative",
+      "security_title",
+      "ownership",
+      "shares",
+      "avg_price_usd",
+      "value_usd",
+      "shares_owned_after",
+      "ownership_change_pct",
+      "lots",
+      "rule_10b5_1",
+      "amendment",
+      "carried_from",
+      "price_outlier",
+      "url",
+      "sec_url"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "scope": {
+    "enum": [
+     "stock",
+     "insider",
+     "stock_and_insider",
+     "market"
+    ],
+    "type": "string"
+   },
+   "stock": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "cik": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       },
+       "ticker": {
+        "type": "string"
+       },
+       "url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "ticker",
+       "name",
+       "cik",
+       "url"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "url": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "scope",
+   "stock",
+   "insider",
+   "filters",
+   "note",
+   "page",
+   "limit",
+   "has_more",
+   "rows",
+   "url"
+  ],
+  "type": "object"
+ },
+ "title": "Insider trades (Form 4)"
+}

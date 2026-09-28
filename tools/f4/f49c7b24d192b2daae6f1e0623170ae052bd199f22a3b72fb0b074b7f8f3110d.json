@@ -1,0 +1,367 @@
+{
+ "_meta": {
+  "lovie/risk": "high",
+  "openai/toolInvocation/invoked": "Removed",
+  "openai/toolInvocation/invoking": "Removing\u2026",
+  "openai/visibility": "public",
+  "securitySchemes": [
+   {
+    "type": "oauth2"
+   }
+  ]
+ },
+ "annotations": {
+  "destructiveHint": true,
+  "openWorldHint": false
+ },
+ "description": "Imports a signed Restricted Stock Purchase/Award Agreement (RSA) from an uploaded PDF and stores the document in S3. USE THIS (not ExtractRsaTermsOcr + CreateCapTableAgreement, and not RecordCapTableInvestment) whenever the user provides or uploads a signed RSA PDF. The grantee (founder/employee/advisor) MUST already exist as a cap-table stakeholder \u2014 this tool matches the document to an existing stakeholder by name and does NOT create one; if there is no match the import is rejected, so add the stakeholder first. Mandatory two-step human-in-the-loop flow: (1) call GetOcrUploadUrl with kind=RSA and mime_type=application/pdf, then upload the PDF bytes to the returned PUT URL; (2) call ImportRSA with preview=true and that source_s3_uri \u2014 this runs OCR and returns the extracted founder/company names and terms (shares, vesting, price_per_share, grant_date, 83b status, acceleration) plus the resolved grantee (matched_stakeholder_id; when it is empty no stakeholder matched, the response carries a warning, and the import will be refused until the grantee is added) WITHOUT persisting anything; (3) PRESENT those terms to the user as a table, let them correct any value, and get explicit confirmation; (4) call ImportRSA again WITHOUT preview and the SAME source_s3_uri; pass rsa_terms_override with any user-corrected terms (omit it to accept the extracted terms as-is), and stakeholder_id to pin the matched grantee. This creates the common-stock holding with its vesting schedule (or updates the grantee's existing holding), records a signed RSA agreement, and links the PDF \u2014 atomically. Never skip the preview + confirmation step; never persist unreviewed OCR output. Empty string / 0 / false in the extracted terms means the value was not stated in the document \u2014 never fabricate.",
+ "inputSchema": {
+  "properties": {
+   "companyId": {
+    "description": "UUID value wrapper.",
+    "properties": {
+     "value": {
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "consentToAiRead": {
+    "type": "boolean"
+   },
+   "newStakeholderName": {
+    "maxLength": 255,
+    "type": "string"
+   },
+   "preview": {
+    "type": "boolean"
+   },
+   "rsaTermsOverride": {
+    "properties": {
+     "accelerationClause": {
+      "maxLength": 10,
+      "pattern": "^(single|double|both|none)$",
+      "type": "string"
+     },
+     "governingLaw": {
+      "maxLength": 200,
+      "type": "string"
+     },
+     "grantDate": {
+      "format": "date-time",
+      "type": "string"
+     },
+     "ipAssignment": {
+      "type": "boolean"
+     },
+     "pricePerShare": {
+      "maxLength": 30,
+      "pattern": "^([0-9]+(\\.[0-9]{1,6})?)?$",
+      "type": "string"
+     },
+     "repurchaseOptionWindowMonths": {
+      "maximum": 60,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "repurchaseRight": {
+      "type": "boolean"
+     },
+     "rightOfFirstRefusal": {
+      "type": "boolean"
+     },
+     "section83bFiled": {
+      "maxLength": 12,
+      "pattern": "^(filed|not-filed|unknown)$",
+      "type": "string"
+     },
+     "signedByName": {
+      "maxLength": 200,
+      "type": "string"
+     },
+     "signedByTitle": {
+      "maxLength": 200,
+      "type": "string"
+     },
+     "signedDate": {
+      "format": "date-time",
+      "type": "string"
+     },
+     "spouseConsent": {
+      "type": "boolean"
+     },
+     "totalPurchasePrice": {
+      "maxLength": 30,
+      "pattern": "^([0-9]+(\\.[0-9]{1,6})?)?$",
+      "type": "string"
+     },
+     "totalShares": {
+      "maximum": 10000000000,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "unvestedShares": {
+      "maximum": 10000000000,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "vestingCliffMonths": {
+      "maximum": 120,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "vestingProvision": {
+      "maxLength": 5000,
+      "type": "string"
+     },
+     "vestingStartDate": {
+      "format": "date-time",
+      "type": "string"
+     },
+     "vestingTotalMonths": {
+      "maximum": 240,
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "type": "object"
+   },
+   "sourceS3Uri": {
+    "maxLength": 1024,
+    "pattern": "^(s3://[^/]+/.+)?$",
+    "type": "string"
+   },
+   "stakeholderId": {
+    "description": "UUID value wrapper.",
+    "properties": {
+     "value": {
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   }
+  },
+  "required": [
+   "companyId"
+  ],
+  "type": "object"
+ },
+ "name": "cap_table_import_rsa",
+ "outputSchema": {
+  "properties": {
+   "agreementId": {
+    "anyOf": [
+     {
+      "description": "UUID value wrapper.",
+      "properties": {
+       "value": {
+        "format": "uuid",
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "consentBodyMarkdown": {
+    "type": "string"
+   },
+   "consentVersion": {
+    "type": "string"
+   },
+   "created": {
+    "type": "boolean"
+   },
+   "preview": {
+    "anyOf": [
+     {
+      "properties": {
+       "companyName": {
+        "type": "string"
+       },
+       "founderName": {
+        "type": "string"
+       },
+       "matchedStakeholderId": {
+        "anyOf": [
+         {
+          "description": "UUID value wrapper.",
+          "properties": {
+           "value": {
+            "format": "uuid",
+            "type": "string"
+           }
+          },
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "ocrConfidence": {
+        "type": "string"
+       },
+       "resolvedStakeholderName": {
+        "type": "string"
+       },
+       "rsaTerms": {
+        "anyOf": [
+         {
+          "properties": {
+           "accelerationClause": {
+            "type": "string"
+           },
+           "governingLaw": {
+            "type": "string"
+           },
+           "grantDate": {
+            "anyOf": [
+             {
+              "format": "date-time",
+              "type": "string"
+             },
+             {
+              "type": "null"
+             }
+            ]
+           },
+           "ipAssignment": {
+            "type": "boolean"
+           },
+           "pricePerShare": {
+            "type": "string"
+           },
+           "repurchaseOptionWindowMonths": {
+            "type": "integer"
+           },
+           "repurchaseRight": {
+            "type": "boolean"
+           },
+           "rightOfFirstRefusal": {
+            "type": "boolean"
+           },
+           "section83bFiled": {
+            "type": "string"
+           },
+           "signedByName": {
+            "type": "string"
+           },
+           "signedByTitle": {
+            "type": "string"
+           },
+           "signedDate": {
+            "anyOf": [
+             {
+              "format": "date-time",
+              "type": "string"
+             },
+             {
+              "type": "null"
+             }
+            ]
+           },
+           "spouseConsent": {
+            "type": "boolean"
+           },
+           "totalPurchasePrice": {
+            "type": "string"
+           },
+           "totalShares": {
+            "type": "string"
+           },
+           "unvestedShares": {
+            "type": "string"
+           },
+           "vestingCliffMonths": {
+            "type": "integer"
+           },
+           "vestingProvision": {
+            "type": "string"
+           },
+           "vestingStartDate": {
+            "anyOf": [
+             {
+              "format": "date-time",
+              "type": "string"
+             },
+             {
+              "type": "null"
+             }
+            ]
+           },
+           "vestingTotalMonths": {
+            "type": "integer"
+           }
+          },
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "warnings": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "wouldCreate": {
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "securityId": {
+    "anyOf": [
+     {
+      "description": "UUID value wrapper.",
+      "properties": {
+       "value": {
+        "format": "uuid",
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "stakeholderId": {
+    "anyOf": [
+     {
+      "description": "UUID value wrapper.",
+      "properties": {
+       "value": {
+        "format": "uuid",
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "status": {
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Import RSA"
+}

@@ -1,0 +1,453 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "List account balances"
+ },
+ "description": "List every account on the workspace with its stored balance. Rows only \u2014 this tool holds no definition of cash, and returns no figure the app renders.\n\nUse it when you are computing a cash figure whose RULES you are stating yourself: which accounts belong to the business, which account types count as cash, which stored field is \"the balance\", what each currency converts at. The server derives no cash position of its own from this call, so a cash figure starts here: state the rules, keep exactly the rows they admit, then put the result on a card with `well_render_cash_position` \u2014 or, when the answer is cash month by month rather than one total, with `well_render_cash_forecast`.\n\n**It applies no scope.** Every active account comes back, including ones you will almost certainly exclude. `ownership` is `workspace`, `counterparty` or `unknown`, and it decides membership together with `company_id`:\n\n  - `workspace` \u2014 the business's own, EXCEPT when `own_company_id` is set AND the row names a different company. A row with no `company_id` is trusted, because a connector tags a row before any holder is known; so is a row naming a company while `own_company_id` is still `null`, because nothing has disproved the pairing yet. Only a tag contradicting a resolved anchor is stale, and counting that one widens the owned scope and overstates the figure.\n  - `counterparty` \u2014 not the business's, unconditionally.\n  - `unknown` \u2014 unsettled, and settled ONLY by the anchor: own when `company_id` equals `own_company_id`, a counterparty's when it names a different one.\n\n`own_company_id` is `null` when the workspace has not set one. Nothing is settled against it then \u2014 no `unknown` row, and no `workspace` row's company pairing either \u2014 so say so rather than counting or dropping on a guess. This is the same three-way rule the app's own canvas account scope applies, and a figure that departs from it disagrees with the number the product shows.\n\n**It applies no type filter.** `account_type` is one of deposit, credit, loan, investment, payroll, other. A credit or loan account is a liability, so its balance normally nets out of cash rather than adding to it \u2014 but that is your decision to state, not a fact about the row, and the sign stored is the sign the provider sent.\n\n**It chooses no amount.** `closing_booked` is SETTLED cash; `closing_value` includes pending and uncleared movements. The two differ by every initiated-but-unsettled payment, so which one you total is the single most consequential choice a cash figure makes: state it. `opening_booked` is the fallback for a freshly-opened balance with no settled activity yet. Any of them is `null` when the stored value was absent or not a finite number, which is not a zero balance.\n\n**It converts nothing.** Each reading carries its own `currency`, which can differ from the account's own `account_currency`. Convert per row at a rate you can state, then total \u2014 a sum across currencies is denominated in nothing and no field here would say it happened.\n\n**It lists each copy of an account.** One physical account can arrive once per connector that syncs it. `duplicate_of_account_id` names the account a row is a second copy of, and is `null` on every other row. Leave a marked row out of every total and every count: the balance that counts is the named account's, which is the one the app's own figure reads, and the transactions of both copies are counted once. Total both copies and the figure holds that money twice. When the named account has no readable balance, report it as having none rather than taking the copy's reading in its place, or the figure departs from the app's. Marking follows the ownership rule above: only the business's own accounts are marked, and an `unknown` row only once `own_company_id` settles it.\n\n`unlinked_accounts: true` marks a row that is a proven mirror or a bound alias of another account in the list \u2014 a second connector's view of the same physical account. Like a `duplicate_of_account_id` row it is listed and flagged, never dropped, and it carries ZERO weight: keep it out of every total and every count. Its balance still reads as stored.\n\n`balance` is `null` when no row was selected for that account. Two different situations produce it and they must not be reported the same way: `verification_rejected: true` means the newest balance failed verification and the bounded walk back found no verified one, so the data is repudiated; `false` means the account simply has no history yet.\n\n`months_back` adds `month_ends` to every row: one reading per complete month end, oldest first, keyed `YYYY-MM`, ending on the last COMPLETE month. This series is where a cash forecast starts \u2014 \"what will our cash look like\", \"project our cash forward\", \"when do we hit zero\" \u2014 and it is the settled half of `well_render_cash_forecast`; the projected half is that series' last settled month minus the burn you measure with `well_sum_transactions`. A `null` reading is a month no stored row covered \u2014 not a zero balance, so never plot it as one and never interpolate between two real points. Omit `months_back` for the current reading alone; the series is a second query and is not free.\n\n`partial: true` means the read was cut short BEFORE RETURNING ANYTHING, so it always arrives with an empty `rows` \u2014 it is a fact about the call, never a coverage figure over rows you received. Nothing is known about what is there, so derive no figure from it: say the read was cut short and offer to try again. `unreadable_rows` is the separate case and the only one that continues: the read finished, and that many rows carried a stored balance that could not be parsed. They hold a `null` balance, sit in no figure, and make any total a floor, by up to their count: the count covers every row, whatever its owner or type.\n\nWhen the token authorizes one workspace, call this directly \u2014 no other tool call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "months_back": {
+    "description": "How many complete month ends to carry per account, oldest first. Omit for the current reading alone.",
+    "maximum": 24,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several: this read reports one workspace's own figures and will not choose which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "well_list_account_balances",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "base_currency": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "error": {
+    "type": "string"
+   },
+   "own_company_id": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "partial": {
+    "type": "boolean"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "rows": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "account_currency": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "account_id": {
+       "type": "string"
+      },
+      "account_name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "account_subtype": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "account_type": {
+       "type": "string"
+      },
+      "balance": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "balance_at_from": {
+           "anyOf": [
+            {
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "balance_at_to": {
+           "anyOf": [
+            {
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "closing_booked": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "closing_value": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "currency": {
+           "anyOf": [
+            {
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "is_reconstructed": {
+           "type": "boolean"
+          },
+          "opening_booked": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "opening_value": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          }
+         },
+         "required": [
+          "closing_booked",
+          "opening_booked",
+          "closing_value",
+          "opening_value",
+          "currency",
+          "balance_at_from",
+          "balance_at_to",
+          "is_reconstructed"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "company_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "company_name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "duplicate_of_account_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "institution_name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "masked_account_number": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "month_ends": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "month": {
+          "type": "string"
+         },
+         "reading": {
+          "anyOf": [
+           {
+            "additionalProperties": false,
+            "properties": {
+             "balance_at_from": {
+              "anyOf": [
+               {
+                "type": "string"
+               },
+               {
+                "type": "null"
+               }
+              ]
+             },
+             "balance_at_to": {
+              "anyOf": [
+               {
+                "type": "string"
+               },
+               {
+                "type": "null"
+               }
+              ]
+             },
+             "closing_booked": {
+              "anyOf": [
+               {
+                "type": "number"
+               },
+               {
+                "type": "null"
+               }
+              ]
+             },
+             "closing_value": {
+              "anyOf": [
+               {
+                "type": "number"
+               },
+               {
+                "type": "null"
+               }
+              ]
+             },
+             "currency": {
+              "anyOf": [
+               {
+                "type": "string"
+               },
+               {
+                "type": "null"
+               }
+              ]
+             },
+             "is_reconstructed": {
+              "type": "boolean"
+             },
+             "opening_booked": {
+              "anyOf": [
+               {
+                "type": "number"
+               },
+               {
+                "type": "null"
+               }
+              ]
+             },
+             "opening_value": {
+              "anyOf": [
+               {
+                "type": "number"
+               },
+               {
+                "type": "null"
+               }
+              ]
+             }
+            },
+            "required": [
+             "closing_booked",
+             "opening_booked",
+             "closing_value",
+             "opening_value",
+             "currency",
+             "balance_at_from",
+             "balance_at_to",
+             "is_reconstructed"
+            ],
+            "type": "object"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         }
+        },
+        "required": [
+         "month",
+         "reading"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "ownership": {
+       "type": "string"
+      },
+      "unlinked_accounts": {
+       "type": "boolean"
+      },
+      "verification_rejected": {
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "account_id",
+      "account_name",
+      "account_type",
+      "account_subtype",
+      "ownership",
+      "company_id",
+      "company_name",
+      "account_currency",
+      "institution_name",
+      "masked_account_number",
+      "duplicate_of_account_id",
+      "unlinked_accounts",
+      "balance",
+      "verification_rejected"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "unreadable_rows": {
+    "type": "number"
+   }
+  },
+  "required": [
+   "rows",
+   "base_currency",
+   "own_company_id",
+   "partial",
+   "unreadable_rows",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "List account balances"
+}
