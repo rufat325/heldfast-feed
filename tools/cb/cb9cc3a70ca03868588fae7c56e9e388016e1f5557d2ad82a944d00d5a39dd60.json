@@ -1,0 +1,100 @@
+{
+ "description": "Create a new content page with blocks. Phase 11+12 Lock 4 gate is opt-in via dry_run/confirm_token.\n\n\ud83d\udea8 BLOCK FIELD NAMES MATTER. The default theme's snippets read SPECIFIC `data.*` keys per block-type. Unrecognized keys are stored verbatim but render as empty markup (silent-blank-section trap). For the canonical per-block-type field list, call `template_inspect_block_fields(block_type)` OR read the `blocks` param schema below. Page auditor warns at read-time via `render.unused_field_in_default_theme` (rule shipped 2026-05-22).\n\nMost-confused mappings:\n  hero          \u2192 data.{headline, subheadline, cta_primary:{label,url}, cta_secondary:{label,url}, background_image_url, style}\n                  (NOT title/subtitle/cta_text/cta_url \u2014 those are silent-no-op)\n  cta_section   \u2192 data.{headline, description, cta_primary:{label,url}}\n  stats_bar     \u2192 data.{stats: [{value, label}]}\n  rich_text     \u2192 data.{html: '<raw html>'} OR data.{content: <Tiptap JSON doc>}\n                  (data.content as a STRING is rejected \u2014 use data.html instead)\n\nThe `template` param selects which Liquid theme file renders the page (templates/<template>.liquid) \u2014 backend column is a free string, default 'default'.",
+ "inputSchema": {
+  "properties": {
+   "blocks": {
+    "description": "Page content blocks (JSON array). Each block shape:\n  {id: '<uuid>', type: '<block_type>', data: {...}}\n\nBlock types + the `data.*` fields the DEFAULT theme reads:\n  \u2022 hero            : headline, subheadline, cta_primary:{label,url}, cta_secondary:{label,url}, background_image_url, style\n  \u2022 features_grid   : headline, columns (int, default 3), features:[{icon, title, description}]\n  \u2022 cta_section     : headline, description, cta_primary:{label,url}\n  \u2022 faq             : headline, items:[{question, answer}]\n  \u2022 rich_text       : html (raw HTML string) OR content (Tiptap JSON doc object \u2014 NOT a string)\n  \u2022 stats_bar       : stats:[{value, label}]\n  \u2022 testimonials    : headline, testimonials:[{quote, name, role, company}]\n  \u2022 pricing_table   : headline, plans:[{name, price, period, description, features[], featured, cta:{label,url}}]\n  \u2022 comparison_table: headline, subheadline, eyebrow, headers:[str] (or columns:[str]), rows:[{label?, cells:[str]}], style, footnote\n  \u2022 image           : src, alt, caption\n  \u2022 video_embed     : url, video_id, provider, caption\n  \u2022 code_example    : title, description, code\n  \u2022 logo_cloud      : headline, logos:[{src, alt}]\n  \u2022 spacer          : height (px, default 48)\n  \u2022 component       : top-level component_slug + props (see content_list_components and content_get_component for that component's props_schema)\n\n\ud83d\udea8 ANTI-PATTERNS that the validator catches loudly:\n  - `{type:'rich_text', data:{content:'<string>'}}` \u2192 422 (use data.html)\n  - `{type:'rich_text', data:{text:'...'}}` \u2192 422 (use data.html or data.content)\n  - `{type:'component', data:{slug:'x'}}` \u2192 422 (top-level component_slug, not data.slug)\n  - `{type:'<x>', data:{layout:'...'}}` \u2192 422 (top-level layout, not data.layout)\n\n\ud83d\udea8 SILENT-BLANK-SECTION that the auditor warns about (not blocks the mutation):\n  - Wrong field names (title vs headline, items vs features, cta_text vs cta_primary)\n    \u2192 `_audit.block_level[].rule_id == 'render.unused_field_in_default_theme'` with a 'did you mean' hint per key. Read the auditor output on content_get_page / content_export_page.",
+    "type": "array"
+   },
+   "canonical_url": {
+    "description": "Canonical URL for duplicate-content consolidation. \u22642048 chars.",
+    "type": "string"
+   },
+   "collection_type": {
+    "description": "Which collection a dynamic page binds to. REQUIRED when `template` is 'dynamic_list' or 'dynamic_item'; MUST be null/absent for any other template \u2014 backend `_validate_collection_pairing` rejects mismatched pairs either way.\n\nFOUR KINDS OF VALUE ARE ACCEPTED, and they are not equally proven. Rendering status of each:\n  \u00b7 'posts'  \u2014 built-in. Lists at /<page-slug>, items at /blog/<post-slug>. Long-standing.\n  \u00b7 'docs'   \u2014 built-in. Lists at /<page-slug>, items at /docs/<full-path>. Long-standing.\n  \u00b7 'directory_listings' \u2014 built-in. RENDERS: the flat list/detail doors exist and were verified live (2026-09-02) rendering real cards whose count reconciled exactly to the category totals. Gives you a FLAT layout \u2014 every published listing on /<page-slug>, each item at /<page-slug>/<listing-slug>, with no category or city in the URL. This coexists with, and does not replace, the nested /{directory_base}/{category}/{city}/{listing} pages that directory_create_category already generates. A listing slug is unique per CATEGORY, not per tenant, so where two categories share one the flat detail door returns a deterministic first match and names the category it chose in `category_slug`.\n  \u00b7 an `idap.*` collection, e.g. 'idap.businesses' \u2014 the tenant's own IDAP corpus. The items door was opened for it and verified serving real, tenant-scoped rows (2026-09-03); a source that is registered but not servable (e.g. 'idap.streets') answers 422 DATA_SOURCE_NOT_SERVABLE, and an unregistered one 404s. Bind it and the dynamic_list template iterates those rows.\n  \u00b7 a CUSTOM-COLLECTION SLUG (^[a-z0-9][a-z0-9-]*$) \u2014 any collection you made with collection_create. Accepted and handled: the page reads the collection's published records through the same items door, item URLs are /<collection-slug>/<record-slug>. This has always worked and was simply never documented.\n\n\ud83d\udd34 EXISTENCE IS NOT CHECKED HERE, DELIBERATELY. The validator has no database, so a well-formed slug for a collection that does not exist is ACCEPTED at create time and renders the template's empty state at request time \u2014 indistinguishable from a real collection with no published records. Confirm the collection exists (collection_list / list_data_sources) rather than trusting the 201.",
+    "type": "string"
+   },
+   "confirm_token": {
+    "description": "Token from a prior dry_run call. Single-use, 7d TTL.",
+    "type": "string"
+   },
+   "dry_run": {
+    "description": "Preview the change without mutating and receive a confirm_token. When omitted, the change is applied immediately (legacy behaviour preserved).",
+    "type": "boolean"
+   },
+   "is_folder": {
+    "description": "Create a FOLDER instead of a page. A folder is an organizational node in the page tree \u2014 it has no live URL of its own and is never rendered, sitemapped or listed in llms.txt. Put pages under it with content_update_page \u2192 parent_id, then point a navigation menu at it with content_update_navigation (source: {kind:'folder', folder_id:<this id>}) so the menu tracks the folder's published children automatically. Default false.",
+    "type": "boolean"
+   },
+   "json_ld": {
+    "description": "JSON-LD structured data object, emitted verbatim into a <script type=\"application/ld+json\"> tag.",
+    "type": "object"
+   },
+   "keywords": {
+    "description": "Comma-separated meta keywords. \u2264500 chars.",
+    "type": "string"
+   },
+   "og_description": {
+    "description": "Open Graph description (social share cards). \u2264500 chars.",
+    "type": "string"
+   },
+   "og_image_url": {
+    "description": "Open Graph / Twitter share image URL (absolute).",
+    "type": "string"
+   },
+   "og_title": {
+    "description": "Open Graph title (social share cards). \u2264200 chars.",
+    "type": "string"
+   },
+   "project": {
+    "description": "Optional project \u2014 a website inside the workspace (proj_xxx) \u2014 to scope this call to. Sent as the X-Project-Id header. If omitted, the spideriq.json / SPIDERIQ_PROJECT_ID binding (or the workspace default project) is used.",
+    "type": "string"
+   },
+   "robots": {
+    "description": "Per-page robots meta \u2014 the indexing lever. Format `<index|noindex>,<follow|nofollow>` e.g. 'index,follow' or 'noindex,nofollow'. UNSET \u21d2 no robots meta emitted \u21d2 indexable by default.",
+    "type": "string"
+   },
+   "seo_description": {
+    "description": "SEO meta description. \u2264500 chars.",
+    "type": "string"
+   },
+   "seo_title": {
+    "description": "SEO <title> override (falls back to `title`). \u2264200 chars.",
+    "type": "string"
+   },
+   "slug": {
+    "description": "URL slug (auto-generated from title if omitted). Flat slugs only \u2014 `/` is rejected (pattern ^[a-z0-9][a-z0-9-]*$). Nested URLs not supported for general pages; docs use parent_id chains.",
+    "type": "string"
+   },
+   "template": {
+    "description": "Page template \u2014 selects which themes/default/templates/<template>.liquid the renderer uses. Free string (backend default 'default'). Common values bundled with the default theme: 'default' (standard chrome), 'blank' (no header/footer \u2014 full canvas, matches `content_apply_layout_preset preset=\"blank\"`), 'landing' (marketing chrome), 'about', 'contact'. Dynamic page templates (require `collection_type`): 'dynamic_list', 'dynamic_item'. 'dynamic_landing' is the THIRD dynamic template and takes NO collection_type \u2014 it is lead-scoped, not collection-scoped: it gains the routes /lp/{slug}/{identifier} and /lp/{slug}/{salesperson}/{identifier}, and the identifier is resolved against IDAP by `place_id` unless the URL adds ?resolve_key=<key> (domain, email, pin_name, vat, lei, tax_id, registration_number, account_id, pin_data_set_id, pin_subscription_id). Preview it at /lp/{slug}/demo (or ?preview=sample-lead): the demo fixture's KEY SET is generated from the same IDAP field manifest the live door serves, so a field that is blank in preview is blank in production too \u2014 it is no longer the case that a real column can be silently missing from the fixture. \ud83d\udd34 Merge tags (`{{ first_name }}`, `{{ business_name }}`, \u2026) are populated on THESE /lp/ routes ONLY; on every other template, including directory pages, they resolve to the canonical empty shape. NOTE: form-page URLs at /f/<flow_id> and booking URLs at /b/<flow_id> are NOT controlled by this field \u2014 they use 'forms-standalone' and 'booking-standalone' templates respectively, picked server-side by the /f/ route from the flow's `kind`. To customize form/booking page chrome, override templates/forms-standalone.liquid or templates/booking-standalone.liquid via template_upsert (both extend layout/theme.liquid, so layout overrides apply). Any other string maps to a custom template the client has uploaded via template_upsert.",
+    "type": "string"
+   },
+   "title": {
+    "description": "Page title",
+    "type": "string"
+   },
+   "twitter_card": {
+    "description": "Twitter card type. One of: summary, summary_large_image.",
+    "enum": [
+     "summary",
+     "summary_large_image"
+    ],
+    "type": "string"
+   },
+   "twitter_image_url": {
+    "description": "Twitter-specific share image URL (absolute). Falls back to og_image_url.",
+    "type": "string"
+   },
+   "workspace": {
+    "description": "Tenant to target (cli_\u2026). Omit to use the active/bound workspace. list_workspaces shows the options.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "title"
+  ],
+  "type": "object"
+ },
+ "name": "content_create_page"
+}

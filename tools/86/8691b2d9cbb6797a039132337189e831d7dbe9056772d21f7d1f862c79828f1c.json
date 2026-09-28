@@ -1,0 +1,94 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": false
+ },
+ "description": "Update an existing automation rule. This replaces the whole automation (name, trigger, and steps), so fetch the current values with get_automation first and pass them all back with your changes.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "automationId": {
+    "description": "Unique identifier of the automation",
+    "minLength": 1,
+    "type": "string"
+   },
+   "description": {
+    "description": "Optional description",
+    "maxLength": 1000,
+    "type": "string"
+   },
+   "isActive": {
+    "description": "Whether the automation is active (defaults to true)",
+    "type": "boolean"
+   },
+   "name": {
+    "description": "Display name for the automation",
+    "maxLength": 150,
+    "minLength": 1,
+    "type": "string"
+   },
+   "runType": {
+    "description": "Run type: \"instant\" (default, runs on trigger) or \"schedule\" (cron)",
+    "enum": [
+     "instant",
+     "schedule"
+    ],
+    "type": "string"
+   },
+   "schedule": {
+    "additionalProperties": {},
+    "description": "Required when runType=\"schedule\": { timePeriod: \"today\"|\"yesterday\"|\"last7days\"|\"last14days\"|\"thisWeek\", repeatAt: string }",
+    "type": "object"
+   },
+   "steps": {
+    "description": "Ordered array of graph steps (1-20). Each step is an object: { stepId: string (unique within the array), stepType: one of \"speak-upload\" | \"magic-prompt\" | \"translation\" | \"filter\" | \"condition\" | \"notify\" | \"outbound-webhook\" | \"composio-action\", dependsOn?: string[] (stepIds this step runs after), branch?: \"true\"|\"false\" (which outcome of an upstream condition step this step belongs to) } plus ONE config key matching stepType:\n- speak-upload -> speakUpload: { sourceMode: \"url\"|\"file\", sourceUrl (required when sourceMode=\"url\"; tokens allowed \u2014 if the token resolves to an object, the first http(s) URL inside it is used), folderId (required, unless folderRouting.mode=\"dynamic\" where it becomes the optional fallback), name? (tokens allowed, mixable with static text), language? (language code or token), fieldsMap?: { <customFieldId>: \"<value>\" } (writes payload values into Speak custom fields on the uploaded media; values are usually {{trigger.payload.<path>}} tokens \u2014 get field ids from list_fields), folderRouting?: { mode: \"static\"|\"dynamic\", sourceKey (payload key holding the destination folder name, required when dynamic), onNoMatch: \"create\"|\"default\" (create a folder named after the value, or fall back to folderId) } }\n- magic-prompt -> magicPrompt: { prompt (required unless fieldIds given, max 20000), title?, assistantType? (\"general\"|\"researcher\"|\"marketer\"|\"sales\"|\"recruiter\"|\"custom\", default \"general\"), assistantTemplateId? (required if assistantType=\"custom\"), fieldIds?: string[] (max 10 \u2014 extract answers into these custom fields), analysisInput? (\"transcript\" (default) | \"audio\" | \"video\") \u2014 what the model receives. \"audio\" lets it hear tone and delivery, \"video\" also lets it see what is on screen; on a video file \"audio\" extracts the audio track first. Premium: requires the account's audio/video analysis opt-in, and costs credits per hour of media }\n- translation -> translation: { targetLanguage: region-qualified locale code, e.g. \"es-ES\", \"fr-FR\" (bare codes like \"es\" are rejected) }\n- filter -> filter: { logic: \"AND\"|\"OR\" (default \"AND\"), rules: [{ field, op, value? }] (1-20) } \u2014 the run continues only when the rules match, otherwise it stops silently\n- condition -> condition: same { logic, rules } shape as filter, but instead of stopping it routes: downstream steps marked branch:\"true\"/\"false\" run according to the outcome.\n  Branch wiring rules, all enforced before the request is sent:\n  * A leg is a CHAIN: the first step of a leg depends on the condition, the rest depend on the step before them in the same leg, and every step on the leg carries the same branch marker.\n  * A step that runs after the branch (a merge) depends on the LAST step of every leg that carries on. When a leg is empty its last step IS the condition, and the merge then carries that leg's marker.\n  * A leg ends the run simply by having nothing depend on its last step.\n  * Once anything carries a branch marker, EVERY other step needs a dependsOn \u2014 a step with no parents is an entry point and runs on both branches, and a second entry point is rejected.\n  * A condition with no steps on either side is rejected: both paths would do the same thing.\n  * Branches nest at most three deep, and a nested condition must be the last step of the leg it sits on, or the automation cannot be reopened in the Speak web editor.\n  * A scheduled automation cannot branch: a schedule runs over a batch and a condition resolves once for the whole batch, so the leg would run against media that did not match. Use a filter, which narrows the batch.\n- notify -> notify: { channel: \"in_app\"|\"email\"|\"slack\", target?, message (required, tokens allowed) }\n- outbound-webhook -> outboundWebhook: { url (required, tokens allowed), method? (\"GET\"|\"POST\"|\"PUT\"|\"PATCH\"|\"DELETE\", default \"POST\"), headers?: { <name>: <value> }, bodyTemplate?: string | object (tokens allowed) }\n- composio-action -> composio: { app, action, connectedAccountId?, argsTemplate? } (Composio is currently behind a server flag and may be unavailable)\nFilter/condition rule fields depend on what flows into the step: MEDIA -> name|duration|sourceLanguage|tags|transcript|speakers or a custom field id; INSIGHT (straight after a magic-prompt step) -> answer only, so put a branch on a media field BEFORE the AI step. Neither a filter nor a condition can read the inbound webhook payload \u2014 they see the media and earlier step answers only \u2014 so a payload path such as \"contact.status\" is refused: upload first with speakUpload.fieldsMap to write that value into a custom field, then test the field id instead. Ops by field type \u2014 text: eq|neq|contains|ncontains|startsWith|exists; number: eq|neq|gt|lt|exists; array: contains|ncontains|exists (\"exists\" takes no value; gt/lt values are numbers).\nToken syntax (usable in fields marked 'tokens allowed'): {{trigger.payload.<path>}} reads the inbound webhook payload (dot paths and [n] array indices; paths are relative to trigger.childKey when set \u2014 discover valid paths with get_inbound_webhook after sending a test payload); {{step.<stepId>.<path>}} reads a previous step's output (speak-upload -> mediaId, magic-prompt -> answer, outbound-webhook -> status/response). A positional {{step.<index>.<path>}} form also exists but is REFUSED on a branched automation: the index counts stored order ([condition, true leg, false leg, merge]), not run order, and a step on the branch that was not taken produces nothing \u2014 the token would resolve to an empty string inside whatever the step sends.",
+    "items": {
+     "additionalProperties": {},
+     "type": "object"
+    },
+    "maxItems": 20,
+    "minItems": 1,
+    "type": "array"
+   },
+   "trigger": {
+    "additionalProperties": {},
+    "description": "Trigger object (the automation's root). Always include triggerSlug. Supported shapes:\n- Media analyzed in folder(s): { type: \"folders\", triggerSlug: \"media_analyzed\", folderIds: string[] (min 1) }\n- Inbound webhook (receive external payloads): { type: \"folders\", triggerSlug: \"inbound_webhook\", webhookId? (from provision_inbound_webhook; omit to auto-provision a new one on create), childKey? (dot-path narrowing which part of the payload feeds the automation, e.g. \"data\") }. The create/update response includes inboundWebhook.inboundUrl \u2014 the public URL to POST payloads to.\n- Custom field updated: { type: \"folders\", triggerSlug: \"field_updated\", values: string[] (watched custom field ids, min 1), fieldValueMatches?: [{ fieldId, values: string[] }] (fire only when the field changes TO one of these values; empty values = any change), fieldMatchLogic?: \"AND\"|\"OR\" (how multiple fieldValueMatches combine, default \"OR\") }\n- Composio app event: { type: \"composio\", provider: \"composio\", app, triggerSlug, connectedAccountId } (requires a connected account; may be behind a server flag)\nNotes: \"tags\"/\"keywords\" trigger types are rejected for graph automations. The server stores inbound-webhook triggers with type \"webhook\" internally \u2014 send type \"folders\" plus the slug as shown above.",
+    "type": "object"
+   },
+   "triggers": {
+    "description": "Optional additional \"Or\" triggers (max 10): the automation runs when ANY of them fires, sharing the same steps. Each entry mirrors the trigger shapes above but cannot be an inbound webhook and carries no webhookId/childKey. Example: [{ type: \"folders\", triggerSlug: \"field_updated\", values: [\"<fieldId>\"] }]",
+    "items": {
+     "additionalProperties": {},
+     "type": "object"
+    },
+    "maxItems": 10,
+    "type": "array"
+   }
+  },
+  "required": [
+   "automationId",
+   "name",
+   "trigger",
+   "steps"
+  ],
+  "type": "object"
+ },
+ "name": "update_automation",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "data": {
+    "description": "Response payload from the Speak AI API"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Update Automation"
+}

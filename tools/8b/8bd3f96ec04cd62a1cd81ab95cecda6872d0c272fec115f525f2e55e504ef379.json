@@ -1,0 +1,346 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Create Company Recurring Invoice"
+ },
+ "description": "Creates a recurring invoice template under this company: the invoice data it repeats\n(lines, recipient, series, payment) plus the recurrence that drives it.\n\n- **Cadence:** `frequency` is how often it generates \u2014 every 1 (`MONTHLY`), 3\n  (`QUARTERLY`) or 12 (`YEARLY`) months \u2014 on `day_of_month`, from `start_date` until\n  `end_date` if one is given. Omitted, `MONTHLY` applies.\n- **The cadence governs the step, not the first invoice:** the first occurrence is the\n  first `day_of_month` on or after `start_date`, found one month at a time whatever the\n  cadence; the cadence takes over from there. A `YEARLY` template starting 15 February\n  with `day_of_month` 10 first invoices on 10 March, then every 10 March after that \u2014 it\n  does not wait a year.\n- **`start_date` in the past:** accepted and stored as sent, but it never anchors\n  generation backwards. `next_generation` becomes the next date of the template's own\n  calendar that is still ahead \u2014 the grid of `day_of_month` dates anchored at\n  `start_date`, one every `frequency` \u2014 so on a quarterly or yearly template it can land\n  months from now, not this month. The missed periods are not generated.\n- **`draft_in_advance`:** whether the invoice is created as a draft for review before it\n  is emitted. The window is fixed at 5 days, and both options emit on the scheduled day.\n  Omitted, no review draft is prepared. It supersedes the deprecated `preview_days`.\n- **VeriFactu:** the template does not carry it. Whether each generated invoice is\n  registered with AEAT is decided when that invoice is issued, against the company's\n  regime at that moment.\n\nEndpoint: POST /v1/companies/{company_id}/recurring-invoices\n\n\u26a0\ufe0f Read before calling:\n- Fiscal rules, domains simplified, taxes: beel_rules_list with domain, or resource beel://guardrails/<domain>.",
+ "inputSchema": {
+  "$defs": {
+   "CreateRecurringInvoiceRequest": {
+    "additionalProperties": false,
+    "properties": {
+     "customer_id": {
+      "format": "uuid",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "day_of_month": {
+      "description": "Day of the month the invoices are issued. A month that does not have that day falls\nback to its last day: a template on `31` issues on 28 February (29 in a leap year)\nand on 30 April. So `31` is how you ask for the last day of the month it generates\nin \u2014 there is no separate flag for it, and the accepted range stays 1\u201331.\n\nThe adjustment does not stick and the schedule does not drift: every generation is\nrecalculated from the `day_of_month` you sent, never from the date it was adjusted\nto (31 Jan \u2192 28 Feb \u2192 31 Mar).\n",
+      "maximum": 31,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "draft_in_advance": {
+      "description": "Whether the template prepares a draft for review before emitting. The window is fixed at\n5 days and both options emit on the scheduled day. Omitted, the template is created\nwithout the review draft.\n",
+      "type": "boolean"
+     },
+     "email_configuration": {
+      "$ref": "#/$defs/RecurringEmailConfigRequest"
+     },
+     "end_date": {
+      "format": "date",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "frequency": {
+      "description": "Generation cadence: `MONTHLY` every month, `QUARTERLY` every 3 months, `YEARLY` every 12 months. Omitted, `MONTHLY` applies.\n\nIt governs the step from the first invoice onwards, not where that first one lands: the\nfirst occurrence is the first `day_of_month` on or after `start_date`, found one month at\na time whatever the cadence. A yearly template starting 15 February with `day_of_month`\n10 first invoices on 10 March, then every 10 March after that \u2014 it does not wait a year.\n",
+      "enum": [
+       "MONTHLY",
+       "QUARTERLY",
+       "YEARLY"
+      ],
+      "type": "string"
+     },
+     "invoice_type": {
+      "$ref": "#/$defs/RecurringInvoiceType"
+     },
+     "lines": {
+      "items": {
+       "$ref": "#/$defs/RecurringLineRequest"
+      },
+      "minItems": 1,
+      "type": "array"
+     },
+     "max_invoices": {
+      "description": "Total number of invoices this template will generate before ending on its own, between\n2 and 600. Leave it out (or send `null`) for a recurrence that is not capped by number.\n\nA recurrence ends in ONE way: open-ended, on `end_date`, or after `max_invoices`. Sending\nboth `end_date` and `max_invoices` with a value is rejected with `RECURRING_END_MODE_CONFLICT`,\nand so is a `max_invoices` that lands on a template that already has an `end_date`: the\nconflict is judged on the RESULTING state, not on the body. To switch modes, say both things\nin the same call \u2014 the new field with a value and the old one as `null`. Nothing is cleared\nsilently.\n\nThe cap counts invoices GENERATED, not calendar turns: a skip does not spend it. The range\nis not enforced by this schema on purpose, so the rejection carries its own code and its own\nmessage: below 2 you do not want a recurrence but a scheduled invoice\n(`PUT /v1/companies/{company_id}/invoices/{invoice_id}/schedule`), which also issues it on an exact date.\n",
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "name": {
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^\\S.*$",
+      "type": "string"
+     },
+     "notes": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "payment_iban": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "payment_method": {
+      "anyOf": [
+       {
+        "allOf": [
+         {
+          "$ref": "#/$defs/PaymentMethod"
+         }
+        ],
+        "description": "Payment method. `payment_iban`, `payment_swift` and `payment_term_days` are\ndetail of this method, not standalone fields: sending any of them without a\n`payment_method` that is present, non-null and different from `NONE` is\nrejected with `422` (`PAYMENT_DETAILS_REQUIRE_METHOD`).\n"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "payment_swift": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "payment_term_days": {
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "preview_days": {
+      "description": "**Deprecated.** Superseded by `draft_in_advance`, because the review window is no longer\na number you pick: it is fixed at 5 days. Still accepted so nothing breaks \u2014 any value\ngreater than `0` means the same as `draft_in_advance: true`, and `0` the same as `false`.\nWhen both are sent, `draft_in_advance` wins. It will be removed in a future version.\n",
+      "maximum": 30,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "send_automatically": {
+      "default": false,
+      "type": "boolean"
+     },
+     "series_id": {
+      "format": "uuid",
+      "type": "string"
+     },
+     "start_date": {
+      "description": "Date the subscription started. A past date is accepted and stored as sent \u2014 useful\nwhen migrating subscriptions from another system \u2014 but it never anchors generation\nin the past. `next_generation` becomes the next date of the template's own calendar\nthat is still ahead: the grid of `day_of_month` dates anchored at `start_date`, one\nevery `frequency`. On a quarterly or yearly template that can be months from now, not\nthis month. Invoices are never back-dated, so the missed periods are not generated.\n",
+      "format": "date",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "day_of_month",
+     "start_date",
+     "series_id",
+     "invoice_type",
+     "lines"
+    ],
+    "type": "object"
+   },
+   "Email": {
+    "description": "Email address (minimum valid email is 5 chars, e.g. a@b.co)",
+    "format": "email",
+    "maxLength": 255,
+    "minLength": 5,
+    "type": "string"
+   },
+   "ExemptionReason": {
+    "description": "Tax exemption reason code per the Spanish VAT Law (Ley 37/1992, LIVA), with the\nVeriFactu code each one is reported as.\n\n- `EXENTA_ART_20`: exempt, art. 20 (domestic operations such as medical, educational,\n  cultural and financial services, or housing rentals). E1.\n- `EXENTA_ART_21`: exempt, art. 21 (exports of goods). E2.\n- `EXENTA_ART_22`: exempt, art. 22 (operations treated as exports). E3.\n- `EXENTA_ART_24`: exempt, art. 24 (free zones, warehouses and customs regimes). E4.\n- `EXENTA_ART_25`: exempt, art. 25 (intra-community supplies of goods). E5.\n- `EXENTA_ART_26`: exempt, art. 26 (intra-community acquisitions of goods). It exempts the\n  buyer's acquisition, not a supply the seller invoices, so an invoice line that carries it\n  is rejected with `EXEMPTION_NOT_FOR_ISSUED_INVOICE`; a supply to another Member State is\n  `EXENTA_ART_25`.\n- `NO_SUJETA_ART_7_9`: not subject under art. 7 (such as the transfer of a business as\n  a going concern, art. 7.1\u00ba). N1.\n- `NO_SUJETA_LOCALIZACION`: not subject by the place-of-supply rules (intra-community\n  or non-EU services, arts. 69 and 70). N2.\n- `ISP_ART_84_2_A` \u2026 `ISP_ART_84_2_F`: reverse charge (the invoice states \u00abinversi\u00f3n del\n  sujeto pasivo\u00bb), art. 84.Uno.2.\u00ba letters a) (supplier not established in Spain), b) (unwrought\n  or semi-finished gold), c) (scrap, waste and recovery materials, plastic, paper, cardboard, glass and textile waste, and semi-finished non-ferrous metal products), d) (greenhouse gas emission\n  allowances), e) (certain real estate supplies: in insolvency proceedings, with the exemption\n  waived, or enforcing a security) and f) (construction or renovation works). S2.\n- `ISP_ART_84_2_G`: reverse charge of letter g) (silver, platinum, palladium, mobile phones,\n  consoles, laptops and tablets). The law requires these supplies to be invoiced in a special\n  series, so an invoice line that carries it is rejected with\n  `REVERSE_CHARGE_CASE_NOT_SUPPORTED`.\n- `EXENTA_ART_140`: investment gold exemption, art. 140 bis (usually with `regime_key`\n  `04`). E6.\n- `REGIMEN_ART_129` (agriculture,\n  livestock and fishing, arts. 124 to 134 bis), `REGIMEN_ART_135` (second-hand goods,\n  art and antiques), `REGIMEN_ART_141` (travel agencies), `REGIMEN_ART_154` (equivalence\n  surcharge) and `REGIMEN_ART_163_DECIES` (cash basis, arts. 163 decies to 163\n  sexiesdecies): operations of special regimes, which VeriFactu identifies by the regime\n  key rather than by an exemption code. An\n  invoice line that carries one is rejected with `EXEMPTION_REGIME_NOT_SUPPORTED_IN_VERIFACTU`;\n  declare the regime with `regime_key` instead.\n- `OTRO`: any other provision. Requires the text in `exemption_reason_text`. E6.\n",
+    "enum": [
+     "EXENTA_ART_20",
+     "EXENTA_ART_21",
+     "EXENTA_ART_22",
+     "EXENTA_ART_24",
+     "EXENTA_ART_25",
+     "EXENTA_ART_26",
+     "EXENTA_ART_140",
+     "NO_SUJETA_ART_7_9",
+     "NO_SUJETA_LOCALIZACION",
+     "ISP_ART_84_2_A",
+     "ISP_ART_84_2_B",
+     "ISP_ART_84_2_C",
+     "ISP_ART_84_2_D",
+     "ISP_ART_84_2_E",
+     "ISP_ART_84_2_F",
+     "ISP_ART_84_2_G",
+     "REGIMEN_ART_129",
+     "REGIMEN_ART_135",
+     "REGIMEN_ART_141",
+     "REGIMEN_ART_154",
+     "REGIMEN_ART_163_DECIES",
+     "OTRO"
+    ],
+    "type": "string"
+   },
+   "PaymentMethod": {
+    "description": "Payment method shown on invoices and recurring invoices.\n\n- `NONE`: no payment information is shown.\n- `BANK_TRANSFER`: bank transfer to the IBAN of the payment details; the only method\n  that requires an IBAN.\n- `CARD`: card payment.\n- `CASH`: cash payment.\n- `CHECK`: payment by cheque.\n- `DIRECT_DEBIT`: direct debit from the customer's bank account.\n- `BIZUM`: payment through Bizum.\n- `OTHER`: any other method.\n",
+    "enum": [
+     "NONE",
+     "BANK_TRANSFER",
+     "CARD",
+     "CASH",
+     "CHECK",
+     "DIRECT_DEBIT",
+     "BIZUM",
+     "OTHER"
+    ],
+    "type": "string"
+   },
+   "RecurringEmailConfigRequest": {
+    "properties": {
+     "cc": {
+      "items": {
+       "$ref": "#/$defs/Email"
+      },
+      "type": "array"
+     },
+     "message": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "recipients": {
+      "items": {
+       "$ref": "#/$defs/Email"
+      },
+      "type": "array"
+     },
+     "subject": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "type": [
+     "object",
+     "null"
+    ]
+   },
+   "RecurringInvoiceType": {
+    "description": "Type of the invoices a recurring template generates: `STANDARD` for an identified recipient,\n`SIMPLIFIED` for a recipient that is not identified.\n",
+    "enum": [
+     "STANDARD",
+     "SIMPLIFIED"
+    ],
+    "type": "string"
+   },
+   "RecurringLineRequest": {
+    "additionalProperties": false,
+    "description": "Recurring-invoice line. Unlike invoice lines (which nest tax data under a `main_tax` object),\nrecurring lines use flat tax fields: `vat_rate`, `tax_type`, `regime_key`,\n`equivalence_surcharge_rate` and `irpf_rate`. Do not send a `main_tax` object here.\n\n**Line amount**: send **exactly one** of `unit_price`, `total_excluding_tax` or\n`total_including_tax` \u2014 same contract as an invoice line. Sending none, or more than\none, is rejected with `LINE_UNIT_PRICE_XOR_DECLARED_TOTAL`; a declared total together\nwith an explicit `discount_percentage` is rejected with\n`LINE_DECLARED_TOTAL_FORBIDS_DISCOUNT` (the discount, if any, already lives inside\nthe total).\n\nThe mode is what the template promises, and it is re-applied on **every** generation:\na line declared as `total_including_tax: 1.00` over 300 units invoices 1,00 \u20ac on every\ngeneration, not 300 \u00d7 0,0033 = 0,99 \u20ac. Because `PATCH` replaces the lines as a whole,\nresending a line with a different amount field switches its mode.\n",
+    "properties": {
+     "description": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "discount_percentage": {
+      "maximum": 100,
+      "minimum": 0,
+      "type": "number"
+     },
+     "equivalence_surcharge_rate": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "exemption_reason": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/ExemptionReason"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "exemption_reason_text": {
+      "description": "Custom exemption text. Only used when `exemption_reason` is `OTRO`.\n\nSame shape as an invoice line: the template declares WHY the operation carries no tax,\nand every invoice it generates inherits it. A 0% line without a reason is rejected on\nwrite \u2014 VeriFactu does not accept an exempt line with no explicit motive.\n",
+      "maxLength": 500,
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "irpf_rate": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "quantity": {
+      "minimum": 0.01,
+      "multipleOf": 0.0001,
+      "type": "number"
+     },
+     "regime_key": {
+      "description": "VeriFactu regime key. Omitted, `01` (general regime) applies.",
+      "type": "string"
+     },
+     "tax_type": {
+      "description": "Tax type. Omitted, `IVA` applies.",
+      "type": "string"
+     },
+     "total_excluding_tax": {
+      "description": "Declared line total excluding taxes: this amount IS the taxable base, exactly,\nwith no recalculation. The stored `unit_price` becomes derived and informational\n(`total / quantity`, 4 decimals). Mutually exclusive with `unit_price` and\n`total_including_tax`.\n\nNegative totals are NOT accepted, for the same reason `unit_price` does not accept\nnegative prices: a template only issues `STANDARD` or `SIMPLIFIED` invoices, and only\na corrective invoice \u2014 created through its own endpoint over an already issued\ninvoice \u2014 carries a negative amount. A total outside the range is rejected with\n`422 VALIDATION_ERROR` and the offending field in `details`.\n\nThe upper bound is the same one `POST /v1/invoices` declares for a line total: a\ntemplate is a promise to issue an invoice, and it cannot accept less than the\ninvoice it will generate does. The derived `unit_price` (`total / quantity`) can\nstill exceed the `maximum` this contract accepts for `unit_price` itself \u2014 what\nactually bounds it then is the domain's price ceiling, not this field's contract.\n",
+      "maximum": 99999999.99,
+      "minimum": 0,
+      "type": "number"
+     },
+     "total_including_tax": {
+      "description": "Declared line total including taxes \u2014 what the customer pays. The engine works\nthe breakdown backwards so that taxable base + VAT + equivalence surcharge equals\nthis amount exactly on every generated invoice. IRPF withholding is never part of\nthe decomposition: it is a retention, not a price. Mutually exclusive with\n`unit_price` and `total_excluding_tax`.\n\nNegative totals are NOT accepted, same as `total_excluding_tax`.\n\nThe upper bound is the same one `POST /v1/invoices` declares for a line total, for\nthe same reason: the template cannot promise more than the invoice it generates\ncould ever accept. The derived `unit_price` (`total / quantity`) can still exceed\nthe `maximum` this contract accepts for `unit_price` itself \u2014 what actually bounds\nit then is the domain's price ceiling, not this field's contract.\n",
+      "maximum": 99999999.99,
+      "minimum": 0,
+      "type": "number"
+     },
+     "unit": {
+      "maxLength": 20,
+      "type": "string"
+     },
+     "unit_price": {
+      "description": "Unit price before taxes. Supports up to 4 decimal places for micro-pricing\n(e.g. \u20ac0.0897/unit for labels, packaging); the generated invoices always round\ntheir amounts to 2 decimals. Mutually exclusive with `total_excluding_tax` and\n`total_including_tax`.\n\nThe upper bound is the same one the invoice line declares, and so is the\nacceptance of `0` (a discount granted before or simultaneously with the sale,\ne.g. a free introductory month). A price outside the range is rejected with\n`422 VALIDATION_ERROR` and the offending field in `details`.\n\nNegative prices are NOT accepted, unlike an invoice line of a corrective invoice:\na recurring template only issues `STANDARD` or `SIMPLIFIED` invoices, and a\ncorrective is created through its own endpoint over an already issued invoice \u2014\nnever generated by a template.\n",
+      "maximum": 999999.9999,
+      "minimum": 0,
+      "type": "number"
+     },
+     "vat_rate": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "description",
+     "quantity",
+     "vat_rate"
+    ],
+    "type": "object"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "body": {
+    "$ref": "#/$defs/CreateRecurringInvoiceRequest"
+   },
+   "company_id": {
+    "description": "Unique identifier (UUID) of the company the operation acts on \u2014 its identifier, not its NIF. It is the only source of context: the account that owns it is derived from it, and the `BeeL-Active-Company` header plays no part. A company you do not reach answers `403`, and so does a company that does not exist, so the existence of a company in another account is never disclosed.",
+    "format": "uuid",
+    "type": "string"
+   },
+   "idempotency_key": {
+    "description": "Optional idempotency key for this operation. Omit it and one is derived from the request itself, which makes a blind retry safe but also collapses a SECOND, deliberately identical operation into the first for 24 hours. Set it \u2014 to an order id, or anything unique per intended operation \u2014 whenever you mean to create something that may look identical to what you just created.",
+    "maxLength": 255,
+    "pattern": "^[a-zA-Z0-9_-]+$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "company_id",
+   "body"
+  ],
+  "type": "object"
+ },
+ "name": "beel_create_recurring_invoice"
+}

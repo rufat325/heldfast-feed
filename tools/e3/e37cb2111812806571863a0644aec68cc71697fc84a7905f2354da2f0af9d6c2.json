@@ -1,0 +1,701 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": false
+ },
+ "description": "REPLACE an existing diagram's entire contents, keeping the SAME id and url. Provide\nEXACTLY ONE of `spec` (a DiagramSpec, re-laid-out server-side) or `scene` (a raw,\nhand-authored Excalidraw scene \u2014 same rich format as create_scene, hydrated for you).\nUse this to ITERATE on one diagram (fix layout, restyle, restructure) instead of\ngenerate_diagram / create_scene, which mint a NEW id+url each time and orphan the old one.\nTo refine a rich diagram: get_scene \u2192 edit the elements \u2192 regenerate_diagram with `scene`.\nUnlike edit_diagram (which only appends/patches), this discards the old scene entirely.\nComments anchored to a shape the new contents no longer contain are detached (returned as\norphanedComments); comments on shapes whose id you reuse stay attached. Pass an optional\ntitle to rename in the same call. Returns the id, the new element count (replaced),\norphanedComments, and the editor url.\n\nCONCURRENCY: this REPLACES the live doc with no default precondition, so if a human is\nco-editing you can silently revert their recent work (get_scene can lag the live session by\nup to ~45s). To guard against that, pass the `docUpdatedAt` from get_scene as\n`expectedUpdatedAt` \u2014 the call then aborts with a clean stale_read (409) if the doc moved\nsince you read it, so you can re-read and re-apply instead of clobbering.\n\nspec form \u2014 DiagramSpec (auto-laid-out node/edge DSL):\n{\n  \"version\": \"1\",                       // optional; only \"1\" is accepted\n  \"nodes\": [                            // required\n    { \"id\": \"unique\",                   // required; must be unique\n      \"label\": \"Text\",                  // optional; defaults to id, \"\" suppresses\n      \"shape\": \"rectangle\",             // rectangle | ellipse | diamond | text (default rectangle)\n      \"width\": 140, \"height\": 60,       // optional; treated as a minimum\n      \"strokeColor\": \"#1e1e1e\",         // optional\n      \"backgroundColor\": \"transparent\", // optional\n      \"fillStyle\": \"solid\",             // hachure | cross-hatch | solid | zigzag\n      \"group\": \"hardware\",              // optional layout hint (not a guarantee); clusters same-group nodes; members with edges among them still span ranks\n      \"icon\": \"icon-database\" }         // optional curated glyph; a curated icon id (call list_icons) drawn inside the node's top band\n  ],\n  \"edges\": [                            // optional\n    { \"from\": \"id\", \"to\": \"id\",         // both must name existing node ids\n      \"label\": \"Text\",                  // optional\n      \"arrowhead\": \"arrow\" },           // arrow | triangle | null\n    \"from -> to\",                       // shorthand string form, or\n    \"from -> to: label\"                 // shorthand with a label\n  ],\n  \"layout\": { \"direction\": \"TB\" }       // TB | BT | LR | RL; optional nodeSep / rankSep\n}\nCaps: <=1000 nodes, <=2000 edges, label <=2000 chars, <=5000 total scene elements.\n\nv2 \u2014 nestable containers + per-region engines (set \"version\":\"2\"). Use this for\nswimlanes, layered architectures, matrices \u2014 anything where regions each want\ntheir own layout:\n{\n  \"version\": \"2\",\n  \"containers\": [                       // each container lays out its children with ONE engine\n    { \"id\": \"unique\",\n      \"label\": \"Region\",                // optional; shown as the frame title when frame:true\n      \"layout\": { \"engine\": \"grid\",     // graph (auto-layout/dagre) | grid | row | column\n                  \"cols\": 2,            // grid only (default ceil(sqrt(childCount)))\n                  \"direction\": \"TB\",    // graph only: TB | BT | LR | RL\n                  \"gap\": 40, \"pad\": 16 },\n      \"frame\": true,                    // true \u2192 draw a labelled box around the region\n      \"children\": [ { \"id\": \"x\" } ] }   // leaves (same fields as v1 nodes) or nested containers\n  ],\n  \"nodes\": [ { \"id\": \"top\" } ],         // optional top-level leaves (coexist with containers)\n  \"edges\": [ \"x -> top\" ],              // GLOBAL; endpoints are LEAF ids \u2014 may cross containers\n  \"layout\": { \"direction\": \"TB\" }       // how the top level arranges containers + top nodes\n}\nv2 notes: edges bind to leaf ids even across containers (arrows route between\nthem); the top level auto-lays-out containers + top-level nodes as a graph;\nframe:true clips/moves the region as a unit. Extra caps: <=500 containers,\nnesting depth <=16.\n\nscene form \u2014 see the `excaliwow://scene/authoring` resource; the `excaliwow://dsl/reference\n` resource covers the spec form.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+   "__schema0": {
+    "properties": {
+     "children": {
+      "items": {
+       "anyOf": [
+        {
+         "properties": {
+          "backgroundColor": {
+           "type": "string"
+          },
+          "fillStyle": {
+           "enum": [
+            "hachure",
+            "cross-hatch",
+            "solid",
+            "zigzag"
+           ],
+           "type": "string"
+          },
+          "group": {
+           "type": "string"
+          },
+          "height": {
+           "type": "number"
+          },
+          "icon": {
+           "type": "string"
+          },
+          "id": {
+           "type": "string"
+          },
+          "label": {
+           "type": "string"
+          },
+          "shape": {
+           "enum": [
+            "rectangle",
+            "ellipse",
+            "diamond",
+            "text"
+           ],
+           "type": "string"
+          },
+          "strokeColor": {
+           "type": "string"
+          },
+          "width": {
+           "type": "number"
+          }
+         },
+         "required": [
+          "id"
+         ],
+         "type": "object"
+        },
+        {
+         "$ref": "#/definitions/__schema0"
+        }
+       ]
+      },
+      "type": "array"
+     },
+     "frame": {
+      "type": "boolean"
+     },
+     "id": {
+      "type": "string"
+     },
+     "label": {
+      "type": "string"
+     },
+     "layout": {
+      "properties": {
+       "cols": {
+        "type": "number"
+       },
+       "direction": {
+        "enum": [
+         "TB",
+         "BT",
+         "LR",
+         "RL"
+        ],
+        "type": "string"
+       },
+       "engine": {
+        "enum": [
+         "graph",
+         "grid",
+         "row",
+         "column"
+        ],
+        "type": "string"
+       },
+       "gap": {
+        "type": "number"
+       },
+       "nodeSep": {
+        "type": "number"
+       },
+       "pad": {
+        "type": "number"
+       },
+       "rankSep": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "engine"
+      ],
+      "type": "object"
+     },
+     "style": {
+      "properties": {
+       "backgroundColor": {
+        "type": "string"
+       },
+       "fillStyle": {
+        "enum": [
+         "hachure",
+         "cross-hatch",
+         "solid",
+         "zigzag"
+        ],
+        "type": "string"
+       },
+       "strokeColor": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     }
+    },
+    "required": [
+     "id",
+     "layout",
+     "children"
+    ],
+    "type": "object"
+   }
+  },
+  "properties": {
+   "expectedUpdatedAt": {
+    "description": "optional optimistic-concurrency token: the `docUpdatedAt` from get_scene / read_diagram. When set, the replace aborts with stale_read (409) if the live doc changed since you read it. null (the value emitted for a never-opened diagram) is accepted and skips the check.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "id": {
+    "description": "diagram id returned by a create/list/read operation or copied from its editor URL",
+    "type": "string"
+   },
+   "scene": {
+    "description": "replacement raw Excalidraw scene; provide exactly one of scene or spec",
+    "properties": {
+     "appState": {
+      "additionalProperties": {},
+      "description": "Accepted but NOT persisted in v1 \u2014 always {} on read.",
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "elements": {
+      "items": {
+       "additionalProperties": {},
+       "properties": {
+        "angle": {
+         "type": "number"
+        },
+        "backgroundColor": {
+         "type": "string"
+        },
+        "boundElements": {
+         "anyOf": [
+          {
+           "items": {
+            "additionalProperties": {},
+            "properties": {
+             "id": {
+              "minLength": 1,
+              "type": "string"
+             },
+             "type": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "id",
+             "type"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "containerId": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "elbowed": {
+         "type": "boolean"
+        },
+        "endArrowhead": {
+         "anyOf": [
+          {
+           "enum": [
+            "arrow",
+            "triangle",
+            "dot",
+            "bar",
+            "diamond",
+            "triangle_outline",
+            "diamond_outline",
+            "dot_outline",
+            "crowfoot_one",
+            "crowfoot_many",
+            "crowfoot_one_or_many"
+           ],
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "endBinding": {
+         "anyOf": [
+          {
+           "additionalProperties": {},
+           "properties": {
+            "elementId": {
+             "minLength": 1,
+             "type": "string"
+            }
+           },
+           "required": [
+            "elementId"
+           ],
+           "type": "object"
+          },
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "fillStyle": {
+         "enum": [
+          "hachure",
+          "cross-hatch",
+          "solid",
+          "zigzag"
+         ],
+         "type": "string"
+        },
+        "fontFamily": {
+         "exclusiveMinimum": 0,
+         "maximum": 9007199254740991,
+         "type": "integer"
+        },
+        "fontSize": {
+         "type": "number"
+        },
+        "frameId": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "groupIds": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "height": {
+         "type": "number"
+        },
+        "id": {
+         "type": "string"
+        },
+        "link": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "opacity": {
+         "maximum": 100,
+         "minimum": 0,
+         "type": "number"
+        },
+        "points": {
+         "items": {
+          "additionalItems": false,
+          "items": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "number"
+           }
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+         },
+         "type": "array"
+        },
+        "roughness": {
+         "anyOf": [
+          {
+           "const": 0,
+           "type": "number"
+          },
+          {
+           "const": 1,
+           "type": "number"
+          },
+          {
+           "const": 2,
+           "type": "number"
+          }
+         ]
+        },
+        "roundness": {},
+        "startArrowhead": {
+         "anyOf": [
+          {
+           "enum": [
+            "arrow",
+            "triangle",
+            "dot",
+            "bar",
+            "diamond",
+            "triangle_outline",
+            "diamond_outline",
+            "dot_outline",
+            "crowfoot_one",
+            "crowfoot_many",
+            "crowfoot_one_or_many"
+           ],
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "startBinding": {
+         "anyOf": [
+          {
+           "additionalProperties": {},
+           "properties": {
+            "elementId": {
+             "minLength": 1,
+             "type": "string"
+            }
+           },
+           "required": [
+            "elementId"
+           ],
+           "type": "object"
+          },
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "strokeColor": {
+         "type": "string"
+        },
+        "strokeStyle": {
+         "enum": [
+          "solid",
+          "dashed",
+          "dotted"
+         ],
+         "type": "string"
+        },
+        "strokeWidth": {
+         "type": "number"
+        },
+        "text": {
+         "type": "string"
+        },
+        "textAlign": {
+         "enum": [
+          "left",
+          "center",
+          "right"
+         ],
+         "type": "string"
+        },
+        "type": {
+         "description": "element type \u2014 known: rectangle, ellipse, diamond, text, arrow, line, freedraw, frame, image (others pass through)",
+         "type": "string"
+        },
+        "verticalAlign": {
+         "enum": [
+          "top",
+          "middle",
+          "bottom"
+         ],
+         "type": "string"
+        },
+        "width": {
+         "type": "number"
+        },
+        "x": {
+         "type": "number"
+        },
+        "y": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "id",
+        "type",
+        "x",
+        "y"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "elements"
+    ],
+    "type": "object"
+   },
+   "spec": {
+    "description": "replacement diagram specification; provide exactly one of spec or scene",
+    "oneOf": [
+     {
+      "properties": {
+       "edges": {
+        "items": {
+         "description": "edge: shorthand string \"a -> b\" / \"a -> b: label\", or an object { from, to, label?, arrowhead? }"
+        },
+        "type": "array"
+       },
+       "layout": {
+        "properties": {
+         "direction": {
+          "enum": [
+           "TB",
+           "BT",
+           "LR",
+           "RL"
+          ],
+          "type": "string"
+         },
+         "nodeSep": {
+          "type": "number"
+         },
+         "rankSep": {
+          "type": "number"
+         }
+        },
+        "type": "object"
+       },
+       "nodes": {
+        "items": {
+         "properties": {
+          "backgroundColor": {
+           "type": "string"
+          },
+          "fillStyle": {
+           "enum": [
+            "hachure",
+            "cross-hatch",
+            "solid",
+            "zigzag"
+           ],
+           "type": "string"
+          },
+          "group": {
+           "type": "string"
+          },
+          "height": {
+           "type": "number"
+          },
+          "icon": {
+           "type": "string"
+          },
+          "id": {
+           "type": "string"
+          },
+          "label": {
+           "type": "string"
+          },
+          "shape": {
+           "enum": [
+            "rectangle",
+            "ellipse",
+            "diamond",
+            "text"
+           ],
+           "type": "string"
+          },
+          "strokeColor": {
+           "type": "string"
+          },
+          "width": {
+           "type": "number"
+          }
+         },
+         "required": [
+          "id"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "version": {
+        "const": "1",
+        "type": "string"
+       }
+      },
+      "required": [
+       "version",
+       "nodes"
+      ],
+      "type": "object"
+     },
+     {
+      "properties": {
+       "containers": {
+        "items": {
+         "$ref": "#/definitions/__schema0"
+        },
+        "type": "array"
+       },
+       "edges": {
+        "items": {
+         "description": "edge: shorthand string \"a -> b\" / \"a -> b: label\", or an object { from, to, label?, arrowhead? }"
+        },
+        "type": "array"
+       },
+       "layout": {
+        "properties": {
+         "direction": {
+          "enum": [
+           "TB",
+           "BT",
+           "LR",
+           "RL"
+          ],
+          "type": "string"
+         },
+         "nodeSep": {
+          "type": "number"
+         },
+         "rankSep": {
+          "type": "number"
+         }
+        },
+        "type": "object"
+       },
+       "nodes": {
+        "items": {
+         "properties": {
+          "backgroundColor": {
+           "type": "string"
+          },
+          "fillStyle": {
+           "enum": [
+            "hachure",
+            "cross-hatch",
+            "solid",
+            "zigzag"
+           ],
+           "type": "string"
+          },
+          "group": {
+           "type": "string"
+          },
+          "height": {
+           "type": "number"
+          },
+          "icon": {
+           "type": "string"
+          },
+          "id": {
+           "type": "string"
+          },
+          "label": {
+           "type": "string"
+          },
+          "shape": {
+           "enum": [
+            "rectangle",
+            "ellipse",
+            "diamond",
+            "text"
+           ],
+           "type": "string"
+          },
+          "strokeColor": {
+           "type": "string"
+          },
+          "width": {
+           "type": "number"
+          }
+         },
+         "required": [
+          "id"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "version": {
+        "const": "2",
+        "type": "string"
+       }
+      },
+      "required": [
+       "version"
+      ],
+      "type": "object"
+     }
+    ]
+   },
+   "title": {
+    "anyOf": [
+     {
+      "description": "human-readable diagram title shown in the Excaliwow workspace and editor",
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "optional replacement title; omit to keep the current title"
+   }
+  },
+  "required": [
+   "id"
+  ],
+  "type": "object"
+ },
+ "name": "regenerate_diagram",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "id": {
+    "type": "string"
+   },
+   "orphanedComments": {
+    "type": "number"
+   },
+   "replaced": {
+    "type": "number"
+   },
+   "title": {
+    "type": "string"
+   },
+   "url": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "id",
+   "replaced",
+   "orphanedComments",
+   "url"
+  ],
+  "type": "object"
+ },
+ "title": "Regenerate a diagram (replace in place)"
+}

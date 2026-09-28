@@ -1,0 +1,220 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "List Company Invoices"
+ },
+ "description": "Returns a paginated list of the invoices of this company, filterable by status, type,\nseries, customer, date range and free text. Only the documents of the company in the path\nare returned.\n\nEndpoint: GET /v1/companies/{company_id}/invoices\n\n\u26a0\ufe0f Read before calling:\n- Fiscal rules, domains lifecycle: beel_rules_list with domain, or resource beel://guardrails/<domain>.\n- The status names, the proforma lifecycle, and which tool performs each operation. (resource: beel://guardrails/invoice-state-machine)",
+ "inputSchema": {
+  "$defs": {
+   "InvoiceStatus": {
+    "description": "- SCHEDULED: Scheduled invoice to be issued automatically on a future date\n- DRAFT: Draft invoice not sent yet (modifiable)\n- ISSUED: Finalized invoice with definitive number but not sent\n- SENT: Invoice sent to customer\n- PAID: Invoice paid\n- OVERDUE: Reserved. No operation sets this status and it is not computed from `due_date`;\n  an unpaid invoice past its due date keeps its status (`ISSUED` or `SENT`). Compare\n  `due_date` with today to find overdue invoices.\n- RECTIFIED: Partially corrected invoice (one or more PARTIAL corrective invoices)\n- VOIDED: Cancelled invoice. Reached either through a direct void request or\n  through a TOTAL corrective invoice; `void_cause` tells the two apart.\n- CONVERTED: Proforma converted into an invoice (terminal; the proforma survives\n  as the record of the accepted quote, linked to the created invoice)\n- ACTIVE: Active proforma. The single working state of a proforma (non-fiscal\n  document): born numbered (PRO-...) and editable, never reaching the fiscal\n  statuses. It transitions to CONVERTED when turned into an invoice, or to VOIDED\n  when the offer is rejected/withdrawn (POST /v1/invoices/{invoice_id}/void).\n- EXPIRED: Proforma whose offer validity (`valid_until`) has passed. Derived on read\n  and never stored; the proforma stays convertible and editable.\n",
+    "enum": [
+     "SCHEDULED",
+     "DRAFT",
+     "ISSUED",
+     "SENT",
+     "PAID",
+     "OVERDUE",
+     "RECTIFIED",
+     "VOIDED",
+     "CONVERTED",
+     "ACTIVE",
+     "EXPIRED"
+    ],
+    "type": "string"
+   },
+   "InvoiceType": {
+    "description": "- STANDARD: Standard invoice\n- CORRECTIVE: Corrects or cancels a previous invoice\n- SIMPLIFIED: Simplified invoice (ticket), for a recipient that is not identified. BeeL.\n  requires a STANDARD invoice when the recipient is identified, at any amount: a\n  SIMPLIFIED invoice whose recipient carries an `nif` or `alternative_id` is rejected\n  with `SIMPLIFIED_INVOICE_FORBIDS_IDENTIFIED_RECIPIENT`. The only amount BeeL\n  enforces is a cap of 3,000\u20ac VAT included (`SIMPLIFIED_INVOICE_EXCEEDS_LEGAL_LIMIT`). The\n  general limit of RD 1619/2012 is 400\u20ac (art. 4.1.a); up to 3,000\u20ac applies only to the\n  activities listed in art. 4.2. BeeL does not check which activity the issuer carries\n  out.\n- PROFORMA: Commercial document (formal quote) with no fiscal validity.\n  Never enters VeriFactu (no QR, no AEAT submission): `verifactu.enabled` is\n  always `false`, whatever the company's regime. Requires full recipient data,\n  like STANDARD.\n  Cannot be corrective nor reference a rectified invoice.\n",
+    "enum": [
+     "STANDARD",
+     "CORRECTIVE",
+     "SIMPLIFIED",
+     "PROFORMA"
+    ],
+    "type": "string"
+   },
+   "PaymentMethod": {
+    "description": "Payment method shown on invoices and recurring invoices.\n\n- `NONE`: no payment information is shown.\n- `BANK_TRANSFER`: bank transfer to the IBAN of the payment details; the only method\n  that requires an IBAN.\n- `CARD`: card payment.\n- `CASH`: cash payment.\n- `CHECK`: payment by cheque.\n- `DIRECT_DEBIT`: direct debit from the customer's bank account.\n- `BIZUM`: payment through Bizum.\n- `OTHER`: any other method.\n",
+    "enum": [
+     "NONE",
+     "BANK_TRANSFER",
+     "CARD",
+     "CASH",
+     "CHECK",
+     "DIRECT_DEBIT",
+     "BIZUM",
+     "OTHER"
+    ],
+    "type": "string"
+   },
+   "SortOrder": {
+    "description": "Sort direction. Shared vocabulary for every `sort_order` query param: declared once so the\ngenerator emits a real enum and an unknown direction is rejected with `400` instead of being\nsilently ignored.\n",
+    "enum": [
+     "asc",
+     "desc"
+    ],
+    "type": "string"
+   },
+   "UUID": {
+    "description": "Universally Unique Identifier (UUID v4)",
+    "format": "uuid",
+    "type": "string"
+   },
+   "VeriFactuSubmissionStatus": {
+    "description": "Submission status of an invoice's VeriFactu record to AEAT.\n\nSingle vocabulary for the whole axis: the same values are published in\n`verifactu.submission_status` of an invoice and accepted by the `verifactu_status`\nfilter of `GET /v1/invoices`, so a value read from an invoice can be fed straight\nback into the filter.\n\n* `PENDING` \u2014 queued, AEAT has not answered yet. A temporary AEAT server error also\n  stays `PENDING`: BeeL. retries it automatically, and it only becomes `REJECTED` if the\n  retries run out.\n* `ACCEPTED` \u2014 accepted by AEAT (with or without non-blocking warnings).\n* `VOIDED` \u2014 a cancellation record was accepted by AEAT.\n* `REJECTED` \u2014 rejected by AEAT, or the submission was rejected by the provider\n  before reaching AEAT (see `error_code` / `error_message`).\n* `NOT_SUBMITTED` \u2014 the invoice is issued with VeriFactu enabled but has no live\n  record: the submission fell through (lost event, exhausted retries) and AEAT\n  does not know the invoice exists. Transient right after issuing (the async\n  submission may still be in flight); if it persists, the registration needs to\n  be re-driven.\n\nDrafts and scheduled invoices have no submission to describe yet and omit the\nfield. Invoices with `verifactu.enabled = false` are outside this axis and are\nselected with the `verifactu_enabled` filter.\n",
+    "enum": [
+     "PENDING",
+     "ACCEPTED",
+     "VOIDED",
+     "REJECTED",
+     "NOT_SUBMITTED"
+    ],
+    "type": "string"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "company_id": {
+    "description": "Unique identifier (UUID) of the company the operation acts on \u2014 its identifier, not its NIF. It is the only source of context: the account that owns it is derived from it, and the `BeeL-Active-Company` header plays no part. A company you do not reach answers `403`, and so does a company that does not exist, so the existence of a company in another account is never disclosed.",
+    "format": "uuid",
+    "type": "string"
+   },
+   "customer_id": {
+    "$ref": "#/$defs/UUID",
+    "description": "Filter by customer UUID"
+   },
+   "date_from": {
+    "description": "Issue date from (YYYY-MM-DD)",
+    "format": "date",
+    "type": "string"
+   },
+   "date_to": {
+    "description": "Issue date to (YYYY-MM-DD)",
+    "format": "date",
+    "type": "string"
+   },
+   "external_ref": {
+    "description": "Filter by exact external reference (client-supplied order/cart/contract id).",
+    "type": "string"
+   },
+   "fiscal_only": {
+    "default": false,
+    "description": "When `true`, returns only fiscal documents (STANDARD, CORRECTIVE, SIMPLIFIED),\nexcluding proformas and any other non-fiscal document. Defaults to `false`\n(the list returns every document type). Ignored when an explicit `type` is given.\n",
+    "type": "boolean"
+   },
+   "invoice_number": {
+    "description": "Search by invoice number (e.g., 2025/0001)",
+    "type": "string"
+   },
+   "limit": {
+    "default": 20,
+    "description": "How many items to return per page. The response echoes it back as `pagination.items_per_page`.",
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "metadata": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "description": "Filter by metadata key/value pairs (exact match, AND between keys).\nRepeat the bracket-style param to filter on multiple keys.\nMax 50 pairs per request. Keys must match `^[A-Za-z0-9_\\-.]{1,64}$`.\nExample: `?metadata[external_order_id]=ORD-42&metadata[tenant]=acme`\n",
+    "maxProperties": 50,
+    "type": "object"
+   },
+   "page": {
+    "default": 1,
+    "description": "Page number, starting at 1. The response echoes it back as `pagination.current_page`.",
+    "minimum": 1,
+    "type": "integer"
+   },
+   "payment_method": {
+    "description": "Filter by payment method. Accepts a comma-separated list to match any of several\nmethods, for example `payment_method=DIRECT_DEBIT,CARD`. A single value is also valid.\n`NONE` also matches invoices that have no payment method stored. Combine it with\n`date_from`/`date_to` to list, for example, the direct debits of a month. An empty\nvalue (`payment_method=`) is the same as omitting the parameter.\n",
+    "items": {
+     "$ref": "#/$defs/PaymentMethod"
+    },
+    "type": "array"
+   },
+   "recipient_name": {
+    "description": "Filter by recipient's fiscal name (partial, case-insensitive search)",
+    "type": "string"
+   },
+   "recipient_nif": {
+    "description": "Filter by recipient's NIF (partial search)",
+    "type": "string"
+   },
+   "rectified_invoice_id": {
+    "description": "Return the corrective invoices that correct this invoice. Accepts the id of an\nissued invoice; a single invoice can have several partial correctives.\n",
+    "format": "uuid",
+    "type": "string"
+   },
+   "search": {
+    "description": "Global search across invoice number, recipient name, recipient NIF, and series code (partial, case-insensitive)",
+    "type": "string"
+   },
+   "series_code": {
+    "description": "Filter by series code (exact match, case-insensitive). Use `search` for partial matching across the invoice number, recipient and series code.",
+    "type": "string"
+   },
+   "sort_by": {
+    "description": "Field to sort by: `issue_date` (default), `operation_date`, `due_date`,\n`invoice_number`, `series_code`, `status`, `invoice_total`, `taxable_base`,\n`total_vat`, `total_equivalence_surcharge`, `total_discounts`, `recipient_name`,\n`recipient_nif`, `created_at` or `updated_at`. Any other value is rejected with `400`\n`VALIDATION_ERROR`, whose `details` name `sort_by` and the accepted values.\n",
+    "type": "string"
+   },
+   "sort_order": {
+    "allOf": [
+     {
+      "$ref": "#/$defs/SortOrder"
+     }
+    ],
+    "default": "desc",
+    "description": "Sort direction"
+   },
+   "status": {
+    "description": "Filter by invoice status. Accepts a comma-separated list to match any of several\nstatuses, for example `status=DRAFT,ISSUED`. A single value is also valid. An empty\nvalue (`status=`) is the same as omitting the parameter.\n",
+    "items": {
+     "$ref": "#/$defs/InvoiceStatus"
+    },
+    "type": "array"
+   },
+   "taxable_base_max": {
+    "description": "Maximum taxable base",
+    "format": "double",
+    "type": "number"
+   },
+   "taxable_base_min": {
+    "description": "Minimum taxable base",
+    "format": "double",
+    "type": "number"
+   },
+   "total_max": {
+    "description": "Maximum invoice total",
+    "format": "double",
+    "type": "number"
+   },
+   "total_min": {
+    "description": "Minimum invoice total",
+    "format": "double",
+    "type": "number"
+   },
+   "type": {
+    "$ref": "#/$defs/InvoiceType",
+    "description": "Filter by invoice type"
+   },
+   "verifactu_enabled": {
+    "description": "Filter by whether VeriFactu is enabled for the invoice \u2014 the same flag published as\n`verifactu.enabled`. `false` returns the invoices that never reach AEAT.\n",
+    "type": "boolean"
+   },
+   "verifactu_status": {
+    "$ref": "#/$defs/VeriFactuSubmissionStatus",
+    "description": "Filter by the VeriFactu submission status of the invoice, using the very same\nvocabulary that `verifactu.submission_status` publishes on each invoice.\n`NOT_SUBMITTED` selects issued invoices with VeriFactu enabled whose\nregistration never happened (no live record).\n"
+   }
+  },
+  "required": [
+   "company_id"
+  ],
+  "type": "object"
+ },
+ "name": "beel_list_invoices"
+}

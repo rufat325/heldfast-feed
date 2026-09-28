@@ -1,0 +1,383 @@
+{
+ "description": "Place a print order with Probo. Returns order ID and confirmation.\n\nIMPORTANT \u2014 Product field naming:\n- Use \"code\" (e.g. \"banner-510\") or \"customer_code\" for products \u2014 NOT \"productCode\" (that's only for configureProduct)\n- Options: flat array. Radio/selection: {code:\"finishing-all-sides\"} (child code only, no value). Numeric: {code:\"amount\",value:1}\n\nIMPORTANT \u2014 Configuration products require files:\n- Products like banners, large format prints, etc. have upload:true in configureProduct response \u2014 they REQUIRE a print file\n- Fix/stock items do NOT require files and can be ordered with code + options alone\n- Ordering a configuration product without files will be REJECTED by Probo API\n\nFile uploads \u2014 two ways to attach print files to a configuration product:\nOption A \u2014 uploader:true (customer uploads later):\n  {code:\"banner-510\", options:[...], uploader:true}\n  \u2192 Order status becomes \"waiting_for_file\", response includes upload URL(s)\n  \u2192 Customer uploads file to the returned URL, order then processes automatically\n\nOption B \u2014 direct file URL (immediate, best for automation):\n  {code:\"banner-510\", options:[...], files:[{uri:\"https://example.com/file.pdf\"}]}\n  \u2192 Order is queued immediately (status \"order_queued\")\n  \u2192 File must be a publicly accessible URL (.pdf, .jpg, .png)\n\nOrder processing:\n- Orders are QUEUED first (status \"order_queued\"), then processed asynchronously by Probo\n- The returned order ID is what you use with getOrderStatus \u2014 but wait ~30 seconds before checking status\n- Test orders (isTest: true) are auto-cancelled by Probo and won't appear in the dashboard\n- Set isTest: false explicitly for real production orders",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "additionalOptions": {
+    "additionalProperties": false,
+    "description": "Additional order options",
+    "properties": {
+     "callbackUrl": {
+      "anyOf": [
+       {
+        "format": "uri",
+        "type": "string"
+       },
+       {
+        "items": {
+         "format": "uri",
+         "type": "string"
+        },
+        "type": "array"
+       }
+      ],
+      "description": "Callback URL(s) for order status updates"
+     },
+     "contactEmail": {
+      "description": "Contact email for the order",
+      "format": "email",
+      "type": "string"
+     },
+     "deliveryDate": {
+      "description": "Specific delivery date (YYYY-MM-DD)",
+      "type": "string"
+     },
+     "deliveryDatePreset": {
+      "description": "Delivery date preset (e.g., \"cheapest\")",
+      "type": "string"
+     },
+     "errorEmails": {
+      "anyOf": [
+       {
+        "format": "email",
+        "type": "string"
+       },
+       {
+        "items": {
+         "format": "email",
+         "type": "string"
+        },
+        "type": "array"
+       }
+      ],
+      "description": "Email address(es) for error notifications"
+     },
+     "orderId": {
+      "description": "Custom order ID (alphanumeric, underscore, hyphen)",
+      "pattern": "^[\\w-]+$",
+      "type": "string"
+     },
+     "shippingMethodCode": {
+      "description": "Specific shipping method code (e.g., \"onb-express\")",
+      "type": "string"
+     },
+     "shippingMethodPreset": {
+      "description": "Shipping method preset (e.g., \"cheapest\")",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "address": {
+    "additionalProperties": false,
+    "description": "Delivery address (company_name, first_name, street, postal_code, city, country required)",
+    "properties": {
+     "address_addition": {
+      "description": "House number addition",
+      "type": "string"
+     },
+     "address_city": {
+      "description": "City",
+      "type": "string"
+     },
+     "address_company_name": {
+      "description": "Company name (required by Probo API)",
+      "type": "string"
+     },
+     "address_country": {
+      "description": "Country code (ISO 3166-1 alpha-2)",
+      "maxLength": 2,
+      "minLength": 2,
+      "type": "string"
+     },
+     "address_email": {
+      "description": "Email address",
+      "format": "email",
+      "type": "string"
+     },
+     "address_first_name": {
+      "description": "First name",
+      "type": "string"
+     },
+     "address_house_number": {
+      "description": "House number",
+      "type": [
+       "string",
+       "number"
+      ]
+     },
+     "address_last_name": {
+      "description": "Last name",
+      "type": "string"
+     },
+     "address_postal_code": {
+      "description": "Postal code",
+      "type": "string"
+     },
+     "address_street": {
+      "description": "Street name",
+      "type": "string"
+     },
+     "address_telephone_number": {
+      "description": "Phone number",
+      "type": "string"
+     }
+    },
+    "required": [
+     "address_company_name",
+     "address_first_name",
+     "address_street",
+     "address_postal_code",
+     "address_city",
+     "address_country"
+    ],
+    "type": "object"
+   },
+   "configuration": {
+    "additionalProperties": false,
+    "description": "Products to order. Use \"code\" or \"customer_code\" per product \u2014 NOT \"productCode\"",
+    "properties": {
+     "language": {
+      "description": "Language code (ISO 639-1)",
+      "maxLength": 2,
+      "minLength": 2,
+      "type": "string"
+     },
+     "products": {
+      "description": "Products to order",
+      "items": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "code": {
+           "description": "Probo product code",
+           "minLength": 2,
+           "type": "string"
+          },
+          "files": {
+           "description": "Product files",
+           "items": {
+            "additionalProperties": false,
+            "description": "Product file",
+            "properties": {
+             "amount": {
+              "description": "Times to print",
+              "minimum": 1,
+              "type": "number"
+             },
+             "fill": {
+              "description": "Fill canvas",
+              "type": "boolean"
+             },
+             "fill_even": {
+              "description": "Fill proportionally",
+              "type": "boolean"
+             },
+             "id": {
+              "description": "External file ID",
+              "minimum": 1,
+              "type": "number"
+             },
+             "mirror": {
+              "description": "Mirror image",
+              "type": "boolean"
+             },
+             "page": {
+              "description": "Page number",
+              "minimum": 1,
+              "type": "number"
+             },
+             "rotation": {
+              "description": "Rotation in degrees",
+              "enum": [
+               0,
+               90,
+               180,
+               270
+              ],
+              "type": "number"
+             },
+             "side": {
+              "description": "Print side",
+              "enum": [
+               "front",
+               "back"
+              ],
+              "type": "string"
+             },
+             "tiling": {
+              "description": "Tiling mode",
+              "enum": [
+               "none",
+               "horizontal",
+               "vertical"
+              ],
+              "type": "string"
+             },
+             "uri": {
+              "description": "URL to print file (.pdf, .jpg, .png)",
+              "type": "string"
+             }
+            },
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "id": {
+           "description": "Product ID",
+           "type": [
+            "number",
+            "string"
+           ]
+          },
+          "options": {
+           "description": "Product options",
+           "items": {
+            "additionalProperties": false,
+            "description": "Product configuration option",
+            "properties": {
+             "code": {
+              "description": "Option code",
+              "type": "string"
+             },
+             "value": {
+              "description": "Option value",
+              "type": [
+               "string",
+               "number",
+               "boolean"
+              ]
+             }
+            },
+            "required": [
+             "code"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "reference": {
+           "description": "Product reference",
+           "maxLength": 255,
+           "type": "string"
+          },
+          "uploader": {
+           "description": "Use uploader after submitting",
+           "type": "boolean"
+          },
+          "uploaders": {
+           "description": "Product uploaders",
+           "items": {
+            "additionalProperties": false,
+            "description": "Product uploader",
+            "properties": {
+             "external_id": {
+              "description": "External uploader ID",
+              "type": "number"
+             },
+             "id": {
+              "description": "Uploader ID",
+              "type": "number"
+             }
+            },
+            "required": [
+             "id",
+             "external_id"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "code"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "properties": {
+          "customer_code": {
+           "description": "Customer API product code",
+           "minLength": 2,
+           "type": "string"
+          },
+          "files": {
+           "description": "Product files",
+           "items": {
+            "$ref": "#/properties/configuration/properties/products/items/anyOf/0/properties/files/items"
+           },
+           "type": "array"
+          },
+          "id": {
+           "description": "Product ID",
+           "type": [
+            "number",
+            "string"
+           ]
+          },
+          "options": {
+           "description": "Product options",
+           "items": {
+            "$ref": "#/properties/configuration/properties/products/items/anyOf/0/properties/options/items"
+           },
+           "type": "array"
+          },
+          "reference": {
+           "description": "Product reference",
+           "maxLength": 255,
+           "type": "string"
+          },
+          "uploader": {
+           "description": "Use uploader after submitting",
+           "type": "boolean"
+          },
+          "uploaders": {
+           "description": "Product uploaders",
+           "items": {
+            "$ref": "#/properties/configuration/properties/products/items/anyOf/0/properties/uploaders/items"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "customer_code"
+         ],
+         "type": "object"
+        }
+       ],
+       "description": "Order product (by Probo code or customer code)"
+      },
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "products"
+    ],
+    "type": "object"
+   },
+   "isTest": {
+    "description": "Test order (auto-cancelled, not visible in dashboard). Default: based on PROBO_API_MODE env",
+    "type": "boolean"
+   },
+   "reference": {
+    "description": "Your order reference, e.g. \"Order-2026-001\"",
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "configuration",
+   "address",
+   "reference"
+  ],
+  "type": "object"
+ },
+ "name": "placeOrder"
+}

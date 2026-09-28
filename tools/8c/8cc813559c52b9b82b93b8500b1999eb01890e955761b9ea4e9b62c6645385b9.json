@@ -1,0 +1,25 @@
+{
+ "description": "\ud83d\udd34 DESTRUCTIVE \u2014 delete a business + cascade across per-tenant tables. IRREVERSIBLE.\n\nHard-deletes the business row in norm_cli_<client>.businesses AND cascades to linked tables (pins, business_contacts, business_registry, company_registry, contacts, phones, domains, linkedin_profiles). Transactional \u2014 all-or-nothing. Audit row written to public.idap_deletions_audit in the same transaction.\n\nWHEN TO USE:\n- Surfacing a duplicate via idap_resolve_resource + manual review, then cleaning up the duplicate.\n- Tenant cleanup of stale/incorrect business records.\n- Cascading removal of contact/email/phone associations for a business.\n\nRECOMMENDED FLOW:\n1. Resolve target with idap_resolve_resource (e.g. {resource_type: 'businesses', domain: 'example.com'}) \u2192 get the canonical business_id (UUID).\n2. (Optional) idap_find_duplicates (D.1) to confirm this isn't unique-data destruction.\n3. Call idap_delete_business with the resolved UUID + a short audit reason.\n\n\u26a0\ufe0f DOES NOT TOUCH cs.vayapin.com.\nVayaPin pin pages are permanent per VayaPin \u00a710. Response includes vayapin_pins_remain_external (boolean) + vayapin_pin_data_set_ids_orphaned (array). Tell the user about any remaining external URLs.\n\n\u26a0\ufe0f DOES NOT CASCADE THE 'emails' TABLE.\nemails is a tenant-wide canonical store (UNIQUE on the email column) shared across businesses via business_contacts (M:N). Only the link row is removed; the email's verification metadata stays. Other businesses still reference the same email.\n\nWHAT AUTO-CASCADES (Postgres ON DELETE CASCADE):\nbooking_flows, services \u2014 surfaced in response.auto_cascaded {table: count}.\n\nWHAT BLOCKS THE DELETE (returns 409 Conflict, never partial):\nbookings rows referencing this business or its contacts via ON DELETE NO ACTION FK. Response.detail.blocking_booking_ids lists up to 50 blocking IDs. Caller must re-point or delete those bookings before retrying.\n\nAUTH:\nTenant-owner only \u2014 caller's client_id IS the tenant scope. No super-admin override in V1. Second DELETE on the same UUID returns 404 (idempotent).\n\nINPUT:\n- business_id (required): UUID of the business. Must be in your tenant's norm_cli_* schema.\n- reason (optional, max 500 chars): Free-text recorded in the audit log (e.g. \"duplicate of 1234-\u2026\").\n\nRESPONSE on success (200):\n{\n  deleted: true,\n  business_id: \"<uuid>\",\n  cascade: {pins: N, business_contacts: N, business_registry: N, company_registry: N, contacts: N, phones: N, domains: N, linkedin_profiles: N, businesses: 1},\n  auto_cascaded: {booking_flows: N, services: N},\n  vayapin_pins_remain_external: bool,\n  vayapin_pin_data_set_ids_orphaned: [<id>, ...]\n}\n\nAdded by IDAP Wave D.2 (2026-05-24).",
+ "inputSchema": {
+  "properties": {
+   "business_id": {
+    "description": "UUID of the business to delete. Resolve alternate keys via idap_resolve_resource first.",
+    "type": "string"
+   },
+   "reason": {
+    "description": "Optional free-text reason recorded in the audit log (max 500 chars). e.g. \"duplicate of <other_uuid>\".",
+    "maxLength": 500,
+    "type": "string"
+   },
+   "workspace": {
+    "description": "Tenant to target (cli_\u2026). Omit to use the active/bound workspace. list_workspaces shows the options.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "business_id"
+  ],
+  "type": "object"
+ },
+ "name": "idap_delete_business"
+}

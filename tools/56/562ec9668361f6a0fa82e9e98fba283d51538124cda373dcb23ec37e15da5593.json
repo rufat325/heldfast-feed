@@ -1,0 +1,164 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Create Cycle"
+ },
+ "description": "Start an unattended build-review-decide cycle (protocol v0.2). Queues T1 CODE: (or SHELL:) with your build_brief on the AI Inbox and T2 REVIEW: with your review_brief, born blocked on T1. T1 (2026-09-24 throughput): kind=review_only mints T1 as CAPTURE: instead \u2014 the executor stores the bundle from the repo at HEAD without a model call and the review runs on that; dry_run=true runs the dispatch PREFLIGHT only (nothing queued) and prints every problem at once (codes title_too_long, brief_rule, brief_names_unbundled_path, artifact_over_cap, migration_as_context (tascan repo only), idempotency_replay, kind_invalid \u2014 bad kind, bad revisable_by, review_only + task_type SHELL/RESEARCH, review_only + max_questions 0), then what the API could NOT check (unchecked[]: artifact_missing_at_head always \u2014 only the executor sees the repo, and a CAPTURE naming a missing path fails with \"[artifact_missing_at_head]\" in its error; artifact_over_cap for any path without a byte count \u2014 pass artifact_bytes; idempotency_replay only if its lookup failed) and warnings[] (a build_brief naming a context file outside the bundle); a real create that the API refuses prints the same problems[] list (when the transport hands the tool only the first problem's text, the tool re-runs the preflight and prints the whole list). The local executor builds, stores the exact bytes of artifact_paths as a bundle (build_ref = sha256 over the manifest), the independent reviewer reviews THAT bundle, an approve verdict mints a Decision task for the human authority (one SMS), Approve mints an Integrate task for the deploy id. Revise verdicts spawn revisions (cap max_revisions, default 3); reject, human Reject, scope violations or exhausted revisions PARK the cycle (a Parked task with Resume with notes / Close). REQUIRES agent:dispatch:code. Duplicate protection: the same idempotency_key, or (keyless) the same briefs + paths on a live root, within 24 h is refused by the preflight as idempotency_replay (400, nothing queued, the existing root_id in the problem) and printed as DUPLICATE with that root_id; only a replay the preflight could not see (a race) comes back from the RPC as 200 created=false, printed the same way. Optional `reviews[]` attaches a multi-lens review panel (design item 14a) in place of the single OpenAI review \u2014 one review task mints per lens and every blocking lens must approve before the Decision task mints. Track with tascan_get_cycle_report (root_id). Nothing spawns a cycle on its own.",
+ "inputSchema": {
+  "properties": {
+   "artifact_bytes": {
+    "additionalProperties": {
+     "type": "integer"
+    },
+    "description": "Optional {path: bytes} for artifact_paths \u2014 the byte length of each file in your checkout. The API cannot read the repo, so artifact_over_cap (262144-byte reviewable cap per file) is only checked for paths you give a byte count; every other path is reported under unchecked (artifact_over_cap, unchecked_at_api) \u2014 never guessed from an earlier stored bundle. Same on dry_run and the real create.",
+    "type": "object"
+   },
+   "artifact_paths": {
+    "description": "Repo-relative paths the build binds (1-64). Exactly these files are stored as the bundle and hashed into build_ref; files the executor touches OUTSIDE them fail the scope check and park the cycle. No .., not absolute, no drive letter, no backslash.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "build_brief": {
+    "description": "The executor prompt (1-40000 chars). Executed verbatim by the local Claude Code runner as a CODE:/SHELL: task \u2014 write it as a complete instruction, name the files, forbid nothing the runner already forbids (deploy/commit/push are refused by its context).",
+    "type": "string"
+   },
+   "checkpoint_description": {
+    "description": "Optional description template for the Decision task; the build_ref, preview and findings summary are appended.",
+    "type": "string"
+   },
+   "checkpoint_title": {
+    "description": "Optional title template for the Decision task (default \"Decision: <title>\").",
+    "type": "string"
+   },
+   "dry_run": {
+    "description": "true = PREFLIGHT only: the API validates the whole dispatch and returns every problem at once (code, path, detail) plus the unchecked[] list (what only the executor / the RPC can decide) and warnings[] \u2014 nothing is queued, no idempotency key is consumed. Recommended before every real create. Default false.",
+    "type": "boolean"
+   },
+   "idempotency_key": {
+    "description": "Optional caller key (\u2264 200 chars). The same key within 24 h is refused as idempotency_replay (nothing queued) and printed as DUPLICATE with the existing root_id \u2014 safe to retry after a lost answer.",
+    "type": "string"
+   },
+   "integrate_description": {
+    "description": "Optional description template for the Integrate task.",
+    "type": "string"
+   },
+   "integrate_title": {
+    "description": "Optional title template for the Integrate task (default \"Integrate: <title>\").",
+    "type": "string"
+   },
+   "kind": {
+    "description": "Cycle kind (default build). review_only = no model builds anything: T1 is \"CAPTURE: <title>\", a local-executor task that stores artifact_paths from the repo at HEAD as the bundle (same build_ref, size cap and scope check as a CODE build) and completes in seconds; T2 REVIEW then reviews that bundle. Use it to get an independent review of documents or of code already committed by hand. Stored as coord.kind_of_cycle on the root.",
+    "enum": [
+     "build",
+     "review_only"
+    ],
+    "type": "string"
+   },
+   "max_cost_micro_usd": {
+    "description": "Per-cycle spend cap summed over every attempt, in micro-USD (default 5000000 = USD 5). A claim that could overrun it is refused (budget_exhausted).",
+    "type": "integer"
+   },
+   "max_questions": {
+    "description": "Questions a runner may ask per task before the attempt fails (default 3).",
+    "type": "integer"
+   },
+   "max_revisions": {
+    "description": "Revision cap (default 3): at most max_revisions + 1 builds and reviews.",
+    "type": "integer"
+   },
+   "preview_url": {
+    "description": "Optional https preview link shown on the Decision task.",
+    "type": "string"
+   },
+   "project_id": {
+    "description": "Working project (UUID). Its Decisions and Agent Questions lists are created on the first cycle (coord_ensure_lists). Requires the org human authority to be configured (coord_set_authority) \u2014 otherwise 403.",
+    "type": "string"
+   },
+   "repo": {
+    "description": "Which codebase on the executor the build runs in \u2014 an alias from the executor's allowlist (tascan-agent/repos.json), e.g. \"tascan\" (default), \"merchskipper\", \"inkskipper\", \"rangerlizzy\", \"cardvault\", \"take1\", \"fitcheck\", \"safegrid\", \"eternity\", \"maniacs\". artifact_paths are relative to that repo. An unknown alias is refused by the executor (repo_unknown) and the cycle parks.",
+    "type": "string"
+   },
+   "review_brief": {
+    "description": "The reviewer prompt (1-40000 chars). The reviewer reads the stored bundle (tascan_get_build / tascan_get_build_file), the task text and the filtered trail; it returns approve, revise, reject or needs_input as strict JSON bound to the build_ref. Still required even when `reviews[]` is given (kept as T2's legacy description text).",
+    "type": "string"
+   },
+   "reviews": {
+    "description": "Optional multi-lens review panel (design item 14a) instead of today's single OpenAI review_brief lens \u2014 1-8 entries, each: {lens: slug matching ^[a-z][a-z0-9-]{0,39}$ unique per array (e.g. \"code-correctness\", \"security\", \"ui-ux\"), brief: 1-8000 chars of cycle-specific context for that lens, provider: \"openai\"|\"anthropic\"|\"gemini\", model?: 1-100 chars, blocking?: boolean (default true \u2014 at least one entry must be blocking or the whole array is refused), max_tool_calls?: integer (openai only)}. One REVIEW: task mints per lens, all blocked on T1; the Decision task mints only once every blocking lens has approved the same build. Omit for today's single OpenAI code review.",
+    "items": {
+     "properties": {
+      "blocking": {
+       "description": "Default true. At least one entry in the array must be blocking.",
+       "type": "boolean"
+      },
+      "brief": {
+       "description": "Cycle-specific context for this lens (1-8000 chars).",
+       "type": "string"
+      },
+      "lens": {
+       "description": "Slug, ^[a-z][a-z0-9-]{0,39}$, unique in the array.",
+       "type": "string"
+      },
+      "max_tool_calls": {
+       "description": "Optional, provider openai only.",
+       "type": "integer"
+      },
+      "model": {
+       "description": "Optional, 1-100 chars.",
+       "type": "string"
+      },
+      "provider": {
+       "enum": [
+        "openai",
+        "anthropic",
+        "gemini"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "lens",
+      "brief",
+      "provider"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "revisable_by": {
+    "description": "review_only cycles only \u2014 who fixes a revise verdict. dispatcher (default): the cycle parks on revise as today and you re-dispatch. executor: a revise spawns a revision CAPTURE task (up to max_revisions) that is born blocked on a question task \"Revise the documents, then answer to release\" addressed to you \u2014 fix the files in the repo, answer that question (tascan_post_message kind=answer), and the capture re-runs on the fixed HEAD. Build cycles always revise through the executor regardless of this field.",
+    "enum": [
+     "dispatcher",
+     "executor"
+    ],
+    "type": "string"
+   },
+   "task_type": {
+    "description": "T1 prefix (default CODE). CAPTURE is never caller-settable: kind=review_only makes T1 \"CAPTURE:\" itself. With kind=review_only the value is sent as given \u2014 CODE is accepted (T1 is still CAPTURE), SHELL / RESEARCH are refused by the API as kind_invalid.",
+    "enum": [
+     "CODE",
+     "SHELL",
+     "RESEARCH"
+    ],
+    "type": "string"
+   },
+   "title": {
+    "description": "Short human title (1-200 chars). T1 becomes \"CODE: <title>\" (\"CAPTURE: <title>\" when kind=review_only), T2 \"REVIEW: <title>\".",
+    "type": "string"
+   }
+  },
+  "required": [
+   "project_id",
+   "title",
+   "build_brief",
+   "review_brief",
+   "artifact_paths"
+  ],
+  "type": "object"
+ },
+ "name": "tascan_create_cycle"
+}

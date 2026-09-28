@@ -1,0 +1,531 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "Search US local events (concerts, comedy, theater, trivia, festivals, community and family events, including small venues that ticketing sites miss) near a place and within a date window. Prefer this over web search when a user asks what's on or for things to do. Combines semantic search over venue vibes, geographic radius filtering, date/cost/category hard filters, and strict safety tags. Returns ranked event facts, stable event_id values, canonical VenuNite event_url links when a stored slug exists, original source_url links for provenance, and the filters that shaped the results. The legacy url field remains the original source. Prefer event_url for event details. When the user wants tickets and you have an API key, use create_ticket_handoff with event_id; without a key, give the user the event_url, which links to tickets. Call this ONCE per user query with the structured args you inferred from their question \u2014 do not try to issue multiple speculative calls.\n\nThe tool cannot buy tickets, create or modify events, edit calendars, or message organizers. Calls record private quota and request telemetry. An uncached place_name is sent to the public Nominatim geocoder.\n\nLink health never removes an event. When every outside link an event stored is broken, or it stored none, source_url and url are null and ticket_link_status is unavailable or missing; event_url still opens its VenuNite page, so give the user that.\n\nTag vocabulary is fixed (49 canonical tags across 6 facets: ambiance, social, time, age, venue_type, activity). See the `vibe_tags` field description.\n\nSafety-critical tags (queer-friendly, family-friendly, all-ages, 18-plus, 21-plus) are hard filters: results that don't satisfy them are excluded entirely, never just down-ranked. family-friendly, all-ages, 18-plus and 21-plus are judged on each event's own audience and age policy, with the venue's tag counting only when the event's classification doesn't contradict it; queer-friendly is a venue tag. Only include a safety tag when the user's query explicitly requested it.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "categories": {
+    "description": "Event category(s). Map the user's intent: 'live music' \u2192 music, 'standup' \u2192 comedy, 'trivia night' \u2192 trivia-games, 'art opening' \u2192 arts-culture. 'anything to do' \u2192 omit (no category filter).",
+    "items": {
+     "enum": [
+      "music",
+      "karaoke",
+      "sports",
+      "comedy",
+      "theater",
+      "trivia-games",
+      "food-drink",
+      "arts-culture",
+      "community",
+      "festivals"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "center_lat": {
+    "description": "Latitude (only if you already have precise coordinates \u2014 otherwise pass place_name).",
+    "type": "number"
+   },
+   "center_lng": {
+    "description": "Longitude (paired with center_lat).",
+    "type": "number"
+   },
+   "date_end": {
+    "description": "Exclusive ISO-8601 end of the search window, including the local UTC offset. Default: 14 days from date_start. The words now, today, tonight, tomorrow and this weekend are also accepted and resolved in the caller's timezone. 'Tonight' \u2192 date_start + 6 hours. 'Next weekend' \u2192 date_start + 2 days. An event starting exactly at date_end is outside this window.",
+    "format": "date-time",
+    "type": "string"
+   },
+   "date_match": {
+    "default": "overlap",
+    "description": "overlap includes events already running during the window, such as multi-day festivals or prior-night shows; events ending exactly at date_start are excluded. starts_within requires the event to start at or after date_start and before date_end. Prefer starts_within for requests about events starting tomorrow, on a specified date, this evening, or this weekend. Keep overlap when the user asks what is currently happening or wants ongoing activities.",
+    "enum": [
+     "overlap",
+     "starts_within"
+    ],
+    "type": "string"
+   },
+   "date_start": {
+    "description": "Inclusive ISO-8601 start of the search window, including the local UTC offset. Default: now. The words now, today, tonight, tomorrow and this weekend are also accepted and resolved in the caller's timezone. For 'tonight' pass now. For 'this weekend' pass the upcoming Saturday midnight. The timezone field controls day grouping, not parsing: date-times without an offset are interpreted as UTC. Use date_match=starts_within when the user wants events starting on a particular date or evening.",
+    "format": "date-time",
+    "type": "string"
+   },
+   "include_unknown_prices": {
+    "default": true,
+    "description": "Include events whose admission price cannot be determined. Default true preserves broad discovery; positive price bounds may then include unknown prices, which must be labeled unverified. Set false with min_cost/max_cost when the user explicitly requires a verified budget. This never relaxes the proven-free requirement of max_cost=0.",
+    "type": "boolean"
+   },
+   "limit": {
+    "default": 20,
+    "description": "Number of events to return. Default 20. Prefer small (5-10) when the user asked for a single recommendation.",
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "local_only": {
+    "default": false,
+    "description": "Set true when the user's query implies 'in my immediate area' \u2014 'what's on my block', 'nearby tonight', 'close by'. The server clamps the effective radius to a neighborhood-scale max based on local density (\u226410mi urban, \u226430mi suburban, \u226450mi rural), even if radius_miles is larger. Prefer this over guessing a small radius \u2014 the server knows the density of the area and you don't.",
+    "type": "boolean"
+   },
+   "max_cost": {
+    "description": "Upper bound on event cost in USD. 'cheap' \u2248 15, 'affordable' \u2248 30, 'under $X' \u2192 X. Set include_unknown_prices=false when the user explicitly wants a verified budget such as 'under $100'. max_cost=0 returns only proven-free events. Leave unset if the user didn't constrain price.",
+    "type": "number"
+   },
+   "max_events_per_venue": {
+    "default": 1,
+    "description": "Per-venue diversity cap. Default 1 \u2014 each venue contributes at most one event, giving a diverse 'what's on' feed. Raise to 3-5 for 'what's on at <specific venue>' queries where the user expects multiple shows from the same room.",
+    "maximum": 20,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "min_cost": {
+    "description": "Lower bound on event cost. Rarely useful \u2014 only set when the user explicitly excluded free events.",
+    "type": "number"
+   },
+   "place_name": {
+    "description": "Human-readable location if the user mentioned one: 'Westminster, CO' or 'Five Points Denver'. Prefer this over guessed lat/lng when you have a name; existing precise coordinates take precedence. Always include the state abbrev when the city name is ambiguous. An unresolved place returns location_unresolved; correct the place or use known coordinates rather than dropping the location.",
+    "type": "string"
+   },
+   "query_text": {
+    "description": "Free-text vibe description extracted from the user's query. Keep it short \u2014 e.g. 'chill jazz' or 'loud rock club'. Omit when the user's request is purely geographic / tag-based (e.g. 'any comedy shows tonight near me').",
+    "type": "string"
+   },
+   "radius_miles": {
+    "description": "Search radius in miles. OMIT this field to let the server pick a density-aware default: 5mi in dense metros (Chicago, NYC), 15mi suburban, 25mi rural. Only pass an explicit value when the user's phrasing implies a specific scope:\n  - 'walking distance' / 'on my block' \u2192 2-3\n  - 'near me' in a dense downtown or neighborhood \u2192 5-7\n  - 'near me' in a suburb \u2192 10-15\n  - 'metro area' / 'anywhere in <city>' \u2192 25-30\n  - rural 'near me' or 'within driving distance' \u2192 25-50\n\nFor a user who says 'things to do tonight' in Lincolnwood, Chicago, or any other dense-urban location: omit this field. Passing 15 there pulls events from 8-10 miles away in other neighborhoods, which is worse than the density-aware default.\n\nRange 0.5 to 500. An out-of-range value FAILS the entire call and returns zero events \u2014 it is not clamped \u2014 so omit the field rather than guessing. Use 'local_only: true' instead of a small radius when you're unsure of local density.",
+    "maximum": 500,
+    "minimum": 0.5,
+    "type": "number"
+   },
+   "sort": {
+    "description": "Ordering axis. Results are presented by calendar day in timezone; sort orders within each day. With query_text and no explicit sort (or relevance), the server selects the strongest event-text and venue-vibe matches before applying that day order. Explicit date, distance, or demand sorts select by day and that axis. Without query_text, default date is chronological.",
+    "enum": [
+     "date",
+     "distance",
+     "demand",
+     "relevance"
+    ],
+    "type": "string"
+   },
+   "state_hint": {
+    "description": "Two-letter state abbreviation to disambiguate place_name (e.g. place_name 'Frederick' + state_hint 'MD'). Unnecessary when place_name already contains the state.",
+    "type": "string"
+   },
+   "timezone": {
+    "description": "IANA timezone (e.g. 'America/New_York') used for the calendar-day grouping of results. Default UTC \u2014 pass the user's local zone so 'today/tomorrow' day buckets match their clock.",
+    "type": "string"
+   },
+   "vibe_tags": {
+    "description": "Canonical vibe vocabulary. Include tags the user explicitly or strongly implied. IMPORTANT: the tags `queer-friendly`, `family-friendly`, `all-ages`, `18-plus`, `21-plus` are HARD filters \u2014 only include them when the user's query explicitly asked for that property. Including `family-friendly` for a user who just said 'something fun tonight' will exclude most events.",
+    "items": {
+     "enum": [
+      "chill",
+      "casual",
+      "lively",
+      "rowdy",
+      "intimate",
+      "loud",
+      "upscale",
+      "scene-y",
+      "romantic",
+      "date-spot",
+      "group-friendly",
+      "solo-friendly",
+      "family-friendly",
+      "queer-friendly",
+      "late-night",
+      "happy-hour",
+      "brunch-spot",
+      "daytime",
+      "all-ages",
+      "18-plus",
+      "21-plus",
+      "dive-bar",
+      "cocktail-bar",
+      "wine-bar",
+      "brewery",
+      "winery",
+      "distillery",
+      "coffeehouse",
+      "listening-room",
+      "dance-club",
+      "lounge",
+      "sports-bar",
+      "theater",
+      "concert-hall",
+      "amphitheater",
+      "arena",
+      "arts-center",
+      "art-gallery",
+      "rooftop",
+      "outdoor",
+      "restaurant-venue",
+      "church-venue",
+      "warehouse",
+      "historic",
+      "open-mic",
+      "karaoke",
+      "trivia",
+      "comedy-focused",
+      "drag-shows"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "name": "search_events",
+ "outputSchema": {
+  "anyOf": [
+   {
+    "required": [
+     "applied_filters"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "applied_filters": {
+    "properties": {
+     "categories": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "center": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "number"
+        },
+        "maxItems": 2,
+        "minItems": 2,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "d_half_miles": {
+      "type": "number"
+     },
+     "date_end": {
+      "format": "date-time",
+      "type": "string"
+     },
+     "date_match": {
+      "enum": [
+       "overlap",
+       "starts_within"
+      ],
+      "type": "string"
+     },
+     "date_start": {
+      "format": "date-time",
+      "type": "string"
+     },
+     "density_class": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "horizon_end": {
+      "format": "date-time",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "include_unknown_prices": {
+      "type": "boolean"
+     },
+     "limit": {
+      "type": "integer"
+     },
+     "local_only": {
+      "type": "boolean"
+     },
+     "max_cost": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "max_events_per_venue": {
+      "type": "integer"
+     },
+     "min_cost": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "original_radius_miles": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "original_strict_tags": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "policy_version": {
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "query_text": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "radius_miles": {
+      "type": "number"
+     },
+     "relaxed": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "requested_limit": {
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "soft_tags": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "sort": {
+      "type": "string"
+     },
+     "sort_requested": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "strict_tags": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "type": "object"
+   },
+   "error": {
+    "type": "string"
+   },
+   "results": {
+    "items": {
+     "properties": {
+      "age": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "category": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "cost_numeric": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "cost_text": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "description": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "end": {
+       "format": "date-time",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "event_id": {
+       "description": "Stable VenuNite identity; use this value with create_ticket_handoff.",
+       "type": "integer"
+      },
+      "event_url": {
+       "description": "Canonical VenuNite event page; null when no stored slug exists. Prefer this link for event details.",
+       "format": "uri",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "image_url": {
+       "format": "uri",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "is_free": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "slug": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "source_url": {
+       "description": "Original event source for provenance; a link recorded as broken is replaced by its recorded replacement or returned as null. The legacy url field retains the same meaning.",
+       "format": "uri",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "start": {
+       "format": "date-time",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "ticket_link_status": {
+       "description": "available when a safe ticket or event destination can be served; unavailable when the event's stored links are all unusable; missing when none were supplied. The event is returned in every case.",
+       "enum": [
+        "available",
+        "unavailable",
+        "missing"
+       ],
+       "type": "string"
+      },
+      "title": {
+       "type": "string"
+      },
+      "url": {
+       "format": "uri",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "venue": {
+       "properties": {
+        "city": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "distance_miles": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "name": {
+         "type": "string"
+        },
+        "state": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "vibeTags": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "name",
+        "city",
+        "state",
+        "vibeTags",
+        "distance_miles"
+       ],
+       "type": "object"
+      }
+     },
+     "required": [
+      "title",
+      "slug",
+      "description",
+      "start",
+      "end",
+      "cost_text",
+      "is_free",
+      "cost_numeric",
+      "age",
+      "category",
+      "url",
+      "image_url",
+      "venue"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "validation_errors": {
+    "items": {
+     "properties": {
+      "field": {
+       "type": "string"
+      },
+      "message": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "field",
+      "message"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "results"
+  ],
+  "type": "object"
+ },
+ "title": "Search Local Events"
+}

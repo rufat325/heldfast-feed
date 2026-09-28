@@ -1,0 +1,324 @@
+{
+ "description": "Publish or schedule a multi-target post\n\nPublish a single body to up to 25 connected accounts in one call, or schedule the whole batch for a future time.\n\n- **Multi-target only:** the v1 wire shape requires `targets[]`. The legacy `account: {}` single-target shape is no longer accepted.\n- **Idempotent:** include `Idempotency-Key`. Replays within 24 hours return the original response.\n- **Preflight:** every documented platform constraint runs locally before the upstream call. Cheap shape preflight is atomic across the batch \u2014 if any target fails the synchronous checks the whole call is rejected as `400 preflight_failed`. Deep checks (URL reachability, MIME sniffing, byte caps) run per target and surface inside `results[i].error`, producing a `partial_failed` batch rather than a 400.\n- **Errors:** failures use the [stable error envelope](https://letmepost.dev/docs/errors/) \u2014 `code`, `rule`, `platformResponse`, `remediation`, `docUrl`, `ruleUrl`.\n\nFor per-platform payload differences, see the [platforms guides](https://letmepost.dev/docs/platforms/bluesky/).",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "firstComment": {
+    "description": "Auto-posted reply to the published post. Bluesky-only today; ignored on platforms that don't support it.",
+    "properties": {
+     "text": {
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "text"
+    ],
+    "type": "object"
+   },
+   "media": {
+    "description": "Default media applied to any target that omits its own `media`.",
+    "items": {
+     "description": "A single media item attached to a post. Exactly one of `mediaId` / `url` / `bytesBase64` must be present.",
+     "properties": {
+      "altText": {
+       "description": "Per-platform alt-text caps apply (e.g. Bluesky 2000, Twitter 1000).",
+       "type": "string"
+      },
+      "bytesBase64": {
+       "description": "Inline base64. Convenient for tiny images and tests; use `POST /v1/media` for anything substantial.",
+       "type": "string"
+      },
+      "kind": {
+       "enum": [
+        "image",
+        "video"
+       ],
+       "type": "string"
+      },
+      "mediaId": {
+       "description": "References a previous `POST /v1/media` upload. Preferred for production \u2014 bytes already live on our CDN.",
+       "example": "med_01HY6X4AWBJM2K9F2PTQMR",
+       "pattern": "^med_[0-9A-Za-z]{22}$",
+       "type": "string"
+      },
+      "url": {
+       "description": "Public URL we fetch from your CDN at publish time. Must respond 200 to anonymous GET.",
+       "example": "https://cdn.example.com/launch.jpg",
+       "format": "uri",
+       "type": "string"
+      }
+     },
+     "required": [
+      "kind"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "profileId": {
+    "description": "Profile scope for this batch. Use to target a specific workspace when the API key or OAuth token is org-wide. Forbidden when the key is already scoped to a different profile (rule `profile.scope_mismatch`). Omit to fall back to the key's bound profile.",
+    "format": "uuid",
+    "type": "string"
+   },
+   "publishNow": {
+    "description": "Explicit immediate-publish mode. Mutually exclusive with `scheduledAt` (`mode_conflict`). When neither is set the request publishes immediately.",
+    "type": "boolean"
+   },
+   "scheduledAt": {
+    "description": "ISO-8601 timestamp at least 1 second in the future. When set, every target row is queued and the response is 202. Scheduled posts currently accept text only \u2014 media and firstComment require an immediate publish.",
+    "example": "2026-06-01T12:00:00.000Z",
+    "format": "date-time",
+    "type": "string"
+   },
+   "targets": {
+    "items": {
+     "description": "One target on a multi-target publish. Carries an `accountId`, a `platform` hint, or both (must agree). Per-target `text` / `media` / `firstComment` / `options` override the top-level defaults.",
+     "properties": {
+      "accountId": {
+       "description": "letmepost platform_account id. When omitted, `platform` must be set and the org must have exactly one connected account for that platform.",
+       "format": "uuid",
+       "type": "string"
+      },
+      "firstComment": {
+       "allOf": [
+        {
+         "description": "Auto-posted reply to the published post. Bluesky-only today; ignored on platforms that don't support it.",
+         "properties": {
+          "text": {
+           "minLength": 1,
+           "type": "string"
+          }
+         },
+         "required": [
+          "text"
+         ],
+         "type": "object"
+        }
+       ],
+       "description": "Per-target first-comment override."
+      },
+      "media": {
+       "description": "Per-target media override. Falls back to the top-level `media`.",
+       "items": {
+        "description": "A single media item attached to a post. Exactly one of `mediaId` / `url` / `bytesBase64` must be present.",
+        "properties": {
+         "altText": {
+          "description": "Per-platform alt-text caps apply (e.g. Bluesky 2000, Twitter 1000).",
+          "type": "string"
+         },
+         "bytesBase64": {
+          "description": "Inline base64. Convenient for tiny images and tests; use `POST /v1/media` for anything substantial.",
+          "type": "string"
+         },
+         "kind": {
+          "enum": [
+           "image",
+           "video"
+          ],
+          "type": "string"
+         },
+         "mediaId": {
+          "description": "References a previous `POST /v1/media` upload. Preferred for production \u2014 bytes already live on our CDN.",
+          "example": "med_01HY6X4AWBJM2K9F2PTQMR",
+          "pattern": "^med_[0-9A-Za-z]{22}$",
+          "type": "string"
+         },
+         "url": {
+          "description": "Public URL we fetch from your CDN at publish time. Must respond 200 to anonymous GET.",
+          "example": "https://cdn.example.com/launch.jpg",
+          "format": "uri",
+          "type": "string"
+         }
+        },
+        "required": [
+         "kind"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "options": {
+       "description": "Per-target platform options. Discriminated on `platform`; the discriminator must match the resolved account's platform or the request fails with `targets.options.platform_mismatch`. Replaces the v0 top-level `pinterest` / `threads` / `twitter` keys.",
+       "discriminator": {
+        "propertyName": "platform"
+       },
+       "oneOf": [
+        {
+         "properties": {
+          "platform": {
+           "enum": [
+            "twitter"
+           ],
+           "type": "string"
+          },
+          "quoteTweetId": {
+           "description": "Quote this tweet id. Mutually exclusive with `replyToTweetId` \u2014 X rejects tweets that combine the two.",
+           "minLength": 1,
+           "type": "string"
+          },
+          "replyToTweetId": {
+           "description": "Reply under this tweet id.",
+           "minLength": 1,
+           "type": "string"
+          }
+         },
+         "required": [
+          "platform"
+         ],
+         "type": "object"
+        },
+        {
+         "properties": {
+          "boardId": {
+           "description": "Pinterest board to pin to. Falls back to the account's default board when omitted.",
+           "minLength": 1,
+           "type": "string"
+          },
+          "coverImageUrl": {
+           "description": "Cover image URL for video pins.",
+           "format": "uri",
+           "type": "string"
+          },
+          "destinationUrl": {
+           "description": "Outbound link attached to the pin.",
+           "format": "uri",
+           "type": "string"
+          },
+          "platform": {
+           "enum": [
+            "pinterest"
+           ],
+           "type": "string"
+          },
+          "title": {
+           "minLength": 1,
+           "type": "string"
+          }
+         },
+         "required": [
+          "platform"
+         ],
+         "type": "object"
+        },
+        {
+         "properties": {
+          "platform": {
+           "enum": [
+            "threads"
+           ],
+           "type": "string"
+          },
+          "replyToId": {
+           "description": "Threads thread id to reply under.",
+           "minLength": 1,
+           "type": "string"
+          }
+         },
+         "required": [
+          "platform"
+         ],
+         "type": "object"
+        },
+        {
+         "properties": {
+          "platform": {
+           "enum": [
+            "bluesky"
+           ],
+           "type": "string"
+          }
+         },
+         "required": [
+          "platform"
+         ],
+         "type": "object"
+        },
+        {
+         "properties": {
+          "platform": {
+           "enum": [
+            "facebook"
+           ],
+           "type": "string"
+          }
+         },
+         "required": [
+          "platform"
+         ],
+         "type": "object"
+        },
+        {
+         "properties": {
+          "platform": {
+           "enum": [
+            "instagram"
+           ],
+           "type": "string"
+          }
+         },
+         "required": [
+          "platform"
+         ],
+         "type": "object"
+        },
+        {
+         "properties": {
+          "platform": {
+           "enum": [
+            "linkedin"
+           ],
+           "type": "string"
+          }
+         },
+         "required": [
+          "platform"
+         ],
+         "type": "object"
+        }
+       ]
+      },
+      "platform": {
+       "allOf": [
+        {
+         "description": "Supported platforms. `tiktok` is currently in App Review \u2014 connect requests return `platform_not_enabled` until approval lands.",
+         "enum": [
+          "bluesky",
+          "facebook",
+          "instagram",
+          "linkedin",
+          "pinterest",
+          "threads",
+          "tiktok",
+          "twitter"
+         ],
+         "type": "string"
+        }
+       ],
+       "description": "Auto-resolve hint. Used alone when the org has exactly one connected account for the platform; combined with `accountId` it must agree (else `targets.account.platform_mismatch`)."
+      },
+      "text": {
+       "description": "Per-target text override. Falls back to the top-level `text`.",
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    },
+    "maxItems": 25,
+    "minItems": 1,
+    "type": "array"
+   },
+   "text": {
+    "description": "Default text applied to any target that omits its own `text`.",
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "targets"
+  ],
+  "type": "object"
+ },
+ "name": "post_v1_posts"
+}

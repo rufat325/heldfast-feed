@@ -1,0 +1,258 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Update Company Payment Connection"
+ },
+ "description": "Updates the auto-invoicing settings of the payment connection named by `{connection_id}` of a\ncompany your account **owns or manages**.\n\n- **Partial by field:** a field you omit keeps its current value. The series fields also\n  accept an explicit `null`, which clears the series and falls back to the company default\n  for that document type. `filter_config` is the exception: when sent, it **replaces the\n  whole object**, not just the sub-fields you included \u2014 a partial `filter_config` clears\n  every filter axis you left out.\n- **Read-only fields:** `id`, `provider`, `status`, `environment`, `external_account_id`,\n  `connected_at`, `last_event_at` and `active_filters` are not part of this request and are\n  ignored if sent. `status` moves through the disconnect operation, never here.\n- **Series:** each one must exist, be active, belong to this NIF and carry a compatible\n  document type, or the request answers `422`.\n\nEndpoint: PATCH /v1/companies/{company_id}/payment-connections/{connection_id}",
+ "inputSchema": {
+  "$defs": {
+   "CompanyPaymentConnectionFilters": {
+    "additionalProperties": false,
+    "description": "Rules that decide which incoming charges reach auto-invoicing. Every axis is opt-in: a\nfield left out does not filter anything. A charge filtered out produces no invoice and is\nrecorded as skipped.\n",
+    "properties": {
+     "allowed_customer_ids": {
+      "description": "Provider-side customer ids (e.g. Stripe `cus_...`) allowed through. When set, no other\ncustomer is invoiced.\n",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "disabled_categories": {
+      "description": "Charge categories opted out of auto-invoicing. An empty list, or the field left out,\nleaves every category active.\n",
+      "items": {
+       "$ref": "#/$defs/PaymentEventCategory"
+      },
+      "type": "array"
+     },
+     "excluded_description_patterns": {
+      "description": "Regular expressions matched against the charge description. A charge matching any of\nthem is skipped.\n",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "max_amount": {
+      "description": "Charges above this amount are skipped.",
+      "format": "double",
+      "minimum": 0,
+      "type": "number"
+     },
+     "min_amount": {
+      "description": "Charges below this amount are skipped.",
+      "format": "double",
+      "minimum": 0,
+      "type": "number"
+     },
+     "only_mapped_customers": {
+      "description": "When true, only charges from customers already mapped to a BeeL customer are invoiced.\n",
+      "type": "boolean"
+     },
+     "required_description_patterns": {
+      "description": "Regular expressions matched against the charge description. A charge must match at\nleast one of them to be invoiced.\n",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "type": "object"
+   },
+   "PaymentConnectionEventSource": {
+    "description": "Which family of Stripe events the connection invoices. One webhook endpoint receives\neverything the connected account emits; whatever falls outside the declared family is\nrecorded as skipped, deliberately ignored, and needs no attention.\n\n- `PAYMENTS`: charges, through `payment_intent.*` and `checkout.session.*`.\n- `INVOICES`: Stripe's own billing documents, through `invoice.*`.\n- `BOTH`: both families, deduplicated to a single invoice per charge.\n\nRefunds, disputes and credit notes are acted on under every value, because Stripe does not\nalways report a correction through the family the charge came in. A correction whose charge\nwas never invoiced is recorded as skipped and needs no action.\n",
+    "enum": [
+     "PAYMENTS",
+     "INVOICES",
+     "BOTH"
+    ],
+    "type": "string"
+   },
+   "PaymentEventCategory": {
+    "description": "Which product line a payment event's money came from. A different axis from `event_kind`,\nwhich says what happened: a `checkout.session.completed` is `PAYMENT_COMPLETED` either way,\nand the category tells you whether it was a one-off checkout or the start of a subscription.\n\n- `DIRECT_PAYMENT`: a one-off charge\n- `SUBSCRIPTION`: a charge produced by a recurring subscription\n- `REFUND`: money given back\n- `CREDIT_NOTE`: a credit note issued on the provider's side\n",
+    "enum": [
+     "DIRECT_PAYMENT",
+     "SUBSCRIPTION",
+     "REFUND",
+     "CREDIT_NOTE"
+    ],
+    "type": "string"
+   },
+   "RegimeKey": {
+    "description": "Regime key according to VeriFactu regulations. Omitted, `01` (general regime) applies:\n- 01: General regime operation\n- 02: Export (IVA and IGIC; not IPSI, whose AEAT list is `01, 08, 11, 18, 19, 20`)\n- 03: Used goods, art, antiques (not accepted, see below)\n- 04: Investment gold\n- 05: Travel agencies\n- 06: Group of entities (not accepted, see below)\n- 07: Cash basis\n- 08: Operation subject to another indirect tax \u2014 IPSI or IGIC on an IVA line, IPSI or IVA\n  on an IGIC line. It is **not** the general regime of IGIC, which is `01`.\n- 09: Mediating agencies\n- 10: Third-party collections\n- 11: Local rental\n- 14: VAT pending in certifications (not accepted, see below)\n- 15: VAT pending successive tract\n- 17: OSS and IOSS\n- 18: Equivalence surcharge\n- 19: REAGYP\n- 20: Simplified regime\n\n**What AEAT requires with each key** (Validaciones VERI*FACTU 3.1.3.15.6), checked on\nIVA and IGIC lines before the invoice is numbered. Otherwise the request is rejected with\n`422` and the code in brackets:\n- `04`: only reverse charge (an `ISP_ART_84_2_*` reason) or an exemption\n  (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n- `08`: only `exemption_reason: NO_SUJETA_LOCALIZACION`, at 0 %\n  (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n- `10`: only `exemption_reason: NO_SUJETA_ART_7_9`, on a `STANDARD` invoice whose\n  recipient has a `nif` (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`,\n  `REGIME_KEY_REQUIRES_STANDARD_INVOICE`, `REGIME_KEY_REQUIRES_RECIPIENT_NIF`).\n- `11` (IVA): a subject line only at 21 %, and no reverse charge\n  (`REGIME_KEY_REQUIRES_VAT_RATE`, `REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n- `06` and `14` are not accepted (`REGIME_KEY_NOT_SUPPORTED`): AEAT requires with them\n  data the invoice does not carry (a cost-based taxable base; an operation date after the\n  issue date and a public-administration recipient).\n- `03` (used goods) is not accepted (`REGIME_KEY_NOT_SUPPORTED`): under it the invoice\n  must not show the tax separately (RD 1619/2012, art. 16.2.c), and it always does. The\n  corrective of an invoice that already carried `03` keeps it.\n- `05` (travel agencies) and `07` (cash basis) are accepted, and the invoice PDF carries\n  the mention of their regime (RD 1619/2012, art. 6.1 n and p). `07`: no reverse charge,\n  no non-subject reason and, of the exemptions, only art. 20 or `OTRO`\n  (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n`GET /v1/tax-types` only offers the keys that are accepted.\n\n**One exception to \"a key you send is the key you get\":** when the line ends up\ncarrying an equivalence surcharge \u2014 whether you sent `equivalence_surcharge_rate`\nor it was inherited from the company's tax configuration \u2014 a `01` is rewritten to\n`18`, because a surcharge under the general regime is fiscally incoherent. Send\n`equivalence_surcharge_rate: 0` explicitly to keep `01`. See\n`equivalence_surcharge_rate` in the invoice line for the full rules.\n",
+    "enum": [
+     "01",
+     "02",
+     "03",
+     "04",
+     "05",
+     "06",
+     "07",
+     "08",
+     "09",
+     "10",
+     "11",
+     "14",
+     "15",
+     "17",
+     "18",
+     "19",
+     "20"
+    ],
+    "type": "string"
+   },
+   "TaxInfo": {
+    "additionalProperties": false,
+    "description": "Complete tax information with cross-validations:\n- IVA: real rates 4, 10, 21, and the temporary 2, 5 and 7.5 (see below for 0)\n- IGIC: 0, 3, 5, 7, 9.5, 15, 20 \u2014 here 0 is the real \"Tipo Cero\"\n- IPSI: real rates 0.5, 1, 2, 4, 8, 10 (see below for 0)\n- OTHER: any percentage between 0 and 100\n\n**0 % under IVA and IPSI is not a rate, it is the exemption sentinel.** It is accepted\non a line, but only together with an `exemption_reason` (exempt or non-subject\noperation); on its own it says nothing and the line is rejected. That is why\n`GET /v1/tax-types` publishes the IVA rates without 0: the legitimate way\nto a 0 % IVA line is through an exemption reason, which the same response also\npublishes. IGIC is different \u2014 its 0 % is a real legal rate (basic necessities) and\nneeds no reason.\n\n**IVA 5 %** (the temporary rate applied from 2022 to electricity, gas and certain\nfoodstuffs) is no longer in force for new operations. AEAT only accepts it on operations\ndated from 2022-07-01 to 2024-09-30: send the `operation_date` of that period, because\nwithout one the issue date decides and a line at 5 % is rejected with\n`422 VAT_RATE_NOT_ACCEPTED_ON_DATE`. Its equivalence surcharge pair is 0.5 up to 2022-12-31\nand 0.62 from 2023-01-01. **IVA 2 % and 7.5 %** (temporary rates of the last quarter of 2024)\nare accepted only on operations dated from 2024-10-01 to 2024-12-31, with surcharges 0.26\nand 1.\n\nException: when regime_key = \"17\" (OSS/IOSS) the invoice applies the destination\ncountry VAT instead of the Spanish one, so any percentage in the EU range [0, 27]\nis accepted regardless of the tax type set \u2014 including 0 without an exemption reason.\n",
+    "properties": {
+     "percentage": {
+      "description": "Tax percentage",
+      "maximum": 100,
+      "minimum": 0,
+      "type": "number"
+     },
+     "regime_key": {
+      "$ref": "#/$defs/RegimeKey"
+     },
+     "type": {
+      "$ref": "#/$defs/TaxType"
+     }
+    },
+    "required": [
+     "type",
+     "percentage"
+    ],
+    "type": "object"
+   },
+   "TaxType": {
+    "description": "Tax type by territory:\n- IVA: Iberian Peninsula and Balearic Islands (4%, 10%, 21%; 2%, 5% and 7.5% only on operations of their period)\n- IGIC: Canary Islands (0%, 3%, 5%, 7%, 9.5%, 15%, 20%)\n- IPSI: Ceuta and Melilla (0.5%, 1%, 2%, 4%, 8%, 10%)\n- OTHER: Configurable 0%-100%\n\nUnder IVA and IPSI, 0% is not one of these rates: it is the exemption/non-subject\nsentinel and always travels with an `exemption_reason`. IGIC's 0% is a real rate.\nSee `TaxInfo` for the full rules.\n",
+    "enum": [
+     "IVA",
+     "IGIC",
+     "IPSI",
+     "OTHER"
+    ],
+    "type": "string"
+   },
+   "UpdateCompanyPaymentConnectionRequest": {
+    "additionalProperties": false,
+    "description": "The settings to change. A field you omit keeps its current value; the series fields also\naccept an explicit `null`, which clears the series.\n",
+    "properties": {
+     "auto_create_customer": {
+      "description": "Whether customers are created from the fiscal data the provider supplies.",
+      "type": "boolean"
+     },
+     "auto_invoice_enabled": {
+      "description": "Whether incoming charges are auto-invoiced.",
+      "type": "boolean"
+     },
+     "event_source": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/PaymentConnectionEventSource"
+       }
+      ],
+      "description": "Which family of Stripe events this connection acts on. Changing it affects the events\nthat arrive from then on; events already recorded keep their outcome.\n"
+     },
+     "filter_config": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/CompanyPaymentConnectionFilters"
+       }
+      ],
+      "description": "Omit to keep the current filter configuration untouched. When sent, it **replaces the\nwhole object** \u2014 every axis you leave out is cleared, not preserved. Send the complete\nconfiguration you want, not just the axis you are changing.\n"
+     },
+     "prices_include_tax": {
+      "description": "Whether provider amounts are read as tax-inclusive. Turning it on requires\n`tax_inclusive_tax` in the same request, or the request answers `422`\n`TAX_INCLUSIVE_RATE_REQUIRED`: without the tax there is nothing to reverse.\n",
+      "type": "boolean"
+     },
+     "send_invoice_by_email": {
+      "description": "Whether the auto-issued invoice is emailed to the payer.",
+      "type": "boolean"
+     },
+     "series": {
+      "$ref": "#/$defs/UpdateCompanyPaymentConnectionSeries"
+     },
+     "simplificada_threshold": {
+      "description": "Amount in EUR at or above which auto-invoicing must issue an ordinary invoice instead\nof a simplified one. Between 0.01 and 3000.00.\n",
+      "format": "double",
+      "maximum": 3000,
+      "minimum": 0.01,
+      "type": "number"
+     },
+     "tax_inclusive_tax": {
+      "anyOf": [
+       {
+        "allOf": [
+         {
+          "$ref": "#/$defs/TaxInfo"
+         }
+        ],
+        "description": "The tax to reverse out of the gross amount. Send it together with\n`prices_include_tax: true`; `null` clears it.\n"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "type": "object"
+   },
+   "UpdateCompanyPaymentConnectionSeries": {
+    "additionalProperties": false,
+    "description": "Series to number auto-issued invoices in. Omit a field to keep it, send `null` to clear it\nand fall back to the company default series for that document type.\n",
+    "properties": {
+     "ordinaria": {
+      "description": "Series for auto-issued ordinary invoices.",
+      "format": "uuid",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "rectificativa": {
+      "description": "Series for auto-issued corrective invoices (refunds).",
+      "format": "uuid",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "simplificada": {
+      "description": "Series for auto-issued simplified invoices.",
+      "format": "uuid",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "body": {
+    "$ref": "#/$defs/UpdateCompanyPaymentConnectionRequest"
+   },
+   "company_id": {
+    "description": "Unique identifier (UUID) of the company the operation acts on \u2014 its identifier, not its NIF. It is the only source of context: the account that owns it is derived from it, and the `BeeL-Active-Company` header plays no part. A company you do not reach answers `403`, and so does a company that does not exist, so the existence of a company in another account is never disclosed.",
+    "format": "uuid",
+    "type": "string"
+   },
+   "connection_id": {
+    "description": "Unique identifier (UUID) of the payment connection the operation acts on, as returned by `GET /v1/companies/{company_id}/payment-connections`. A NIF can hold several connections of the same provider, so the provider slug alone does not name one. A connection of another NIF answers `404`, exactly like one that does not exist.",
+    "format": "uuid",
+    "type": "string"
+   }
+  },
+  "required": [
+   "company_id",
+   "connection_id",
+   "body"
+  ],
+  "type": "object"
+ },
+ "name": "beel_update_payment_connection"
+}

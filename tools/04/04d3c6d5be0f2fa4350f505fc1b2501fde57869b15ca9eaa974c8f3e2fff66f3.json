@@ -1,0 +1,680 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Monte Carlo-simulate a trader with the given statistics through a prop-firm challenge and (by default) a funded horizon. Answers: \"What is my chance of passing per attempt, and of ever getting funded? How many attempts and how much total money should I expect? Is this challenge positive expected value for me, and which rule actually kills my attempts?\" Identify the challenge EITHER by directory reference (firmId + challengeId, discovered via propfirms_list_simulatable; firmId accepts the directory id or the firm's name) OR by a full inline `spec` object - the exact shape propfirms_challenge_rules returns, so you can fetch a directory entry, change one rule, and re-simulate to model rule variations. Provide exactly one of the two forms; providing both or neither is an error. Directory references need network access; inline specs are fully offline. The trader is described by flattened parametric fields (one clean design used across all tools): winRate (a FRACTION 0-1), avgWinR/avgLossR and optional winStdR/lossStdR in R-multiples (sizes relative to the amount risked per trade), tradesPerDay with a 'fixed' or 'poisson' day model, and risk sizing via riskMode + riskValue (percent units for percent modes). If you have the user's raw trade series rather than summary stats, prefer propfirms_simulate_trades - it preserves streaks. Returns structuredContent with the full SimResult: perAttempt.passProbability with a Wilson 95% CI and per-step pass rates plus a failure breakdown by rule (daily-loss vs max-loss vs time-limit - which tells the user WHAT to fix); journey.fundedProbability, attempts and cost distributions (cost includes prices, resets, monthly billing, activation, minus refunds), costGivenFunded and daysToFunded; perAttempt.avgDaysWhenPassed/avgDaysWhenFailed and perAttempt.stagnationDays (the longest run of days without a new equity high per attempt - the dead time between progress, which grows sharply as risk per trade shrinks); funded-stage payout distributions plus funded.payoutProbability (P(at least one payout | funded)) and funded.daysToFirstPayout - with payout gating these can be the deciding numbers, since getting funded is not the same as getting paid; ev.evTotal (mean payouts minus costs) with evStandardError and pPositive; drawdown stats; and assumptions (the fully-resolved spec/profile/options the engine actually ran, plus flags and disclaimer). Histogram arrays are omitted unless includeHistograms=true. A compact human summary is returned as text alongside. SIMULATED RULES (engine v1): consistency rules (steps[].consistency) and funded payout gating (funded.payoutRules) are actually SIMULATED, not merely flagged - a distinguishing feature of this engine. Consistency uses a rational stop rule (the trader stops a day once more profit cannot help and keeps trading until the best-day share complies - flag 'consistency-stop-rule'); payouts follow a maximum-withdrawal model (withdraw everything the rules allow above buffer/caps, never below the loss floor; balances and floors carry across payouts - flag 'funded-withdrawal-model'); a funded consistency gate is checked per payout window (flag 'funded-consistency-window-approximated'). The pre-1.0 flag id 'funded-payout-resets-account' no longer exists. UNITS: every *Pct rule field and every percent-mode risk value is in PERCENT UNITS (5 = 5%, 0.5 = 0.5%). The one exception is winRate, which is a FRACTION in [0, 1] (0.55 = 55% winners). Probabilities in results are fractions in [0, 1]. DETERMINISM: identical inputs including `seed` reproduce byte-identical results on any platform. Include the seed and path count when reporting numbers so users can reproduce them exactly; re-run with a few different seeds to gauge Monte Carlo spread. ASSUMPTIONS: every result carries assumptions.flags - dataset-declared rules the engine does NOT simulate (e.g. scaling plans or soft daily lockouts, which make real odds worse than simulated) plus engine simplifications - and assumptions.disclaimer. These are material: always surface the flags and the disclaimer to the user alongside the numbers, never just the headline probability. Results are distributions under stated assumptions, not promises. DATA SOURCE & PROVENANCE: firm data comes live from LuxAlgo's public, keyless prop-firm directory API - the data behind luxalgo.com/prop-firms (origin overridable via the LUXALGO_APP_ORIGIN env var). Rule semantics are used verbatim where the directory serves structured rule columns; where it serves only free text, semantics are inferred ONLY when one reasonable reading exists, and every inferred field is disclosed in `inferredFields` (provenance 'directory+inferred') - relay those to the user next to any numbers. Challenges whose loss rules cannot be established are refused as not simulatable rather than guessed. Firms change rules; each firm's own page is always authoritative. Composes with any broker-statistics tool: if another MCP server exposes round-trip statistics (winRate, avgWin, avgLoss) or a raw R-multiple series from the user's real trades, feed them here to answer \"given my actual trading, what are my odds on this challenge and what risk should I use?\". Convert currency statistics to R-multiples by dividing by the average amount risked per trade: winRate stays a fraction, avgWinR = avgWin / avgRisk, avgLossR = |avgLoss| / avgRisk.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "attemptCap": {
+    "description": "Maximum challenge attempts per path before that path gives up. Default 25. Journey statistics (expected attempts/cost, P(funded)) are censored at this cap.",
+    "maximum": 1000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "avgLossR": {
+    "description": "Average losing trade in R, as a POSITIVE number. Default 1 (losers lose exactly the risked amount, i.e. stops are honored). Raise above 1 to model slippage or blown stops.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "avgWinR": {
+    "description": "Average winning trade in R-multiples, i.e. multiples of the amount risked per trade (1.5 = winners average 1.5x the risk).",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "challengeId": {
+    "description": "Directory challenge id; discover with propfirms_list_simulatable. Must be paired with firmId. Mutually exclusive with `spec`.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "firmId": {
+    "description": "Directory firm id or firm name (e.g. 'ftmo' or 'FTMO'); discover with propfirms_list_simulatable. Must be paired with challengeId. Mutually exclusive with `spec`.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "fundedHorizonDays": {
+    "description": "Funded-stage horizon in trading days for the payout/EV simulation. Default 90 (about 4 calendar months). EV scales with this choice - state it when reporting EV.",
+    "maximum": 2000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "includeHistograms": {
+    "description": "Include histogram arrays (attempts, cost, net, drawdown) in the result. Default FALSE for this tool to keep responses compact; summary quantiles (p05...p95) are always included.",
+    "type": "boolean"
+   },
+   "lossStdR": {
+    "description": "Standard deviation of loser sizes in R (0 = every loser is exactly avgLossR). Default 0.",
+    "minimum": 0,
+    "type": "number"
+   },
+   "paths": {
+    "description": "Monte Carlo paths (independent simulated trader journeys). Default 10,000 (well under a second); capped at 100,000 per tool call. Confidence intervals shrink roughly with the square root of paths.",
+    "maximum": 100000,
+    "minimum": 100,
+    "type": "integer"
+   },
+   "riskMode": {
+    "description": "How riskValue is interpreted. 'percent-of-balance' (default): risk compounds with the current balance. 'percent-of-initial': constant currency risk derived from the initial account size - how most prop traders size, since loss limits are fixed in currency. 'fixed-amount': explicit currency risked per 1R.",
+    "enum": [
+     "percent-of-balance",
+     "percent-of-initial",
+     "fixed-amount"
+    ],
+    "type": "string"
+   },
+   "riskValue": {
+    "description": "Risk per trade - the value of 1R. PERCENT UNITS for percent modes (0.5 = 0.5% risked per trade; a typical prop range is 0.25-2), or a currency amount for 'fixed-amount'. NOT a fraction.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "seed": {
+    "anyOf": [
+     {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     {
+      "type": "string"
+     }
+    ],
+    "description": "RNG seed (integer or string). Default 42. Same inputs + seed reproduce byte-identical results - include the seed when reporting so users can reproduce the numbers."
+   },
+   "simulateFunded": {
+    "description": "Whether to simulate the funded stage (payouts, blowup risk) after passing. Default true - EV is only meaningful with it on; set false to study the evaluation alone.",
+    "type": "boolean"
+   },
+   "spec": {
+    "additionalProperties": {},
+    "description": "Inline challenge ruleset, for challenges not in the directory or for what-if rule edits. Mutually exclusive with firmId/challengeId. Identify the challenge EITHER by directory reference (firmId + challengeId, discovered via propfirms_list_simulatable; firmId accepts the directory id or the firm's name) OR by a full inline `spec` object - the exact shape propfirms_challenge_rules returns, so you can fetch a directory entry, change one rule, and re-simulate to model rule variations. Provide exactly one of the two forms; providing both or neither is an error. Directory references need network access; inline specs are fully offline.",
+    "properties": {
+     "accountSize": {
+      "description": "Initial account balance in account currency.",
+      "exclusiveMinimum": 0,
+      "type": "number"
+     },
+     "challengeId": {
+      "description": "Stable kebab-case id for this ruleset, e.g. '100k-2step'.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "constraints": {
+      "additionalProperties": {},
+      "description": "Informational trading constraints (maxLeverage, newsTrading, weekendHolding, ...). Recorded and flagged, never simulated.",
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "currency": {
+      "description": "ISO currency code all amounts are denominated in. Default USD.",
+      "type": "string"
+     },
+     "dailyLoss": {
+      "anyOf": [
+       {
+        "additionalProperties": {},
+        "description": "Daily loss rule: the daily floor is anchor minus limit, reset at each trading-day boundary. Exactly one of pct/amount must be set.",
+        "properties": {
+         "amount": {
+          "description": "Daily loss limit as a fixed currency amount (alternative to pct).",
+          "exclusiveMinimum": 0,
+          "type": "number"
+         },
+         "basis": {
+          "description": "Anchor today's loss is measured from: prior day's closing balance or closing equity (they differ only with overnight positions). Default 'prior-day-balance'.",
+          "enum": [
+           "prior-day-balance",
+           "prior-day-equity"
+          ],
+          "type": "string"
+         },
+         "evaluation": {
+          "description": "'intraday': fails the moment equity touches the daily floor. 'end-of-day': only the close is checked. Default 'intraday'.",
+          "enum": [
+           "intraday",
+           "end-of-day"
+          ],
+          "type": "string"
+         },
+         "includesOpenPnl": {
+          "description": "Whether floating (unrealized) P&L counts toward the daily loss, i.e. breach can happen intra-position. Default true.",
+          "type": "boolean"
+         },
+         "limitBasis": {
+          "description": "What a percentage limit is a percent OF. 'initial-balance': a fixed currency allowance (always e.g. 5% of the starting account). 'anchor': recomputed daily from the day's anchor. Default 'initial-balance'.",
+          "enum": [
+           "initial-balance",
+           "anchor"
+          ],
+          "type": "string"
+         },
+         "pct": {
+          "description": "Daily loss limit in PERCENT UNITS (5 = 5%); what it is a percent OF is set by limitBasis. Exactly one of pct/amount.",
+          "exclusiveMinimum": 0,
+          "maximum": 100,
+          "type": "number"
+         }
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Challenge-level daily loss rule applied to every step unless a step overrides it. null = no daily loss rule. This field is required (pass null explicitly for none)."
+     },
+     "fees": {
+      "additionalProperties": {},
+      "description": "Fees - everything that goes into expected total cost.",
+      "properties": {
+       "activationFee": {
+        "description": "One-time fee charged when the funded account is activated. Default 0.",
+        "minimum": 0,
+        "type": "number"
+       },
+       "billing": {
+        "description": "'one-time' (default): the price buys one attempt; failed attempts are re-bought or reset. 'monthly': recurring subscription while evaluating (common for futures firms).",
+        "enum": [
+         "one-time",
+         "monthly"
+        ],
+        "type": "string"
+       },
+       "price": {
+        "description": "Challenge price in account currency. Under 'monthly' billing: price per month.",
+        "minimum": 0,
+        "type": "number"
+       },
+       "refundableOnPass": {
+        "description": "Whether the one-time challenge fee is refunded once funded (credited back in cost/EV). Default false.",
+        "type": "boolean"
+       },
+       "resetFee": {
+        "anyOf": [
+         {
+          "minimum": 0,
+          "type": "number"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "Discounted fee to reset a failed attempt. null (default) = no reset offer: a failed one-time attempt costs full price again; a failed monthly attempt rides on the subscription."
+       }
+      },
+      "required": [
+       "price"
+      ],
+      "type": "object"
+     },
+     "flagsNotSimulated": {
+      "description": "Honesty channel: ids of rules this entry has that the engine does not simulate (e.g. 'scaling-plan', 'soft-daily-lockout'). Surfaced in every result's assumption flags. Consistency rules and payout gating do NOT belong here - the engine simulates them.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "funded": {
+      "additionalProperties": {},
+      "description": "Funded-stage terms used for the payout/EV simulation.",
+      "properties": {
+       "dailyLoss": {
+        "anyOf": [
+         {
+          "additionalProperties": {},
+          "description": "Daily loss rule: the daily floor is anchor minus limit, reset at each trading-day boundary. Exactly one of pct/amount must be set.",
+          "properties": {
+           "amount": {
+            "description": "Daily loss limit as a fixed currency amount (alternative to pct).",
+            "exclusiveMinimum": 0,
+            "type": "number"
+           },
+           "basis": {
+            "description": "Anchor today's loss is measured from: prior day's closing balance or closing equity (they differ only with overnight positions). Default 'prior-day-balance'.",
+            "enum": [
+             "prior-day-balance",
+             "prior-day-equity"
+            ],
+            "type": "string"
+           },
+           "evaluation": {
+            "description": "'intraday': fails the moment equity touches the daily floor. 'end-of-day': only the close is checked. Default 'intraday'.",
+            "enum": [
+             "intraday",
+             "end-of-day"
+            ],
+            "type": "string"
+           },
+           "includesOpenPnl": {
+            "description": "Whether floating (unrealized) P&L counts toward the daily loss, i.e. breach can happen intra-position. Default true.",
+            "type": "boolean"
+           },
+           "limitBasis": {
+            "description": "What a percentage limit is a percent OF. 'initial-balance': a fixed currency allowance (always e.g. 5% of the starting account). 'anchor': recomputed daily from the day's anchor. Default 'initial-balance'.",
+            "enum": [
+             "initial-balance",
+             "anchor"
+            ],
+            "type": "string"
+           },
+           "pct": {
+            "description": "Daily loss limit in PERCENT UNITS (5 = 5%); what it is a percent OF is set by limitBasis. Exactly one of pct/amount.",
+            "exclusiveMinimum": 0,
+            "maximum": 100,
+            "type": "number"
+           }
+          },
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "Funded-account override of the daily loss rule. Omit to inherit; null = none."
+       },
+       "firstPayoutMinDays": {
+        "description": "Minimum days on the funded account before the first payout. Default 0.",
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+       },
+       "maxLoss": {
+        "additionalProperties": {},
+        "description": "Funded-account override of the max loss rule. Omit to inherit.",
+        "properties": {
+         "amount": {
+          "description": "Max loss as a fixed currency amount (alternative to pct).",
+          "exclusiveMinimum": 0,
+          "type": "number"
+         },
+         "lockOffsetAmount": {
+          "description": "Currency offset of the lock level: the floor locks at initial balance + this amount, modeling rules like 'the trailing threshold stops $100 above the start'. Default 0. Only meaningful when the rule locks (mode 'trailing-locks-at-initial' or locksAtInitial=true).",
+          "minimum": 0,
+          "type": "number"
+         },
+         "locksAtInitial": {
+          "description": "For trailing modes: once the trailing floor climbs up to the initial balance (plus lockOffsetAmount), it locks there and stops trailing. Default false. 'trailing-locks-at-initial' locks by definition; set this to add the same lock to 'trailing-realized-eod' (e.g. an EOD trail that stops at the starting balance).",
+          "type": "boolean"
+         },
+         "mode": {
+          "description": "How the max-loss floor behaves - the single most consequential rule difference between firms. 'static-initial': floor fixed at initial balance minus the limit; never moves (classic CFD two-step). 'trailing-realized-eod': floor ratchets up with end-of-day balance highs; intraday highs do not move it. 'trailing-intraday-unrealized': floor trails the peak unrealized equity intraday and never stops trailing (futures-style; the most-miscalculated rule in the industry: it cuts pass probability dramatically). 'trailing-locks-at-initial': trails intraday peak equity until the floor reaches the initial balance, then freezes (common futures variant). Locking is also composable: locksAtInitial adds the same lock to an EOD trail, and lockOffsetAmount shifts the lock level to initial balance + that amount (e.g. 100 models 'stops trailing $100 above the start').",
+          "enum": [
+           "static-initial",
+           "trailing-realized-eod",
+           "trailing-intraday-unrealized",
+           "trailing-locks-at-initial"
+          ],
+          "type": "string"
+         },
+         "pct": {
+          "description": "Max loss in PERCENT UNITS of the initial account size (10 = 10%). Exactly one of pct/amount.",
+          "exclusiveMinimum": 0,
+          "maximum": 100,
+          "type": "number"
+         }
+        },
+        "required": [
+         "mode"
+        ],
+        "type": "object"
+       },
+       "notes": {
+        "description": "Free-text funded-stage details that are not simulated.",
+        "type": "string"
+       },
+       "payoutFrequency": {
+        "description": "How often funded profits can be withdrawn.",
+        "enum": [
+         "weekly",
+         "biweekly",
+         "monthly",
+         "on-demand"
+        ],
+        "type": "string"
+       },
+       "payoutRules": {
+        "additionalProperties": {},
+        "description": "Payout gating - SIMULATED (engine v1), not just flagged: a payout happens only when these conditions are met, and on each eligible payout day the trader withdraws the maximum the rules allow (profit above the buffer, under the caps, never below the loss floor); balances and loss floors carry across payouts (see flag 'funded-withdrawal-model'). Omit for ungated payouts.",
+        "properties": {
+         "bufferAmount": {
+          "description": "Profit buffer that must remain in the account; only profit above it is withdrawable. Default 0.",
+          "minimum": 0,
+          "type": "number"
+         },
+         "consistencyMaxBestDayPct": {
+          "description": "Funded consistency gate in PERCENT UNITS: the best day may contribute at most this share of the payout window's profit. Evaluated per window (see flag 'funded-consistency-window-approximated').",
+          "exclusiveMinimum": 0,
+          "maximum": 100,
+          "type": "number"
+         },
+         "maxPayoutAmount": {
+          "description": "Absolute currency cap per payout request. Omit for no fixed cap.",
+          "exclusiveMinimum": 0,
+          "type": "number"
+         },
+         "maxPayoutPctOfProfit": {
+          "description": "Cap on each payout in PERCENT UNITS of accrued profit (50 = at most half the profit per request). Omit for no percentage cap.",
+          "exclusiveMinimum": 0,
+          "maximum": 100,
+          "type": "number"
+         },
+         "minWinningDays": {
+          "description": "Winning days required in a payout window before a payout can be requested. Default 0.",
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+         },
+         "winningDayMinProfit": {
+          "description": "Minimum profit for a day to count as a winning day. Default 0 (any positive day).",
+          "minimum": 0,
+          "type": "number"
+         }
+        },
+        "type": "object"
+       },
+       "profitSplitPct": {
+        "description": "Trader's share of funded profits in PERCENT UNITS (80 = 80%).",
+        "maximum": 100,
+        "minimum": 0,
+        "type": "number"
+       }
+      },
+      "required": [
+       "profitSplitPct",
+       "payoutFrequency"
+      ],
+      "type": "object"
+     },
+     "maxLoss": {
+      "additionalProperties": {},
+      "description": "Challenge-level max loss rule applied to every step unless a step overrides it. Required.",
+      "properties": {
+       "amount": {
+        "description": "Max loss as a fixed currency amount (alternative to pct).",
+        "exclusiveMinimum": 0,
+        "type": "number"
+       },
+       "lockOffsetAmount": {
+        "description": "Currency offset of the lock level: the floor locks at initial balance + this amount, modeling rules like 'the trailing threshold stops $100 above the start'. Default 0. Only meaningful when the rule locks (mode 'trailing-locks-at-initial' or locksAtInitial=true).",
+        "minimum": 0,
+        "type": "number"
+       },
+       "locksAtInitial": {
+        "description": "For trailing modes: once the trailing floor climbs up to the initial balance (plus lockOffsetAmount), it locks there and stops trailing. Default false. 'trailing-locks-at-initial' locks by definition; set this to add the same lock to 'trailing-realized-eod' (e.g. an EOD trail that stops at the starting balance).",
+        "type": "boolean"
+       },
+       "mode": {
+        "description": "How the max-loss floor behaves - the single most consequential rule difference between firms. 'static-initial': floor fixed at initial balance minus the limit; never moves (classic CFD two-step). 'trailing-realized-eod': floor ratchets up with end-of-day balance highs; intraday highs do not move it. 'trailing-intraday-unrealized': floor trails the peak unrealized equity intraday and never stops trailing (futures-style; the most-miscalculated rule in the industry: it cuts pass probability dramatically). 'trailing-locks-at-initial': trails intraday peak equity until the floor reaches the initial balance, then freezes (common futures variant). Locking is also composable: locksAtInitial adds the same lock to an EOD trail, and lockOffsetAmount shifts the lock level to initial balance + that amount (e.g. 100 models 'stops trailing $100 above the start').",
+        "enum": [
+         "static-initial",
+         "trailing-realized-eod",
+         "trailing-intraday-unrealized",
+         "trailing-locks-at-initial"
+        ],
+        "type": "string"
+       },
+       "pct": {
+        "description": "Max loss in PERCENT UNITS of the initial account size (10 = 10%). Exactly one of pct/amount.",
+        "exclusiveMinimum": 0,
+        "maximum": 100,
+        "type": "number"
+       }
+      },
+      "required": [
+       "mode"
+      ],
+      "type": "object"
+     },
+     "name": {
+      "description": "Display name, e.g. '100K 2-Step'.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "productType": {
+      "description": "Instrument class the challenge is traded on: 'futures', 'cfd' (forex/CFD), or 'equities'.",
+      "enum": [
+       "futures",
+       "cfd",
+       "equities"
+      ],
+      "type": "string"
+     },
+     "sources": {
+      "description": "Public citations. Optional for inline specs; dataset entries always carry them.",
+      "items": {
+       "additionalProperties": {},
+       "properties": {
+        "lastVerified": {
+         "description": "ISO date the rules were last checked against that page.",
+         "type": "string"
+        },
+        "note": {
+         "type": "string"
+        },
+        "url": {
+         "description": "Public page documenting the rule.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "url",
+        "lastVerified"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "steps": {
+      "description": "Evaluation steps in order. Passing the last step means funded.",
+      "items": {
+       "additionalProperties": {},
+       "description": "One evaluation step. Each step starts on a fresh account at the initial balance.",
+       "properties": {
+        "consistency": {
+         "anyOf": [
+          {
+           "additionalProperties": {},
+           "properties": {
+            "maxBestDayProfitPct": {
+             "description": "Maximum share of the step's total profit the best single day may contribute, in PERCENT UNITS (40 = the best day may be at most 40% of total profit).",
+             "exclusiveMinimum": 0,
+             "maximum": 100,
+             "type": "number"
+            }
+           },
+           "required": [
+            "maxBestDayProfitPct"
+           ],
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "Consistency rule - SIMULATED (engine v1), not just flagged: one outsized day effectively raises the target (total profit must reach best day / pct), and the simulated trader keeps trading - rationally stopping days early when that helps - until the best-day share complies (see flag 'consistency-stop-rule'). null or omitted = no consistency rule."
+        },
+        "dailyLoss": {
+         "anyOf": [
+          {
+           "additionalProperties": {},
+           "description": "Daily loss rule: the daily floor is anchor minus limit, reset at each trading-day boundary. Exactly one of pct/amount must be set.",
+           "properties": {
+            "amount": {
+             "description": "Daily loss limit as a fixed currency amount (alternative to pct).",
+             "exclusiveMinimum": 0,
+             "type": "number"
+            },
+            "basis": {
+             "description": "Anchor today's loss is measured from: prior day's closing balance or closing equity (they differ only with overnight positions). Default 'prior-day-balance'.",
+             "enum": [
+              "prior-day-balance",
+              "prior-day-equity"
+             ],
+             "type": "string"
+            },
+            "evaluation": {
+             "description": "'intraday': fails the moment equity touches the daily floor. 'end-of-day': only the close is checked. Default 'intraday'.",
+             "enum": [
+              "intraday",
+              "end-of-day"
+             ],
+             "type": "string"
+            },
+            "includesOpenPnl": {
+             "description": "Whether floating (unrealized) P&L counts toward the daily loss, i.e. breach can happen intra-position. Default true.",
+             "type": "boolean"
+            },
+            "limitBasis": {
+             "description": "What a percentage limit is a percent OF. 'initial-balance': a fixed currency allowance (always e.g. 5% of the starting account). 'anchor': recomputed daily from the day's anchor. Default 'initial-balance'.",
+             "enum": [
+              "initial-balance",
+              "anchor"
+             ],
+             "type": "string"
+            },
+            "pct": {
+             "description": "Daily loss limit in PERCENT UNITS (5 = 5%); what it is a percent OF is set by limitBasis. Exactly one of pct/amount.",
+             "exclusiveMinimum": 0,
+             "maximum": 100,
+             "type": "number"
+            }
+           },
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "Per-step override of the challenge-level daily loss rule. Omit to inherit; null = no daily loss rule in this step."
+        },
+        "maxDays": {
+         "anyOf": [
+          {
+           "exclusiveMinimum": 0,
+           "maximum": 9007199254740991,
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "Trading-day limit for the step; null (the default) = unlimited time."
+        },
+        "maxLoss": {
+         "additionalProperties": {},
+         "description": "Per-step override of the challenge-level max loss rule. Omit to inherit.",
+         "properties": {
+          "amount": {
+           "description": "Max loss as a fixed currency amount (alternative to pct).",
+           "exclusiveMinimum": 0,
+           "type": "number"
+          },
+          "lockOffsetAmount": {
+           "description": "Currency offset of the lock level: the floor locks at initial balance + this amount, modeling rules like 'the trailing threshold stops $100 above the start'. Default 0. Only meaningful when the rule locks (mode 'trailing-locks-at-initial' or locksAtInitial=true).",
+           "minimum": 0,
+           "type": "number"
+          },
+          "locksAtInitial": {
+           "description": "For trailing modes: once the trailing floor climbs up to the initial balance (plus lockOffsetAmount), it locks there and stops trailing. Default false. 'trailing-locks-at-initial' locks by definition; set this to add the same lock to 'trailing-realized-eod' (e.g. an EOD trail that stops at the starting balance).",
+           "type": "boolean"
+          },
+          "mode": {
+           "description": "How the max-loss floor behaves - the single most consequential rule difference between firms. 'static-initial': floor fixed at initial balance minus the limit; never moves (classic CFD two-step). 'trailing-realized-eod': floor ratchets up with end-of-day balance highs; intraday highs do not move it. 'trailing-intraday-unrealized': floor trails the peak unrealized equity intraday and never stops trailing (futures-style; the most-miscalculated rule in the industry: it cuts pass probability dramatically). 'trailing-locks-at-initial': trails intraday peak equity until the floor reaches the initial balance, then freezes (common futures variant). Locking is also composable: locksAtInitial adds the same lock to an EOD trail, and lockOffsetAmount shifts the lock level to initial balance + that amount (e.g. 100 models 'stops trailing $100 above the start').",
+           "enum": [
+            "static-initial",
+            "trailing-realized-eod",
+            "trailing-intraday-unrealized",
+            "trailing-locks-at-initial"
+           ],
+           "type": "string"
+          },
+          "pct": {
+           "description": "Max loss in PERCENT UNITS of the initial account size (10 = 10%). Exactly one of pct/amount.",
+           "exclusiveMinimum": 0,
+           "maximum": 100,
+           "type": "number"
+          }
+         },
+         "required": [
+          "mode"
+         ],
+         "type": "object"
+        },
+        "minTradingDays": {
+         "description": "Minimum days with at least one trade before the step can be passed. Default 0.",
+         "maximum": 9007199254740991,
+         "minimum": 0,
+         "type": "integer"
+        },
+        "profitTargetAmount": {
+         "description": "Profit target as a fixed currency amount (alternative to profitTargetPct).",
+         "exclusiveMinimum": 0,
+         "type": "number"
+        },
+        "profitTargetPct": {
+         "description": "Profit target in PERCENT UNITS of the initial account size (8 = 8%). Exactly one of profitTargetPct/profitTargetAmount.",
+         "exclusiveMinimum": 0,
+         "type": "number"
+        }
+       },
+       "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "challengeId",
+     "name",
+     "accountSize",
+     "steps",
+     "dailyLoss",
+     "maxLoss",
+     "fees",
+     "funded"
+    ],
+    "type": "object"
+   },
+   "tradesPerDay": {
+    "description": "Average trades per simulated trading day. More trades per day means more ways to hit the daily loss limit within a single day.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "tradesPerDayModel": {
+    "description": "'fixed' (default): the same count every day. 'poisson': daily count drawn Poisson(tradesPerDay); days can then have zero trades, which do not count as trading days.",
+    "enum": [
+     "fixed",
+     "poisson"
+    ],
+    "type": "string"
+   },
+   "winRate": {
+    "description": "Probability a trade is a winner, as a FRACTION in [0, 1] (0.55 = 55% winners) - NOT percent units. The most impactful input: traders routinely overestimate it by a few points, which can flip EV negative, so prefer measured stats over self-reported ones.",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "winStdR": {
+    "description": "Standard deviation of winner sizes in R (0 = every winner is exactly avgWinR). Default 0. Adding spread makes streak damage more realistic.",
+    "minimum": 0,
+    "type": "number"
+   }
+  },
+  "required": [
+   "winRate",
+   "avgWinR",
+   "tradesPerDay",
+   "riskValue"
+  ],
+  "type": "object"
+ },
+ "name": "propfirms_simulate",
+ "securitySchemes": [
+  {
+   "type": "noauth"
+  }
+ ],
+ "title": "Simulate a trader through a challenge"
+}

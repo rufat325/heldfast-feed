@@ -1,0 +1,362 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "HTA Submission Workflow Orchestrator"
+ },
+ "description": "End-to-end HTA submission orchestrator. One call runs literature_search (with PRISMA-style stability via runs=N) \u2192 screen_abstracts (PICO filter) \u2192 risk_of_bias (auto RoB 2/ROBINS-I/AMSTAR-2) \u2192 cost_effectiveness_model (Markov + 1k PSA, defaults from indication) \u2192 hta_dossier (auto-GRADE downgrade from RoB output) \u2192 validate_links (post-hoc URL audit). Returns a combined report with per-phase timings, the full dossier draft, and the URL validation table. Use as a single-shot drop-in replacement for the 4-5 separate prompts a generic LLM would need to chain these tools manually. Each phase wrapped in safe-run so single-step failures do not abort the pipeline.",
+ "inputSchema": {
+  "properties": {
+   "ai_disclosure_level": {
+    "description": "AI assistance disclosure level. \"off\" = no disclosure; \"standard\" = default (model/tools/sources/date + human-review reminder); \"submission\" = adds ISPOR ELEVATE-GenAI citation. Default is tool-specific.",
+    "enum": [
+     "off",
+     "standard",
+     "submission"
+    ],
+    "type": "string"
+   },
+   "auto_check_regulatory": {
+    "default": true,
+    "description": "When true (default), Phase 3.6 fans out regulatory.status_check across comparators from pico.comparator and unmet_need_inputs.treatment_landscape.current_soc. Results piped into hta_dossier as regulatory_landscape (renders 'Regulatory Landscape' section for nice/jca/gvd/amcp). Degrades gracefully on API errors. Set false to skip. Design log #26.",
+    "type": "boolean"
+   },
+   "ce_inputs": {
+    "description": "Optional cost-effectiveness model inputs. Sensible defaults applied when omitted (efficacy_delta=0.25; drug_cost_annual=1000; SoC=0).",
+    "properties": {
+     "admin_cost": {
+      "minimum": 0,
+      "type": "number"
+     },
+     "ae_cost": {
+      "minimum": 0,
+      "type": "number"
+     },
+     "comparator_cost_annual": {
+      "minimum": 0,
+      "type": "number"
+     },
+     "drug_cost_annual": {
+      "minimum": 0,
+      "type": "number"
+     },
+     "efficacy_delta": {
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+     },
+     "qaly_comparator": {
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+     },
+     "qaly_on_treatment": {
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+     }
+    },
+    "type": "object"
+   },
+   "confounder_candidate_extractions": {
+    "description": "Optional agent-extracted confounder candidates for Phase 2.5; each must cite a screened paper (pmid/doi/title). Design log #43.",
+    "items": {
+     "properties": {
+      "category": {
+       "type": "string"
+      },
+      "direction": {
+       "enum": [
+        "prognostic",
+        "treatment_predictor",
+        "both",
+        "unclear"
+       ],
+       "type": "string"
+      },
+      "source_location": {
+       "type": "string"
+      },
+      "source_paper_doi": {
+       "type": "string"
+      },
+      "source_paper_pmid": {
+       "type": "string"
+      },
+      "source_paper_title": {
+       "type": "string"
+      },
+      "variable_name": {
+       "type": "string"
+      },
+      "verbatim_snippet": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "variable_name",
+      "source_location"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "decisions": {
+    "description": "Methodological decisions made in conversation (source selection, comparator choice, screening criteria, model structure...). Each entry records the choice, the rationale (why), alternatives rejected, and who decided. Embedded in the audit trail Decision Log and, when a project is supplied, appended to wiki/decisions.md for cross-session recall. Tools never invent decisions \u2014 only pass what the user made or confirmed. Design log #52.",
+    "items": {
+     "properties": {
+      "alternatives_considered": {
+       "description": "What was rejected",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "choice": {
+       "description": "What was decided",
+       "type": "string"
+      },
+      "decided_by": {
+       "description": "Who made the decision \u2014 mark honestly",
+       "enum": [
+        "user",
+        "agent_proposed_user_confirmed",
+        "agent"
+       ],
+       "type": "string"
+      },
+      "decision_point": {
+       "description": "e.g. source_selection, comparator_choice, screening_criteria, model_structure",
+       "type": "string"
+      },
+      "rationale": {
+       "description": "Why \u2014 required, non-empty",
+       "type": "string"
+      },
+      "references": {
+       "description": "DOI/PMID/URL \u2014 recorded verbatim, rendered as unverified unless verified via utils.verify_citations",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "required": [
+      "decision_point",
+      "choice",
+      "rationale",
+      "decided_by"
+     ],
+     "type": "object"
+    },
+    "maxItems": 20,
+    "type": "array"
+   },
+   "drug": {
+    "description": "Drug or intervention name.",
+    "type": "string"
+   },
+   "drug_class": {
+    "default": "small_molecule",
+    "enum": [
+     "monoclonal_antibody",
+     "small_molecule",
+     "atmp_cell",
+     "atmp_gene",
+     "atmp_tissue",
+     "biosimilar",
+     "vaccine",
+     "radiopharmaceutical",
+     "other"
+    ],
+    "type": "string"
+   },
+   "fetch_full_text": {
+    "default": false,
+    "description": "When true (with include_confounder_identification=true), Phase 2.4 runs literature_fulltext over the screened papers and feeds the open-access Methods/Results sections + baseline tables into confounder_identification so each candidate's source_location is checkable against real text. Off by default (token cost). Design log #47.",
+    "type": "boolean"
+   },
+   "hta_body": {
+    "default": "nice",
+    "description": "Target HTA body for the dossier draft.",
+    "enum": [
+     "nice",
+     "ema",
+     "fda",
+     "iqwig",
+     "has",
+     "jca",
+     "gvd"
+    ],
+    "type": "string"
+   },
+   "include_confounder_identification": {
+    "default": false,
+    "description": "When true, Phase 2.5 runs confounder_identification (IQWiG Pufulete Step 1) in closed_corpus mode over the screened literature and appends a 'Confounder Identification' annex. Design log #43.",
+    "type": "boolean"
+   },
+   "indication": {
+    "description": "Disease or condition (free text).",
+    "type": "string"
+   },
+   "is_orphan": {
+    "default": false,
+    "description": "Orphan-designated medicinal product. Affects JCA scope eligibility (orphans enter JCA scope 2028 vs 2030 for general medicinal products).",
+    "type": "boolean"
+   },
+   "jurisdictions": {
+    "default": [
+     "de",
+     "fr",
+     "it",
+     "es",
+     "nl"
+    ],
+    "items": {
+     "enum": [
+      "de",
+      "fr",
+      "it",
+      "es",
+      "nl",
+      "uk",
+      "eu_other"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "literature_runs": {
+    "default": 3,
+    "description": "Number of dedup-stability passes for the literature_search phase. 3 is the project default for HTA-grade reproducibility.",
+    "maximum": 5,
+    "minimum": 1,
+    "type": "number"
+   },
+   "max_literature_results": {
+    "default": 30,
+    "maximum": 100,
+    "minimum": 1,
+    "type": "number"
+   },
+   "perspective": {
+    "default": "nhs",
+    "description": "Economic perspective for the cost-effectiveness model phase.",
+    "enum": [
+     "nhs",
+     "us_payer",
+     "societal"
+    ],
+    "type": "string"
+   },
+   "pico": {
+    "description": "Optional PICO criteria for the screening phase (defaults derived from drug + indication).",
+    "properties": {
+     "comparator": {
+      "type": "string"
+     },
+     "intervention": {
+      "type": "string"
+     },
+     "outcomes": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "population": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "require_real_ce_inputs": {
+    "default": false,
+    "description": "When true, SKIP the cost-effectiveness phase unless ce_inputs supplies real drug/comparator costs + an effect measure, instead of running it on fabricated defaults and emitting a placeholder ICER. Default false runs CE but loudly flags any defaulted-input ICER as placeholder/not-submission-grade. Design log #35.",
+    "type": "boolean"
+   },
+   "skip_ce_model": {
+    "default": false,
+    "description": "Skip the cost-effectiveness model phase (e.g., for clinical-only dossiers).",
+    "type": "boolean"
+   },
+   "sources": {
+    "default": [
+     "pubmed",
+     "clinicaltrials"
+    ],
+    "items": {
+     "enum": [
+      "pubmed",
+      "clinicaltrials",
+      "biorxiv",
+      "cochrane",
+      "nice_ta",
+      "cadth_reviews",
+      "icer_reports",
+      "ispor",
+      "wiley"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "submission_type": {
+    "default": "sta",
+    "enum": [
+     "sta",
+     "mta",
+     "early_access",
+     "initial",
+     "renewal",
+     "variation"
+    ],
+    "type": "string"
+   },
+   "unmet_need_inputs": {
+    "description": "Optional structured inputs for Phase 3.5 (evidence.unmet_need). Only consumed when hta_body='gvd'. When supplied, the orchestrator runs evidence.unmet_need and pipes the resulting unmet_need_summary into Phase 5 hta_dossier (pre-filling GVD Section 4 / NICE Section B). Design log #23.",
+    "properties": {
+     "disease_burden": {
+      "properties": {
+       "incidence_per_100k": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "prevalence_per_100k": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "qualitative_summary": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "treatment_landscape": {
+      "properties": {
+       "current_soc": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "qualitative_summary": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     }
+    },
+    "type": "object"
+   }
+  },
+  "required": [
+   "drug",
+   "indication"
+  ],
+  "type": "object"
+ },
+ "name": "hta.workflow"
+}

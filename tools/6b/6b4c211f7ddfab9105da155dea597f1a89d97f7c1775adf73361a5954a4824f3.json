@@ -1,0 +1,203 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "Generate a consistent SET of images: a master image from master_prompt, then one image per scene that references the master so the subject/style stays consistent. Provide `scenes` (explicit per-image prompts) OR `count` (variations of the master). Scene generations run in parallel (reference_mode \"master\", the default). On the hosted connector: saved `characters` and a saved `style` can seed the whole set by name, multi-image results include a `bundle_url` zip of every image (one curl instead of N), and `max_wait_ms` returns a pollable job handle if the batch runs long. Local file inputs are confirmed first: a confirmation prompt where the client supports one; otherwise the first call returns a preview and a confirmToken, and only a repeat call with that token proceeds (see MCP_CONFIRM_MODE).",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "aspect_ratio": {
+    "description": "Exact output aspect ratio. For a plain landscape/portrait/square request, `orientation` is the shorthand; this wins if both are given.",
+    "enum": [
+     "1:1",
+     "2:3",
+     "3:2",
+     "3:4",
+     "4:3",
+     "4:5",
+     "5:4",
+     "9:16",
+     "16:9",
+     "21:9",
+     "1:4",
+     "4:1",
+     "1:8",
+     "8:1"
+    ],
+    "type": "string"
+   },
+   "async": {
+    "description": "Return a job_id immediately instead of the result, so a long generation cannot hit the host tools/call timeout (-32001); poll gemini_get_result. On the hosted connector prefer max_wait_ms \u2014 the executor only lives while a request is open, so async is served there as a bounded wait.",
+    "type": "boolean"
+   },
+   "basename": {
+    "description": "Base filename prefix for output images (default: slugified master_prompt)",
+    "type": "string"
+   },
+   "characters": {
+    "description": "Names of saved characters (gemini_list_characters): each one's reference image and description are attached automatically, keeping recurring subjects consistent without re-sending anything. Hosted connector only.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 8,
+    "type": "array"
+   },
+   "confirmToken": {
+    "description": "ONLY for the two-step confirmation fallback (a client without MCP elicitation). The confirmToken from this same tool's phase-1 \"confirmation-required\" response, passed back ONLY after the user has seen that preview and explicitly approved it in chat \u2014 never on the first call, never invented, never reused. Call again with the same arguments. Ignored when the client supports elicitation.",
+    "type": "string"
+   },
+   "count": {
+    "description": "Number of variations of master_prompt (when scenes omitted)",
+    "exclusiveMinimum": 0,
+    "maximum": 8,
+    "type": "integer"
+   },
+   "from_clipboard": {
+    "description": "Use the image currently on the macOS system clipboard as an input (downscaled to JPEG)",
+    "type": "boolean"
+   },
+   "google_search": {
+    "description": "Ground the image in live Google Search results (current events, weather, data)",
+    "type": "boolean"
+   },
+   "idempotency_key": {
+    "description": "Repeat calls with this key return the recorded result (reused: true) instead of billing a new generation. Set it when retrying after a host timeout (-32001).",
+    "minLength": 1,
+    "type": "string"
+   },
+   "image_size": {
+    "description": "Output resolution (512 = 0.5K, Flash-only)",
+    "enum": [
+     "512",
+     "1K",
+     "2K",
+     "4K"
+    ],
+    "type": "string"
+   },
+   "inline": {
+    "description": "Return the image as an inline image block you can SEE, instead of a path (stdio) or link (hosted). The default costs nothing to carry and hands back a reference you can reuse; use this when you need to check the result yourself. On the hosted connector gemini_view_media does the same for an image you already have",
+    "type": "boolean"
+   },
+   "master_images": {
+    "description": "Reference image paths passed to the master generation call",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "master_images_base64": {
+    "description": "Reference images for the master generation as base64 strings or data URIs. Last resort \u2014 about 14k tokens per photo; prefer master_images_url or master_images_file_uris. The server uploads each one and reports a file_uri under image_inputs: pass that to master_images_file_uris next time instead of re-sending the bytes.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "master_images_file_uris": {
+    "description": "Reference images passed to the master AND to every scene call as Files API references (\"files/<id>\" or the full uri) from gemini_upload_file. Upload once and reuse across calls with no bytes in the conversation; retained ~48h, after which the reference stops resolving.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "master_images_r2_keys": {
+    "description": "Reference images passed to the master AND to every scene call by r2_key from this connector's store: a signed upload (gemini_get_upload_url \u2192 curl PUT) or an earlier generation's media[].r2_key. The server reads its own bucket \u2014 no bytes in the conversation, no ~48h expiry. Hosted connector only.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "master_images_url": {
+    "description": "Reference images passed to the master AND to every scene call (fetched once) as public https URLs \u2014 the server downloads them, so no image bytes cross the conversation. Preferred over images_base64, which costs ~14k tokens per photo. Max 15MB each, Content-Type image/*.",
+    "items": {
+     "format": "uri",
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "master_prompt": {
+    "description": "Prompt for the master/reference image",
+    "minLength": 1,
+    "type": "string"
+   },
+   "max_wait_ms": {
+    "description": "Wait up to this many ms in-band, then hand back { job_id, status: \"running\" } to poll with gemini_get_result (e.g. 20000 for multi-image sets). Keeps fast results inline and slow ones off the host timeout (-32001). Ignored when async is set.",
+    "exclusiveMinimum": 0,
+    "maximum": 600000,
+    "type": "integer"
+   },
+   "model": {
+    "description": "Model id override (default: server default; see gemini_list_models). gemini-3.1-flash-image (Nano Banana 2, the default) is the generalist: fast, 4K, reliable text, strong multi-reference consistency. gemini-3-pro-image (Pro) is for the hardest work \u2014 best world knowledge, brand precision. gemini-3.1-flash-lite-image (Lite) is cheapest: 1K only, no search grounding.",
+    "pattern": "^[\\w.-]+$",
+    "type": "string"
+   },
+   "orientation": {
+    "description": "Output shape in plain terms: landscape (16:9), portrait (9:16) or square (1:1). For any other proportion \u2014 3:2, 4:3, 4:5, 21:9 \u2014 use aspect_ratio, which wins if both are given.",
+    "enum": [
+     "landscape",
+     "portrait",
+     "square"
+    ],
+    "type": "string"
+   },
+   "output_dir": {
+    "description": "Directory to write images to (default: $GEMINI_OUTPUT_DIR or cwd)",
+    "type": "string"
+   },
+   "reference_mode": {
+    "description": "master: every image references the master (default). chain: each references the previous.",
+    "enum": [
+     "master",
+     "chain"
+    ],
+    "type": "string"
+   },
+   "scenes": {
+    "description": "Per-image prompts (1-8); each references the master",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 8,
+    "minItems": 1,
+    "type": "array"
+   },
+   "seed": {
+    "description": "Seed for reproducible generation; random if omitted",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "style": {
+    "description": "Name of a saved style preset (gemini_list_styles): its prompt fragment, and reference image if it has one, are applied automatically. Hosted connector only.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "thinking_level": {
+    "description": "Reasoning depth (Gemini 3 models); higher can help complex/structural edits",
+    "enum": [
+     "minimal",
+     "high"
+    ],
+    "type": "string"
+   },
+   "timeout_ms": {
+    "description": "Upstream timeout in ms for this call (default $GEMINI_TIMEOUT_MS, else 60000 \u2014 120000 at 4K, which runs past 60s)",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "master_prompt"
+  ],
+  "type": "object"
+ },
+ "name": "gemini_image_set"
+}

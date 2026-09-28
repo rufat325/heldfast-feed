@@ -1,0 +1,234 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "MAIC Workflow Orchestrator"
+ },
+ "description": "Run the canonical MAIC discovery+screening pipeline in one call: ITC feasibility + parallel literature_search (broad + per-trial) + PICO screening + evidence_network. Does NOT auto-run risk_of_bias (it needs named trials; the report directs you to run risk_of_bias on the screened set) and stops short of running MAIC/Bucher itself (those require IPD or trial-level effect estimates). Produces a structured 9-section report with explicit Next Steps. Use this as a one-shot orchestrator instead of asking Claude/ChatGPT to chain the underlying tools manually.",
+ "inputSchema": {
+  "ai_disclosure_level": {
+   "description": "AI assistance disclosure level. \"off\" = no disclosure; \"standard\" = default (model/tools/sources/date + human-review reminder); \"submission\" = adds ISPOR ELEVATE-GenAI citation. Default is tool-specific.",
+   "enum": [
+    "off",
+    "standard",
+    "submission"
+   ],
+   "type": "string"
+  },
+  "properties": {
+   "anchored": {
+    "default": true,
+    "description": "Anchored (default true) \u2192 adjust for effect modifiers only. false \u2192 unanchored: effect modifiers AND prognostic factors (much stronger assumption; NICE-sceptical). Sets comparison_type. NICE DSU TSD 18. Design log #48.",
+    "type": "boolean"
+   },
+   "comparator": {
+    "description": "Comparator drug name.",
+    "type": "string"
+   },
+   "corpus_papers": {
+    "description": "Optional structured corpus for the submission path: effect-modifier identification runs in closed_corpus over these {pmid?, doi?, title, year?, abstract?}. Omit \u2192 open_search discovery fallback. Design log #48.",
+    "items": {
+     "properties": {
+      "abstract": {
+       "type": "string"
+      },
+      "doi": {
+       "type": "string"
+      },
+      "pmid": {
+       "type": "string"
+      },
+      "title": {
+       "type": "string"
+      },
+      "year": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "title"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "decisions": {
+    "description": "Methodological decisions made in conversation (source selection, comparator choice, screening criteria, model structure...). Each entry records the choice, the rationale (why), alternatives rejected, and who decided. Embedded in the audit trail Decision Log and, when a project is supplied, appended to wiki/decisions.md for cross-session recall. Tools never invent decisions \u2014 only pass what the user made or confirmed. Design log #52.",
+    "items": {
+     "properties": {
+      "alternatives_considered": {
+       "description": "What was rejected",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "choice": {
+       "description": "What was decided",
+       "type": "string"
+      },
+      "decided_by": {
+       "description": "Who made the decision \u2014 mark honestly",
+       "enum": [
+        "user",
+        "agent_proposed_user_confirmed",
+        "agent"
+       ],
+       "type": "string"
+      },
+      "decision_point": {
+       "description": "e.g. source_selection, comparator_choice, screening_criteria, model_structure",
+       "type": "string"
+      },
+      "rationale": {
+       "description": "Why \u2014 required, non-empty",
+       "type": "string"
+      },
+      "references": {
+       "description": "DOI/PMID/URL \u2014 recorded verbatim, rendered as unverified unless verified via utils.verify_citations",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "required": [
+      "decision_point",
+      "choice",
+      "rationale",
+      "decided_by"
+     ],
+     "type": "object"
+    },
+    "maxItems": 20,
+    "type": "array"
+   },
+   "effect_modifier_extractions": {
+    "description": "Optional agent-extracted effect-modifier candidates. direction: treatment_predictor/both = effect modifier; prognostic = prognostic factor. Design log #48.",
+    "items": {
+     "properties": {
+      "direction": {
+       "enum": [
+        "prognostic",
+        "treatment_predictor",
+        "both",
+        "unclear"
+       ],
+       "type": "string"
+      },
+      "source_location": {
+       "type": "string"
+      },
+      "source_paper_doi": {
+       "type": "string"
+      },
+      "source_paper_pmid": {
+       "type": "string"
+      },
+      "source_paper_title": {
+       "type": "string"
+      },
+      "variable_name": {
+       "type": "string"
+      },
+      "verbatim_snippet": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "variable_name",
+      "source_location"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "effect_modifiers": {
+    "description": "Optional effect modifiers known from clinical input.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "fetch_full_text": {
+    "default": false,
+    "description": "When true (with corpus_papers), retrieves open-access full text and feeds it into effect-modifier identification so source_location is checkable against real subgroup/table text. Design log #48.",
+    "type": "boolean"
+   },
+   "include_confounder_identification": {
+    "default": false,
+    "description": "When true, after screening runs EFFECT-MODIFIER identification (confounder_identification with comparison_type set from `anchored`) and appends the section. Design log #43/#48.",
+    "type": "boolean"
+   },
+   "indication": {
+    "description": "Disease/condition.",
+    "type": "string"
+   },
+   "intervention": {
+    "description": "Drug/intervention name.",
+    "type": "string"
+   },
+   "max_results_per_search": {
+    "default": 50,
+    "maximum": 100,
+    "minimum": 1,
+    "type": "number"
+   },
+   "outcome_type": {
+    "enum": [
+     "binary",
+     "continuous",
+     "time_to_event"
+    ],
+    "type": "string"
+   },
+   "pico": {
+    "description": "Optional PICO criteria for screening (defaults derived).",
+    "properties": {
+     "comparator": {
+      "type": "string"
+     },
+     "intervention": {
+      "type": "string"
+     },
+     "outcome": {
+      "type": "string"
+     },
+     "population": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "runs_per_search": {
+    "default": 2,
+    "maximum": 3,
+    "minimum": 1,
+    "type": "number"
+   },
+   "trials_comparator": {
+    "description": "Optional comparator-side trial names (e.g., INSPIRE, COMMAND).",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "trials_intervention": {
+    "description": "Optional trial names (e.g., QUASAR, ASTRO) to search in parallel.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "intervention",
+   "comparator",
+   "indication"
+  ],
+  "type": "object"
+ },
+ "name": "workflow.maic"
+}

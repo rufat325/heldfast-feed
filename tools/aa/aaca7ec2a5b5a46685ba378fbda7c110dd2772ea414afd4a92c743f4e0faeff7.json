@@ -1,0 +1,253 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Passthrough to any BrAPI POST /search/{noun} endpoint, returning the resolved envelope (async polling resolved upstream). Spills to a canvas dataframe when the upstream advertises more rows than `loadLimit` AND the result is a list shape; inline `result` is unchanged. Skips spillover when the caller drives paging via `body.page` / `body.pageSize`. No distributions or foreign-key resolution applied.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "alias": {
+    "description": "Connection alias registered via brapi_connect. Omit to read the connection registered under alias `default` \u2014 i.e. a prior brapi_connect call that did not specify an alias. Calls that used a non-default alias must pass that same alias here.",
+    "pattern": "^[a-zA-Z0-9_-]+$",
+    "type": "string"
+   },
+   "body": {
+    "additionalProperties": {},
+    "description": "Filter body passed verbatim to POST /search/{noun}.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "loadLimit": {
+    "description": "Cap on rows returned inline. Omit for the deployment default. Rows beyond the cap land in a dataframe; query with brapi_dataframe_query (SQL) instead of paging row-by-row.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "noun": {
+    "description": "Search noun \u2014 e.g. \"observations\", \"calls\", \"germplasm\".",
+    "minLength": 1,
+    "pattern": "^[a-zA-Z0-9_-]+$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "noun",
+   "body"
+  ],
+  "type": "object"
+ },
+ "name": "brapi_raw_search",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "alias",
+     "noun",
+     "kind",
+     "metadata"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "alias": {
+    "description": "Alias of the registered BrAPI connection the call used.",
+    "type": "string"
+   },
+   "dataframe": {
+    "additionalProperties": false,
+    "description": "Present when the upstream advertised more rows than `loadLimit` AND the result is a list shape. The inline `result` is unchanged; the dataframe carries the full union of pages \u2014 query with brapi_dataframe_query.",
+    "properties": {
+     "columnLegend": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Maps a sanitized column name back to its original upstream key, for columns renamed to clear the SQL-safe-identifier gate (e.g. `end` \u2192 `end_`). Present only when a column was renamed \u2014 write SQL against the sanitized (left-hand) names.",
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "columns": {
+      "description": "Full column list of the dataframe.",
+      "items": {
+       "description": "Column name from the materialized rows.",
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "createdAt": {
+      "description": "ISO 8601 timestamp the dataframe was created.",
+      "type": "string"
+     },
+     "expiresAt": {
+      "description": "ISO 8601 timestamp after which the dataframe metadata will be purged. Re-run the find_* tool to refresh, or copy results out before expiry.",
+      "type": "string"
+     },
+     "maxRows": {
+      "description": "Cap that was applied at create time, when truncation occurred.",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     "rowCount": {
+      "description": "Number of rows materialized in the dataframe.",
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "tableName": {
+      "description": "Dataframe name. Use with brapi_dataframe_describe (schema + provenance) and brapi_dataframe_query (SQL).",
+      "type": "string"
+     },
+     "totalCount": {
+      "description": "Total rows reported by the upstream server (may exceed rowCount when truncated).",
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "truncated": {
+      "description": "True when the dataframe hit a row cap before exhausting upstream.",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "tableName",
+     "rowCount",
+     "columns",
+     "createdAt",
+     "expiresAt"
+    ],
+    "type": "object"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `unknown_alias`: No connection has been registered under the requested alias. `search_endpoint_disabled`: The active dialect declares this POST /search/{noun} route as known-dead on this server. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "unknown_alias",
+         "search_endpoint_disabled"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "kind": {
+    "description": "Whether the server returned inline results or we polled an async search.",
+    "enum": [
+     "sync",
+     "async"
+    ],
+    "type": "string"
+   },
+   "metadata": {
+    "additionalProperties": {},
+    "description": "BrAPI envelope metadata (pagination and any additional upstream fields).",
+    "properties": {
+     "pagination": {
+      "additionalProperties": {},
+      "description": "BrAPI pagination block. Absent when the endpoint does not paginate.",
+      "properties": {
+       "currentPage": {
+        "description": "0-indexed page number the server returned.",
+        "type": "number"
+       },
+       "pageSize": {
+        "description": "Rows per page.",
+        "type": "number"
+       },
+       "totalCount": {
+        "description": "Total rows matching the query across all pages.",
+        "type": "number"
+       },
+       "totalPages": {
+        "description": "Total pages at the current pageSize.",
+        "type": "number"
+       }
+      },
+      "required": [
+       "currentPage",
+       "pageSize",
+       "totalCount",
+       "totalPages"
+      ],
+      "type": "object"
+     }
+    },
+    "type": "object"
+   },
+   "noun": {
+    "description": "The `/search/{noun}` segment the body was posted to.",
+    "type": "string"
+   },
+   "result": {
+    "description": "Raw BrAPI `result` value \u2014 whatever shape the endpoint returns."
+   },
+   "searchResultsDbId": {
+    "description": "Populated when the server returned an async searchResultsDbId.",
+    "type": "string"
+   },
+   "suggestion": {
+    "description": "Emitted when a curated goal-shaped tool covers this search.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Brapi Raw Search"
+}

@@ -1,0 +1,140 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": false
+ },
+ "description": "Base-to-base schema + record sync. IMPORTANT: BOTH mode=\"plan\" and mode=\"apply\" run as BACKGROUND JOBS \u2014 they return {jobId, planId, status:\"running\"} IMMEDIATELY (jobId === planId), NOT a synchronous result; poll mode=\"status\" with that planId to get progress and the final result. mode=\"plan\" (read-only, does NOT mutate): computes an ordered plan (tables/fields to create/update + orphans + warnings) by comparing source/dest schema; when the job finishes, mode=\"status\" returns the plan digest in planDigest. mode=\"apply\" (requires planId from a prior plan): executes the saved plan against the destination \u2014 creates tables, reconciles the primary, creates scalar/link/computed fields (source->dest reference remapping + formula validation), applies non-destructive field updates, then runs the RECORD sync (two-pass cells + links, attachments, view-filter restore); aborts if the destination drifted since the plan. mode=\"status\" (poll a plan OR apply job by its planId): returns { phase: \"planning\"|\"schema\"|\"records\"|\"done\"|\"failed\", status, recordsMapped, summary, schemaResult?, recordsResult?, result?, planDigest? }. planDigest is human-only by default ({ human, machineOmitted: true }) \u2014 pass verbose:true for the full planDigest.machine. Field-mapping errors, APPLY_LOCKED, and DRIFT surface HERE (phase=\"failed\" or an aborted schemaResult), not as a synchronous error. mode=\"reconcile\" (SYNCHRONOUS): rebuild/repair the record map \u2014 existence-prune dead idmap entries, optional natural-key re-match per table. mode=\"diff\" (SYNCHRONOUS): schema digest comparing source and destination WITHOUT saving a plan; returns a diffId and summary; pass detail=<section> to drill into a section of a prior diff.",
+ "inputSchema": {
+  "properties": {
+   "confirmDeletions": {
+    "description": "Used by mode=\"apply\" with policy=\"mirror\": must be set to true to actually delete dest-only RECORDS and dest-only FIELDS/VIEWS. Without it, mirror mode reports a DELETION_GATED count and deletes nothing for records; orphan fields/views are reported and kept.",
+    "type": "boolean"
+   },
+   "confirmRetypes": {
+    "description": "Used by mode=apply: required to apply a matched field's SCALAR type change to the destination (source-wins). Without it, a diverging scalar type reports RETYPE_GATED and the field is kept. Non-scalar retypes (to/from formula/rollup/lookup/count/autoNumber/link/attachment) stay RETYPE_DEFERRED.",
+    "type": "boolean"
+   },
+   "confirmTableDeletions": {
+    "description": "Used by mode=apply with policy=mirror: required to delete whole dest-only TABLES. confirmDeletions alone never drops a table; without confirmTableDeletions, orphan tables report TABLE_DELETION_GATED and are kept.",
+    "type": "boolean"
+   },
+   "debug": {
+    "description": "When true, include raw Airtable response in output for diagnostics",
+    "type": "boolean"
+   },
+   "destAppId": {
+    "description": "Destination base/application ID to copy schema TO",
+    "type": "string"
+   },
+   "detail": {
+    "description": "Used only by mode=\"diff\": section name to drill into (e.g. a table name or action key). Requires diffId.",
+    "type": "string"
+   },
+   "diffId": {
+    "description": "Used by mode=\"diff\": ID of a prior diff to retrieve or drill into. If omitted on the initial call, one is generated automatically.",
+    "type": "string"
+   },
+   "direction": {
+    "description": "Used only by mode=\"plan\": direction of the changeset. \"to-dest\" (default) brings the destination base up to date with the source. \"to-source\" swaps the roles so the changeset targets the source base (makes the source match the destination).",
+    "enum": [
+     "to-dest",
+     "to-source"
+    ],
+    "type": "string"
+   },
+   "fieldMappings": {
+    "additionalProperties": {
+     "additionalProperties": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "description": "Field mapping overrides: maps table name \u2192 { sourceField: destField } to inject a source field's value into a different (writable scalar) dest field during record sync. Example: { \"Games\": { \"Title\": \"Name\" } }. In mode=\"plan\" and mode=\"diff\", fieldMappings are validated against the two schemas (dry-run, no mutation) and errors are returned in fieldMappingErrors.",
+    "type": "object"
+   },
+   "limit": {
+    "description": "Used by mode=\"diff\" with detail: maximum number of entries to return.",
+    "type": "number"
+   },
+   "mode": {
+    "description": "\"plan\" (BACKGROUND job: computes a plan and returns a jobId immediately \u2014 poll mode=\"status\" for the digest), \"apply\" (BACKGROUND job: runs the schema phase then the record sync, returns a jobId immediately \u2014 poll mode=\"status\"), \"status\" (poll a plan OR apply job by planId for its phase + result), \"reconcile\" (SYNCHRONOUS: rebuild/repair the record map \u2014 existence-prune dead entries, optional natural-key re-match), or \"diff\" (SYNCHRONOUS: schema digest comparing source and destination without saving a plan; optionally drill into a section with detail=<section>).",
+    "enum": [
+     "plan",
+     "apply",
+     "reconcile",
+     "status",
+     "diff"
+    ],
+    "type": "string"
+   },
+   "naturalKeys": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "description": "Map of tableName \u2192 fieldName to use as a natural key for record identity matching (e.g. { \"Projects\": \"Name\" }). Applies to mode=\"reconcile\" (repairs the record map via natural-key re-match after manual edits) AND mode=\"apply\" (auto pre-pass before Pass 1: matches existing dest records by key so they are updated rather than duplicated; also protects real-but-unmapped dest records from mirror-policy deletion). Omit for existence-prune only (reconcile) or pure ID-based sync (apply). The key field MUST be stable across bases: autoNumber renumbers on creation (bad key); name/email/injected InjectID are good keys.",
+    "type": "object"
+   },
+   "offset": {
+    "description": "Used by mode=\"diff\" with detail: skip this many entries before returning results.",
+    "type": "number"
+   },
+   "planId": {
+    "description": "Required for mode=\"apply\" (the planId from a prior mode=\"plan\" run) and mode=\"status\" (the jobId returned by mode=\"plan\" OR mode=\"apply\" \u2014 jobId === planId).",
+    "type": "string"
+   },
+   "policy": {
+    "description": "Used by mode=\"apply\" for the record reconciliation preset. \"mirror\" = converge dest toward source (delete dest-only records, overwrite dest edits); \"overlay\" = keep dest-only records, source updates win on conflicts (default); \"preserve\" = keep dest-only records and never overwrite dest edits. Requires confirmDeletions=true to actually delete in mirror mode. NOTE: \"mirror\" does NOT make the destination byte-identical \u2014 two removals are deferred and are reported, not performed: dest-extra LINKED-RECORD entries are never unlinked (Pass 2 only adds), and a source row that CLEARED its attachments leaves the dest attachment cell untouched. Watch for RECORD_LINK_EXTRA / attachment warnings in the result.",
+    "enum": [
+     "mirror",
+     "overlay",
+     "preserve"
+    ],
+    "type": "string"
+   },
+   "policyOverrides": {
+    "additionalProperties": {
+     "enum": [
+      "mirror",
+      "overlay",
+      "preserve"
+     ],
+     "type": "string"
+    },
+    "description": "Used by mode=\"apply\": per-table reconciliation preset overrides. Maps table name \u2192 preset (e.g. { \"Games\": \"preserve\" }). Overrides the global policy for the named tables.",
+    "type": "object"
+   },
+   "resumeAfterDrift": {
+    "description": "Used by mode=apply: continue a partially-applied plan even though the destination no longer matches the plan's fingerprint. A plan with prior progress has already mutated the destination itself, so some divergence is expected \u2014 but a collaborator's edit is indistinguishable from here, and the remaining actions (including deletions) would overwrite it. Prefer re-running mode=plan. Without this flag such an apply aborts with RESUME_DRIFT instead of silently overwriting.",
+    "type": "boolean"
+   },
+   "skip": {
+    "description": "Used only by mode=\"apply\": list of changeIds to skip (actions with a matching changeId are counted as skipped but not applied). Use changeIds from the plan output.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "sourceAppId": {
+    "description": "Source base/application ID to copy schema FROM",
+    "type": "string"
+   },
+   "strictDrift": {
+    "description": "Used by mode=plan: also hash live VIEW CONFIG (filters/sorts/groups/colors/column order) into the plan's drift fingerprint, so a collaborator editing a view between plan and apply is detected. Costs one extra ~1s read PER VIEW on every apply of this plan (minutes on a view-heavy base) \u2014 which is why it is off by default. Field types, options, choices, formulas and descriptions are ALWAYS covered regardless of this flag. Recorded on the plan; apply reuses the plan's setting.",
+    "type": "boolean"
+   },
+   "verbose": {
+    "description": "Used only by mode=\"status\": by default planDigest is projected to { human, machineOmitted: true } (the full machine payload can be tens of thousands of lines on a view-heavy base and pushes the useful result fields out of the response \u2014 it always stays on disk). Set verbose:true to get the full planDigest.machine back in the response.",
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "mode",
+   "sourceAppId",
+   "destAppId"
+  ],
+  "type": "object"
+ },
+ "name": "sync_base"
+}

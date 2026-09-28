@@ -1,0 +1,123 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Patch Company Series"
+ },
+ "description": "Updates only the fields present in the body, leaving every other field of the series as\nit is.\n\n- **Clearing a field:** a field sent as `null` is cleared, which only `description`\n  supports.\n- **Numbering fields:** `code`, `format`, `counter_reset` and `initial_number` are rejected\n  once the series has issued invoices (`numbering_locked` is `true`).\n- **Unique numbers per issuer:** changing `code`, `format` or `document_type` so that the\n  series could print a number another series of the company can also print is rejected\n  with `409 SERIES_FORMAT_OVERLAPS`.\n- **`default_series`:** it cannot be used to clear the default. Sending `false` for the\n  series that currently is the default answers `DEFAULT_CANNOT_BE_UNMARKED`, because it\n  would leave the document type with active series and no default, and issuing without an\n  explicit `series_id` would then fail with `SERIES_DEFAULT_NOT_FOUND`. Hand the default\n  over with `PUT /v1/companies/{company_id}/series/{series_id}/default` on the new series,\n  which unmarks the previous one. Sending `false` for a series that is not the default is a\n  no-op.\n\nEndpoint: PATCH /v1/companies/{company_id}/series/{series_id}\n\n\u26a0\ufe0f Read before calling:\n- Fiscal rules, domains numbering: beel_rules_list with domain, or resource beel://guardrails/<domain>.\n- How a series formats numbers, and which series configurations are rejected. (resource: beel://guardrails/series-and-numbering)",
+ "inputSchema": {
+  "$defs": {
+   "CounterReset": {
+    "description": "Counter reset policy:\n- NEVER: Counter never resets (continuous numbering)\n- ANNUAL: Counter resets yearly\n- MONTHLY: Counter resets monthly\n",
+    "enum": [
+     "NEVER",
+     "ANNUAL",
+     "MONTHLY"
+    ],
+    "type": "string"
+   },
+   "DocumentType": {
+    "description": "Document type associated with a series. Values mirror `InvoiceType`,\nso the series a document needs is named exactly like the document:\n- UNASSIGNED: Legacy value of series created before types existed. A series numbers only\n  documents of its own type, so an `UNASSIGNED` series numbers none\n  (`422 SERIES_INCOMPATIBLE_DOC_TYPE`); give it a type to keep using it. No series can be\n  created with it or moved to it (`422 SERIES_UNASSIGNED_TYPE_NOT_ALLOWED`). The live\n  ones were given the type they numbered most.\n- STANDARD: Standard invoice\n- SIMPLIFIED: Simplified invoice\n- CORRECTIVE: Corrects or cancels a previous invoice\n- PROFORMA: Proforma (commercial document, non-fiscal numbering)\n",
+    "enum": [
+     "UNASSIGNED",
+     "STANDARD",
+     "SIMPLIFIED",
+     "CORRECTIVE",
+     "PROFORMA"
+    ],
+    "type": "string"
+   },
+   "PatchSeriesRequest": {
+    "additionalProperties": false,
+    "description": "Partial update of an invoice series (RFC 5789). Only the fields present in the\nbody are touched:\n\n- **field omitted** \u2192 the current value is kept;\n- **field sent with a value** \u2192 replaced;\n- **field sent as `null`** \u2192 cleared (only `description`, the one field a series\n  can live without).\n\nThe same rules as `PUT` apply: the fields that drive numbering (`code`, `format`,\n`counter_reset`, `initial_number`) and `document_type` are rejected once the series has\nissued invoices (`document_type` can still be set on an `UNASSIGNED` series), so renaming a\nseries in production keeps working.\nMoving a series to `document_type: UNASSIGNED` is rejected with\n`422 SERIES_UNASSIGNED_TYPE_NOT_ALLOWED`; a series that already is `UNASSIGNED` can be\nedited without changing its type.\n",
+    "properties": {
+     "active": {
+      "description": "Whether the series is active.\n\n**Restriction:** A default series cannot be deactivated\n(another must be set as default first).\n",
+      "type": "boolean"
+     },
+     "code": {
+      "$ref": "#/$defs/SeriesCode"
+     },
+     "counter_reset": {
+      "$ref": "#/$defs/CounterReset"
+     },
+     "default_series": {
+      "description": "Whether this is the default series.\n\n**Restriction:** An inactive series cannot be marked as default.\n",
+      "type": "boolean"
+     },
+     "description": {
+      "description": "Series description. Send `null` to clear it.",
+      "maxLength": 1000,
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "document_type": {
+      "$ref": "#/$defs/DocumentType"
+     },
+     "format": {
+      "$ref": "#/$defs/SeriesFormat"
+     },
+     "initial_number": {
+      "description": "Initial number for this series counter.\nOnly while the series has no issued invoices.\nIt applies only to the first period in which the series issues an invoice: with\n`counter_reset: ANNUAL` or `MONTHLY`, every later year or month starts at 1. With\n`NEVER` there is a single period, so numbering simply continues from it.\n",
+      "format": "int64",
+      "maximum": 999999,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "name": {
+      "description": "Descriptive name of the series. Cannot be cleared.",
+      "maxLength": 100,
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "SeriesCode": {
+    "description": "Alphanumeric series code (used in {CODIGO} variable).\nAllows uppercase letters, numbers, hyphens and underscores.\n",
+    "maxLength": 50,
+    "minLength": 1,
+    "pattern": "^[A-Z0-9\\-_]{1,50}$",
+    "type": "string"
+   },
+   "SeriesFormat": {
+    "description": "Format template with available variables (UPPERCASE ONLY):\n- {CODIGO}: Series code (e.g., \"FAC\")\n- {YYYY}: Year with 4 digits (e.g., \"2025\")\n- {YY}: Year with 2 digits (e.g., \"25\")\n- {MM}: Month with 2 digits (e.g., \"01\")\n- {NUM}: Sequential number without padding (e.g., \"1\")\n- {NUM:X}: Sequential number with padding (e.g., {NUM:4} \u2192 \"0001\")\n\n**REQUIRED**: Must contain at least {NUM} or {NUM:X}\n**IMPORTANT**: Only uppercase (rejects {yy}, {mm}, {codigo}, etc.)\n\nValid examples:\n- \"{CODIGO}-{YYYY}-{NUM:4}\" \u2192 \"FAC-2025-0001\"\n- \"{CODIGO}/{NUM:6}\" \u2192 \"FAC/000001\"\n- \"{YYYY}{MM}-{NUM:3}\" \u2192 \"202501-001\"\n\nThe generated number is the invoice number sent to the AEAT, which accepts at most 60\nprintable ASCII characters and none of `\"`, `'`, `<`, `>`, `=`. A format whose longest\npossible number breaks that rule is rejected with `422 SERIES_FORMAT_NUMBER_TOO_LONG` or\n`SERIES_FORMAT_INVALID_CHARACTERS`. The counter counts as at least 9 digits, with or without\npadding: `{NUM:X}` is a minimum width, not a maximum.\n",
+    "maxLength": 255,
+    "minLength": 1,
+    "pattern": "^[A-Z0-9\\-_/{}:]*$",
+    "type": "string"
+   },
+   "UUID": {
+    "description": "Universally Unique Identifier (UUID v4)",
+    "format": "uuid",
+    "type": "string"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "body": {
+    "$ref": "#/$defs/PatchSeriesRequest"
+   },
+   "company_id": {
+    "description": "Unique identifier (UUID) of the company the operation acts on \u2014 its identifier, not its NIF. It is the only source of context: the account that owns it is derived from it, and the `BeeL-Active-Company` header plays no part. A company you do not reach answers `403`, and so does a company that does not exist, so the existence of a company in another account is never disclosed.",
+    "format": "uuid",
+    "type": "string"
+   },
+   "series_id": {
+    "$ref": "#/$defs/UUID",
+    "description": "Series ID"
+   }
+  },
+  "required": [
+   "company_id",
+   "series_id",
+   "body"
+  ],
+  "type": "object"
+ },
+ "name": "beel_patch_series"
+}

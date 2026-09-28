@@ -1,0 +1,331 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Create Company Simplified Exchange"
+ },
+ "description": "Issues a full invoice in exchange for one or more simplified invoices already issued, when\nthe customer asks for an invoice with their details. It is not a corrective invoice: it\ndocuments the same operations again with the recipient identified (RD 1619/2012, art. 15.6).\n\n- **What it issues:** a `STANDARD` invoice with the lines of the simplified invoices and\n  the `recipient` sent, numbered in `series_id` or in the company's default standard series.\n  It lists the invoices it replaces in `replaced_invoice_ids`, and the AEAT records it as\n  F3, identifying them.\n- **The simplified invoices:** each becomes `VOIDED` with `void_cause` `EXCHANGED`, in the\n  same act: their records are not cancelled, the exchange replaces them. They must be\n  simplified invoices (`422 EXCHANGE_REQUIRES_SIMPLIFIED`), issued and not voided,\n  exchanged or corrected before (`422 SIMPLIFIED_NOT_EXCHANGEABLE`).\n- **The exchange invoice** cannot be voided afterwards (`422 EXCHANGE_INVOICE_NOT_VOIDABLE`);\n  if it has an error, it is corrected with a corrective invoice.\n- **VeriFactu:** while the exchange cannot yet be recorded as F3, an exchange that would be\n  submitted to the AEAT fails with `422 SIMPLIFIED_EXCHANGE_NOT_RECORDABLE` and nothing is\n  issued.\n\nEndpoint: POST /v1/companies/{company_id}/invoices/simplified-exchanges\n\n\u26a0\ufe0f Read before calling:\n- Fiscal rules, domains simplified, records: beel_rules_list with domain, or resource beel://guardrails/<domain>.\n- How to tell, before issuing, whether a NIF can issue, and what each blocker means. (resource: beel://guardrails/verifactu-gates)",
+ "inputSchema": {
+  "$defs": {
+   "Address": {
+    "additionalProperties": false,
+    "description": "Address you send when you create or update a company, a customer or an onboarding.\n\nAddresses you read back are described by their own schema.\n",
+    "properties": {
+     "city": {
+      "description": "City or town - Latin characters only",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     },
+     "country": {
+      "description": "Country of the address, as its ISO 3166-1 alpha-2 code (`GB`) or its official name\nin Spanish, English or Catalan (`Reino Unido`, `United Kingdom`, `Regne Unit`;\ncase and accents are ignored). Anything else, such as `UK`, is rejected with\n`422 COUNTRY_CODE_REQUIRED`: send `country_code` instead. If it names a different\ncountry than `country_code`, `422 COUNTRY_CODE_MISMATCH` (`Espa\u00f1a` alone yields to\na foreign `country_code`: it was the old default). What is stored and\nreturned is always the Spanish name derived from the resulting code, never the\ntext sent. With neither field present, the address is Spanish (`Espa\u00f1a`).\n",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     },
+     "country_code": {
+      "description": "ISO 3166-1 alpha-2 country code: the canonical field that decides the country of\nthe address. It must be a real country code (`GB`, not `UK`); otherwise\n`422 COUNTRY_CODE_REQUIRED`. When it is omitted, the code comes from `country`\n(see there). With neither field present, the address is stored as `ES`.\n",
+      "maxLength": 2,
+      "minLength": 2,
+      "pattern": "^[A-Z]{2}$",
+      "type": "string"
+     },
+     "door": {
+      "description": "Door or apartment",
+      "maxLength": 10,
+      "type": "string"
+     },
+     "floor": {
+      "description": "Floor or level",
+      "maxLength": 10,
+      "type": "string"
+     },
+     "number": {
+      "description": "Street number. Optional: omit it when the address has none, or when `street` already\ncarries the address in full.\n",
+      "maxLength": 20,
+      "minLength": 1,
+      "type": "string"
+     },
+     "postal_code": {
+      "description": "Postal code (5 digits for Spain, free format for other countries)",
+      "maxLength": 20,
+      "minLength": 1,
+      "type": "string"
+     },
+     "province": {
+      "description": "Province or state - Latin characters only",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     },
+     "street": {
+      "description": "Full address (street, number, floor, etc.) - Latin characters only",
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "street",
+     "postal_code",
+     "city",
+     "province"
+    ],
+    "type": "object"
+   },
+   "AlternativeIdentifier": {
+    "description": "Alternative identifier for customers without Spanish Tax ID.\n\n### VeriFactu rules (checked when you send it, `422` on violation)\n- `country_code` is required, except for `PASSPORT` (03) and `NOT_REGISTERED` (07), the two\n  types AEAT accepts with `ES`: omitted, `ES` applies. Missing for any other type, the\n  identifier is rejected with `ALTERNATIVE_ID_COUNTRY_REQUIRED`, and `error.details` names\n  the field where it was sent: `alternative_id.country_code` on a customer,\n  `recipient.alternative_id.country_code` on an invoice recipient. Same code in both.\n- If `country_code = ES`, then `type` **must** be `PASSPORT` (03) or `NOT_REGISTERED` (07)\n  (`ALTERNATIVE_ID_SPAIN_INVALID_TYPE`).\n- If `type = NOT_REGISTERED` (07), then `country_code` **must** be `ES`\n  (`ALTERNATIVE_ID_REQUIRES_SPAIN`), and `number` **must** be a Spanish DNI or NIE: a\n  Spanish company is always registered (`RECIPIENT_UNREGISTERED_ID_MUST_BE_DNI_OR_NIE`).\n- If `type = NIF_IVA` (02), `country_code` **must** be an EU member state other than Spain\n  (`ALTERNATIVE_ID_VAT_REQUIRES_EU_COUNTRY`), and `number` **must** have that country's\n  EU VAT number structure as AEAT defines it: the country prefix (`EL` for Greece) followed\n  by the national number, e.g. `FR40303265045`, `DE123456789`, `EL094014201`\n  (`ALTERNATIVE_ID_VAT_INVALID_FORMAT`). Lowercase letters are accepted and stored in\n  uppercase. A customer from outside the EU is identified with another type, such as\n  `OTHER_DOCUMENT` or `COUNTRY_ID`.\n\nA `number` that is blank once trimmed is rejected with `ALTERNATIVE_ID_INVALID`.\n\nWell-formed is not the same as registered: an EU VAT number that is not in the VIES\ncensus is still rejected by VeriFactu after the invoice is issued.\n\nAn identifier returned in a response is the one stored. A customer saved before a rule\nexisted keeps its identifier and can still be read; issuing an invoice to it with an\nidentifier that breaks these rules is rejected with the same code, before a number is used.\n\n### Matrix of allowed combinations\n| `type`                 | `country_code = ES` | `country_code \u2260 ES` |\n|------------------------|:-------------------:|:-------------------:|\n| `NIF_IVA` (02)         | \u2717                   | EU member states only |\n| `PASSPORT` (03)        | \u2713                   | \u2713                   |\n| `COUNTRY_ID` (04)      | \u2717                   | \u2713                   |\n| `RESIDENCE_CERTIFICATE` (05) | \u2717             | \u2713                   |\n| `OTHER_DOCUMENT` (06)  | \u2717                   | \u2713                   |\n| `NOT_REGISTERED` (07)  | \u2713                   | \u2717                   |\n",
+    "properties": {
+     "country_code": {
+      "description": "ISO 3166-1 alpha-2 code of the country that issued the document. Required except for\n`PASSPORT` and `NOT_REGISTERED`, where omitting it means `ES`. Constrains the allowed\n`type` values; see the VeriFactu rules on the parent schema.\n",
+      "maxLength": 2,
+      "minLength": 2,
+      "pattern": "^[A-Z]{2}$",
+      "type": "string"
+     },
+     "number": {
+      "description": "Identifier number. For `NIF_IVA`, the full EU VAT number with its country prefix\n(e.g. `FR40303265045`); see the VeriFactu rules on the parent schema.\n",
+      "maxLength": 20,
+      "minLength": 1,
+      "type": "string"
+     },
+     "type": {
+      "description": "Identifier type. Use descriptive names:\n- **NIF_IVA**: EU VAT number (intra-community) \u2014 *only for an EU member state other than Spain, with that country's VAT number structure*\n- **PASSPORT**: Passport \u2014 *allowed for any country*\n- **COUNTRY_ID**: Country of residence ID \u2014 *not allowed when `country_code = ES`*\n- **RESIDENCE_CERTIFICATE**: Residence certificate \u2014 *not allowed when `country_code = ES`*\n- **OTHER_DOCUMENT**: Other supporting document \u2014 *not allowed when `country_code = ES`*\n- **NOT_REGISTERED**: Not registered in AEAT \u2014 *requires `country_code = ES`*\n\n**\u26a0\ufe0f DEPRECATED numeric codes** (will be removed in v2):\n02, 03, 04, 05, 06, 07 \u2014 use the descriptive names above instead.\n",
+      "enum": [
+       "NIF_IVA",
+       "PASSPORT",
+       "COUNTRY_ID",
+       "RESIDENCE_CERTIFICATE",
+       "OTHER_DOCUMENT",
+       "NOT_REGISTERED",
+       "02",
+       "03",
+       "04",
+       "05",
+       "06",
+       "07"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "type",
+     "number"
+    ],
+    "type": [
+     "object",
+     "null"
+    ]
+   },
+   "CreateSimplifiedExchangeRequest": {
+    "additionalProperties": false,
+    "properties": {
+     "notes": {
+      "description": "Observations printed on the full invoice.",
+      "maxLength": 1000,
+      "type": "string"
+     },
+     "options": {
+      "$ref": "#/$defs/InvoiceProcessingOptions"
+     },
+     "recipient": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/Recipient"
+       }
+      ],
+      "description": "The customer the full invoice goes to, identified as a standard invoice requires: a\nregistered `customer_id` or inline data with a tax ID and address.\n"
+     },
+     "series_id": {
+      "description": "Series of the full invoice. Optional: without it, the company's default series for\nstandard invoices is used.\n",
+      "format": "uuid",
+      "type": "string"
+     },
+     "simplified_invoice_ids": {
+      "description": "The simplified invoices the full invoice replaces, issued and not voided, exchanged or\ncorrected. Their lines, in this order, become the lines of the full invoice.\n",
+      "items": {
+       "format": "uuid",
+       "type": "string"
+      },
+      "maxItems": 50,
+      "minItems": 1,
+      "type": "array",
+      "uniqueItems": true
+     }
+    },
+    "required": [
+     "simplified_invoice_ids",
+     "recipient"
+    ],
+    "type": "object"
+   },
+   "Email": {
+    "description": "Email address (minimum valid email is 5 chars, e.g. a@b.co)",
+    "format": "email",
+    "maxLength": 255,
+    "minLength": 5,
+    "type": "string"
+   },
+   "EmailConfiguration": {
+    "additionalProperties": false,
+    "properties": {
+     "cc": {
+      "description": "List of CC emails (optional)",
+      "items": {
+       "$ref": "#/$defs/Email"
+      },
+      "type": "array"
+     },
+     "message": {
+      "description": "Custom message (optional, added to email body)",
+      "maxLength": 2000,
+      "minLength": 1,
+      "type": "string"
+     },
+     "recipients": {
+      "description": "List of recipient emails (at least 1 required)",
+      "items": {
+       "$ref": "#/$defs/Email"
+      },
+      "minItems": 1,
+      "type": "array"
+     },
+     "subject": {
+      "description": "Custom email subject (optional, if not specified uses a default)",
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "recipients"
+    ],
+    "type": "object"
+   },
+   "InvoiceProcessingOptions": {
+    "additionalProperties": false,
+    "description": "Controls how the invoice is processed after creation.\nAll fields default to `false` if not specified.\n\nVeriFactu is **not** an option here: whether an invoice is registered with AEAT is a\nfact of the tax identity (NIF x environment), resolved at issue time against the\ncompany's regime. See `verifactu.enabled` in the invoice response for what was applied.\n\n**Common combinations:**\n- Draft (default): omit `options` or set all to `false`\n- Issue immediately: `{ issue_directly: true }`\n- Issue + wait for PDF: `{ issue_directly: true, wait_for_pdf: true }`\n- Issue + send email: `{ issue_directly: true, send_automatically: true }`\n- Full automation: `{ issue_directly: true, wait_for_pdf: true, send_automatically: true, email_config: { ... } }`\n",
+    "properties": {
+     "attach_source_invoices": {
+      "default": false,
+      "description": "Only applies when `send_automatically` is `true`. If `true`, the email sent after\nissuing also attaches a ZIP (`suplidos_<invoice-number>.zip`) with the PDFs of the\nsource invoices referenced by the invoice's SUPLIDO consolidation lines\n(`source_invoice_ids`). Each PDF inside the ZIP is named\n`<invoice-number>_<issuer-tax-id>.pdf`. Access to sources owned by managed accounts is\nre-checked with the same rules as issuing, and the request fails synchronously with an\nactionable error \u2014 never a partial ZIP \u2014 if the invoice has no consolidation sources\n(`ATTACH_SOURCE_INVOICES_NO_SOURCES`), a source is not reachable\n(`ATTACH_SOURCE_INVOICE_UNAVAILABLE`) or a source has no generated PDF\n(`ATTACH_SOURCE_PDF_MISSING`). The flag belongs to this issuing act only: it is never\nstored on the invoice.\n",
+      "type": "boolean"
+     },
+     "email_config": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/EmailConfiguration"
+       }
+      ],
+      "description": "Only applies when `send_automatically` is `true`.\nOverrides default email settings. If it names no recipients, the email goes to the\ncustomer's `billing_emails`, or to the customer's `email` when there are none.\n"
+     },
+     "issue_directly": {
+      "default": false,
+      "description": "If `true`, creates the invoice directly as **ISSUED** with a definitive number and PDF.\nIf `false` (default), creates as **DRAFT** without number (editable, no PDF).\n",
+      "type": "boolean"
+     },
+     "send_automatically": {
+      "default": false,
+      "description": "Only applies when `issue_directly` is `true`.\nIf `true`, sends the invoice by email with PDF attachment after issuing.\nThe email is sent asynchronously after the invoice is issued.\n",
+      "type": "boolean"
+     },
+     "wait_for_pdf": {
+      "default": false,
+      "description": "Only applies when `issue_directly` is `true`.\nIf `true`, waits for PDF generation before returning the response (~1-3s).\nIf `false` (default), PDF is generated asynchronously in the background.\n",
+      "type": "boolean"
+     }
+    },
+    "type": "object"
+   },
+   "PhoneInput": {
+    "description": "A phone number as this API accepts it: 9 to 20 characters, and only digits, spaces,\ndashes, parentheses and an optional leading `+`. Every request that takes a phone number\nuses this schema.\n\nIt is `Phone` plus the rules enforced on input. A value this schema accepts always\nsatisfies `Phone`, so anything you send here is something a response can return.\n",
+    "maxLength": 20,
+    "minLength": 9,
+    "pattern": "^[+]?[0-9\\s\\-\\(\\)]+$",
+    "type": "string"
+   },
+   "Recipient": {
+    "additionalProperties": false,
+    "description": "Invoice recipient: either a registered customer (`customer_id`) or the recipient's\ndata inline (`legal_name`, `nif`, `address`\u2026), never both. Sending `customer_id`\ntogether with any other recipient field returns 422\n`RECIPIENT_CUSTOMER_AND_DATA_EXCLUSIVE`, on create and on edit.\n\nAll fields are optional at schema level, but for an ad-hoc recipient (no\ncustomer_id) on non-SIMPLIFIED invoices the API requires legal_name, address and\nnif (or alternative_id); omitting the address returns 422\nRECIPIENT_ADDRESS_REQUIRED.\n",
+    "properties": {
+     "address": {
+      "$ref": "#/$defs/Address"
+     },
+     "alternative_id": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/AlternativeIdentifier"
+       },
+       {
+        "description": "Alternative identifier for foreign customers (mutually exclusive with nif).\nNot accepted on SIMPLIFIED invoices, like `nif`: BeeL. requires a STANDARD\ninvoice when the recipient is identified.\n"
+       }
+      ]
+     },
+     "customer_id": {
+      "description": "UUID of a registered customer. The invoice takes the recipient data stored on\nthat customer. Send it alone: combined with any other recipient field it returns\n422 `RECIPIENT_CUSTOMER_AND_DATA_EXCLUSIVE`. To change the recipient's data, edit\nthe customer or send the data inline without `customer_id`.\n",
+      "format": "uuid",
+      "type": "string"
+     },
+     "email": {
+      "$ref": "#/$defs/Email"
+     },
+     "legal_name": {
+      "description": "Recipient legal name. Required when customer_id is not provided\n(except for SIMPLIFIED invoices where all fields are optional).\n",
+      "maxLength": 255,
+      "minLength": 1,
+      "type": "string"
+     },
+     "nif": {
+      "description": "Spanish Tax ID (9 alphanumeric characters).\nRequired when customer_id is not provided and alternative_id is absent.\nNot accepted on SIMPLIFIED invoices: BeeL. requires a STANDARD invoice when the\nrecipient is identified.\n",
+      "maxLength": 9,
+      "minLength": 9,
+      "pattern": "^[A-Za-z0-9]{9}$",
+      "type": "string"
+     },
+     "phone": {
+      "$ref": "#/$defs/PhoneInput"
+     },
+     "trade_name": {
+      "description": "Recipient trade name (optional)",
+      "maxLength": 255,
+      "minLength": 1,
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "body": {
+    "$ref": "#/$defs/CreateSimplifiedExchangeRequest"
+   },
+   "company_id": {
+    "description": "Unique identifier (UUID) of the company the operation acts on \u2014 its identifier, not its NIF. It is the only source of context: the account that owns it is derived from it, and the `BeeL-Active-Company` header plays no part. A company you do not reach answers `403`, and so does a company that does not exist, so the existence of a company in another account is never disclosed.",
+    "format": "uuid",
+    "type": "string"
+   },
+   "idempotency_key": {
+    "description": "Optional idempotency key for this operation. Omit it and one is derived from the request itself, which makes a blind retry safe but also collapses a SECOND, deliberately identical operation into the first for 24 hours. Set it \u2014 to an order id, or anything unique per intended operation \u2014 whenever you mean to create something that may look identical to what you just created.",
+    "maxLength": 255,
+    "pattern": "^[a-zA-Z0-9_-]+$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "company_id",
+   "body"
+  ],
+  "type": "object"
+ },
+ "name": "beel_create_simplified_exchange"
+}

@@ -1,0 +1,173 @@
+{
+ "_meta": {
+  "securitySchemes": [
+   {
+    "scopes": [
+     "openid",
+     "profile",
+     "email"
+    ],
+    "type": "oauth2"
+   }
+  ]
+ },
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "**Executes the task on the real websites** (the search, the price check, the availability lookup, the configurator, the booking flow) and returns what came back. Runs a script you authored against the `get_library` vocabulary, on the live sites, and returns `{ ok, result, logs, error, ms }`. Call `get_library` FIRST \u2014 it gives the exact function names, argument shapes, and return types; this description is the LANGUAGE + how-to (get_library is just the vocabulary).\n\nTHE LANGUAGE \u2014 plain async JavaScript:\n\u2022 `bowmark` is a ready global (no import). Call capabilities off it \u2014 `await bowmark.<capability>.<method>(...)` \u2014 always `await`, they're async.\n\u2022 Individual sites are callable too, at `await bowmark.providers.<provider>.<fn>(...)`. Use one when you specifically want THAT site; otherwise prefer the capability, which fans out across sites and routes around failures.\n\u2022 Real control flow: `await`, `if`, loops, array methods (`map`/`filter`/`sort`/`slice`), and `Promise.all` for fan-out.\n\u2022 `return` a value to get it back (JSON-serialized). `log(...)` for progress lines.\n\u2022 Standard JavaScript built-ins are there (`JSON`, `Math`, `Date`, `RegExp`, `Intl`, `Promise`), plus `URL` and `URLSearchParams` \u2014 use them to resolve a relative link against the page it came from and to build query strings. Nothing else from the Web platform exists: no `fetch`, `setTimeout`, `TextEncoder` or `crypto`.\n\u2022 `bowmark` is the ONLY I/O \u2014 no `fetch`, `process`, filesystem, or `import`/`require`. Write a plain async body, not a wrapping function.\n\u2022 `bowmark.files` keeps a file the run produces (a CSV, an image, a transcript) in the caller's Bowmark account and gives you a link to it: `save({ name, text | base64, contentType? })` \u2192 `{ id, url, expiresAt }` (25 MB from a script), `list()`, `get(id)`, `url(id, { expiresIn })`, `makePublic(id)` \u2192 `{ publicUrl }`, `makePrivate(id)`, `delete(id)`. Return the link rather than inlining the bytes.\n\u2022 Keep scripts small and deterministic \u2014 no infinite loops. Runs in a hard sandbox with CPU + memory + wall-clock limits.\n\n**Your own tool-call budget is tighter than you'd guess, and it decides how many calls fit in one script.** Most MCP clients time a single tool call out at around 55 seconds, and ONE ordinary capability call already spends 30-55 seconds of that fanning out to live sites \u2014 see COMPOSITION below before calling a second capability in the same script.\n\nSENDING IT: pass the script text as `run({ script })` \u2014 `script` is the only argument (there is no `site` argument; the library exposes every capability under `bowmark`). `result` is whatever you returned; `logs` are your `log()` lines in order; on a throw/timeout `ok:false` and `error` is set.\n\nCHECK `status` BEFORE `ok`. It is `ok` | `error` | `partial` | `needs_user`.\n\u2022 `partial` means the script RAN and `result` is real and usable, but some of what it called never answered \u2014 so the result is narrower than what you asked for. `ok` is still `true`; this is not a failure. `incomplete.summary` says what happened in one sentence, `incomplete.failures` names each call that threw and what the site said, and `incomplete.degraded` names each call that answered while reporting its OWN results thin. You MUST say so when you present the result: name what was missed, and do not describe it as complete, exhaustive, or 'all' of anything. A `partial` you report as whole is a wrong answer, not a slightly smaller right one.\n\u2022 Before you conclude a `partial` is final, check `incomplete.failures[].fixable`. `fixable: true` means YOUR ARGUMENT was rejected, not the site \u2014 the error text names what that function actually takes, so re-read it in `get_library`, fix the argument and run again; that recovers the whole answer. For any other failure re-running usually returns the same thing.\n\u2022 `needs_user` means a site needs the USER signed in \u2014 it is NOT a failure and NOT something you can fix by editing the script. `needs` lists the sites; `meta.handoff.url` is a single-use link that expires (`meta.handoff.expiresAt`). Give the user that URL, say which sites it covers, and WAIT. When they tell you they're done, send the SAME script again unchanged. Do NOT retry before then \u2014 it will stop at the same place and cost another run. Do NOT try to log in yourself, ask them for a password, or work around it with a different site.\n\u2022 Logged-in runs need a Bowmark API key on the connection; if you get `needs_user` saying so, tell the user to add one rather than retrying.\n\nONE EXIT IP FOR THE WHOLE SCRIPT: `await bowmark.egress.pin({ ttlMinutes: 120 })` before your first call, and every call the script makes afterwards leaves from ONE address. Reach for it when a site binds a cart, a token or a sign-in to the address that made the request, and the symptom is being logged out or asked to start over between steps. It is not a dedicated IP: the exit is a shared residential peer, `shared: true` says so, and the vendor can still replace it without telling us. **Pin FIRST** \u2014 a site you already called keeps the address it used, and the result says `pinnedAfterCalls: true` when you left it too late. Up to 7 days; anything longer comes back clamped, and the `ttlMinutes` you get back is the one that was granted.\n\nA DEDICATED IP, IF `pin` ISN'T ENOUGH: `pin` is free and shared \u2014 a stranger's device, gone in at most 7 days. `bowmark.egress.lease` is the other product: a static IP nobody else is ever served, ordered for a real term and charged to the account, for a site whose session dies even on a pinned exit. Reach `bowmark.egress.quote({ country })` first \u2014 it returns your own price for that country's real availability, read live; never assume a term or a number. `lease({ country, idempotencyKey })` places the order (`idempotencyKey` is yours to choose, so a retried call cannot buy two); it is STATIC ISP ONLY today, real money, and there is no refund \u2014 confirm with your user before calling it, the way you would before any other purchase. `list()` and `get(id)` read what the account already holds; `use(id)` routes this run's later calls through one specific lease; `release(id)` stops auto-renewal (the IP keeps working for its already-paid term, then goes away for good).\n\nSAVED SECRETS: `savedSecrets` lists every secret the run stored in the user's Bowmark account, each as `{ name, type, viewUrl }`. An API key a key-making function returns is saved there automatically as `<vendor>_api_key`, and later runs that call that vendor use it with nothing to configure. When `savedSecrets` is present, tell the user what was saved and give them each `viewUrl`, where they can view or manage it.\n\n`trace` is the execution trace \u2014 every capability you called and the providers it fanned out to under the hood: `[{ kind:'capability', capability:'flights', method:'search', ms }, { kind:'provider', capability:'flights', provider:'google_flights', fn:'search', results, status, ms }, \u2026]`. The script never visits websites \u2014 it calls capabilities that route to providers, and the trace is the receipt.\n\nCOMPOSITION MEANS PARALLEL, NOT SEQUENTIAL, AND THAT GOES FOR PROVIDER CALLS TOO \u2014 an `await` inside a `for` loop is the single slowest thing you can write here. Measured 2026-09-18 over 147 real runs: a script with one awaits a for-loop body ran a median of 49 seconds against 19 for the rest, and on YouTube transcripts specifically, three fetched one after another took 27.3s where six fetched together took 9.8s. Collect the ids first, then `Promise.all` over them; never walk a list awaiting each item. Default to ONE capability call per script \u2014 most already spend 30-55 seconds of your own ~55-second tool-call budget on their own, so a second call made AFTER the first routinely never returns before your client gives up, and the script errors with nothing to show for either call. If you genuinely need several, run them TOGETHER inside `Promise.all` \u2014 in parallel they cost about what one call costs, not the sum of them \u2014 and never call them one after another. To sweep a date range, call the search per date inside `Promise.all` and sort/filter the merged array (each flight result carries its `date`, so you can tell the runs apart). See the `get_library` examples for the exact shape. If even one call will not fit your budget, narrow the query (fewer dates, a single site instead of a fan-out) or split the work across separate turns \u2014 do not compose more into one script to make it fit. A FAN-OUT OF FIVE THAT LOSES ONE SHOULD STILL HAND BACK FOUR: `Promise.all` rejects the whole thing the moment any leg does, so one refused request turns a finished answer into nothing. Use `Promise.allSettled` and keep the fulfilled legs. That is safe HERE and nowhere else, because Bowmark reports the dropped leg for you \u2014 the runtime counts what your script CALLED at the dispatch point, not what it chose to report, so a swallowed failure still comes back as `status: 'partial'` with the call named in `incomplete`. Say so when you present the result.\n\nSOME capabilities return their rows alongside a `warnings` array \u2014 `{ flights, warnings }`, `{ hotels, warnings }`, `{ cars, warnings }`. Others return a bare array. The signature in `get_library` tells you which; go by it rather than assuming. Where there IS a `warnings` array it names any site dropped from the fan-out, and the rows themselves look identical with or without it. Read it, and pass on anything it says rather than quoting a 'cheapest' that only ranks the sites that happened to answer. Dropping `warnings` from what you return does not hide it \u2014 the run comes back `status: 'partial'` regardless, because the runtime counts what your script CALLED, not what it chose to report.\n\n**`bowmark.delegate` hands a task to a coding agent (Claude Code) in a fresh, throwaway Linux machine** \u2014 for work that needs a real computer: write and run code, work in a git repo, install packages, process files. It is billed to the account for machine time and model tokens, under `maxCostUsd` (default $5), so tell your user it is running and that it costs money. `start({ prompt, env?, repo? })` returns `id` at once; pass any token the task needs in `env`, never in the prompt. In **later runs** call `status(id, { waitMs: 60000 })` until it is `idle`, then read `result`, `files` and `diff`, and `stop(id)`. `send(id, message)` continues the same conversation. It is not for reading a website \u2014 use the library or `browser_agent` for that. `get_library({ query: \"coding agent\" })` has full types and examples.\n\n**`bowmark.browser_agent` is a one-shot live browser for ONE task on a site nothing in the library covers** (a lookup came back empty, or a function failed on it). It is billed per turn to the account, and it is not a watcher: it cannot poll on a schedule or run unattended, so a standing watch or daily job is not a fit \u2014 say so. When it fits and your user asked you to get the thing done, `start({ task })`; it returns `id` and `watchUrl` at once, and in the same reply tell them it is running, that it costs money, and give them `watchUrl`. A login only they hold does not stop it \u2014 they sign in themselves on the live browser through that link. If you hold off for any reason, still NAME it in your reply with its cost \u2014 never end on a manual workaround without mentioning it. In **later runs** call `status(id, { waitMs: 60000 })`. When status is `needs_input`, relay `question` to your user and `send(id, their_answer)`. When `idle`, read `result` and `stop(id)`. **Always `stop` a session when done** \u2014 idle browsers keep spending money. Your account holds max 3 concurrent sessions. One task = one goal: never bundle multiple queries into one task or the agent silently reuses results. Start separate sessions for each. A NORMAL task takes 1-4 poll cycles to reach `idle` \u2014 roughly 1-3 minutes total, not one. Each poll's `steps` shows the agent's current activity, and the SAME step name on back-to-back polls (or a run of DIFFERENT step names) is ordinary mid-task activity, not a stall \u2014 do not `stop` a run that is still inside that window just because progress looks repetitive. `get_library({ query: \"browser agent\" })` has full types and examples.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "script": {
+    "description": "The JavaScript script body to execute (async, against the `bowmark` global). e.g. `const { flights, warnings } = await bowmark.flights.search({from:'SFO',to:'JFK',depart:'2026-09-01'}); return { best: flights.sort((a,b)=>a.price-b.price)[0], warnings };`",
+    "type": "string"
+   }
+  },
+  "required": [
+   "script"
+  ],
+  "type": "object"
+ },
+ "name": "run",
+ "outputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "emptyHanded": {},
+   "error": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "incomplete": {},
+   "logs": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "meta": {},
+   "ms": {
+    "type": "number"
+   },
+   "needs": {
+    "items": {},
+    "type": "array"
+   },
+   "notice": {},
+   "ok": {
+    "type": "boolean"
+   },
+   "result": {},
+   "runId": {
+    "format": "uuid",
+    "type": "string"
+   },
+   "savedFiles": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "bytes": {
+       "type": "number"
+      },
+      "contentType": {
+       "type": "string"
+      },
+      "expiresAt": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "url": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "id",
+      "name",
+      "contentType",
+      "bytes",
+      "url",
+      "expiresAt"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "savedSecrets": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "type": {
+       "type": "string"
+      },
+      "viewUrl": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "type",
+      "viewUrl"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "secretNeeds": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "expiredAt": {
+       "type": "string"
+      },
+      "reason": {
+       "enum": [
+        "expired",
+        "pending",
+        "unavailable"
+       ],
+       "type": "string"
+      },
+      "secret": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "secret",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "status": {
+    "enum": [
+     "ok",
+     "error",
+     "partial",
+     "needs_user"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "ok"
+  ],
+  "type": "object"
+ },
+ "title": "Do the task on the live websites and return the result"
+}

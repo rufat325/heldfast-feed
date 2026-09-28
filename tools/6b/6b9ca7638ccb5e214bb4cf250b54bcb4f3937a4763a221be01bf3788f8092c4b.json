@@ -1,0 +1,184 @@
+{
+ "annotations": {
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false
+ },
+ "description": "Run SQL across in-memory dataframes. Dataframes auto-populate when find_* tools spill (named `df_<uuid>`) \u2014 the dataframe name appears inline on every find_* response that spilled (`result.dataframe.tableName`), so the typical flow is find_* \u2192 read the name \u2192 query here. Use brapi_dataframe_describe to inspect schema and provenance for a known name. SELECT only \u2014 writes/DDL/COPY/PRAGMA/ATTACH/file-reads are rejected. Use SQL as the paging idiom: `LIMIT/OFFSET` to walk results, projection to trim columns, aggregation to summarize. Use `registerAs` to chain \u2014 the result lands as a new dataframe.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "preview": {
+    "description": "Cap the number of rows returned in this response (1\u20131000). When omitted, the deployment-wide response cap applies. Lower this with `registerAs` when you only need a sample to verify the query.",
+    "exclusiveMinimum": 0,
+    "maximum": 1000,
+    "type": "integer"
+   },
+   "registerAs": {
+    "description": "Persist the result as a new dataframe under this name. The response still returns at most `preview` rows; the full result remains queryable as a new dataframe. Conflicts with an existing dataframe name fail \u2014 drop first via brapi_dataframe_drop. Identifier rules: letters, digits, and underscores; must start with a letter or underscore; max 63 characters.",
+    "pattern": "^[A-Za-z_][A-Za-z0-9_]{0,62}$",
+    "type": "string"
+   },
+   "rowLimit": {
+    "description": "Hard cap on rows materialized into the response, bounded by the deployment-wide response cap. For larger result sets, use `registerAs` to keep the full result queryable instead of raising this.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "sql": {
+    "description": "SELECT statement against dataframes. Single statement only \u2014 writes, DDL, file reads, and exports are rejected. Use brapi_dataframe_describe to discover available dataframes. SQL is the primary paging idiom: use `LIMIT/OFFSET` to walk a large dataframe, projection to trim columns, and aggregation (`COUNT`, `GROUP BY`, `AVG`) to summarize without materializing every row.",
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "sql"
+  ],
+  "type": "object"
+ },
+ "name": "brapi_dataframe_query",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "rowCount",
+     "columns",
+     "rows"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cap": {
+    "description": "Row ceiling that bound the response (the smaller of preview and rowLimit).",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "columns": {
+    "description": "Column metadata in projection order \u2014 name and SQL type. Use this to write follow-up queries without round-tripping through brapi_dataframe_describe.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One column descriptor \u2014 name and SQL/DuckDB type.",
+     "properties": {
+      "name": {
+       "description": "Column name in projection order.",
+       "type": "string"
+      },
+      "type": {
+       "description": "SQL/DuckDB column type (e.g. VARCHAR, BIGINT, DOUBLE, BOOLEAN, JSON) sourced from DuckDB schema metadata. The same type appears whether or not `registerAs` was supplied \u2014 without it, the handler runs an internal probe to recover authoritative types that would otherwise be lost when DuckDB BigInts serialize to JSON strings.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "type"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "dataframe": {
+    "description": "Name of the dataframe holding the full result, populated when `registerAs` was supplied. Reference this name in follow-up queries.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `sql_rejected`: SQL violated read-only rules (multi-statement, non-SELECT, or disallowed operation). Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "sql_rejected"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Guidance for reaching the rows this response left out.",
+    "type": "string"
+   },
+   "rowCount": {
+    "description": "Total rows the query produced (may exceed `rows.length` when capped).",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "rows": {
+    "description": "Materialized rows, bounded by preview/rowLimit.",
+    "items": {
+     "additionalProperties": {},
+     "description": "One result row. Columns are projected from the SQL SELECT clause; call brapi_dataframe_describe to inspect source dataframe schemas.",
+     "propertyNames": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "shown": {
+    "description": "Rows materialized into `rows`.",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "truncated": {
+    "description": "True when the response carries fewer rows than the query produced.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Brapi Dataframe Query"
+}

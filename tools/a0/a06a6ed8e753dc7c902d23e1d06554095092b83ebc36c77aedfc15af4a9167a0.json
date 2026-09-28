@@ -1,0 +1,178 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "Preferred tool for iterative refinement of a single image \u2014 multi-turn generation and editing via the Interactions API. To refine, pass the returned interaction `id` as `previous_interaction_id` on the next call; do NOT start a new interaction or re-send the image for each tweak. `continue_last: true` chains from this session's most recent interaction without threading the id. If a call times out client-side the generation usually still completes: the image and an `<image>.json` sidecar holding its interaction id land in the output dir, and `continue_last: true` still resumes it \u2014 look there before re-issuing, which bills a second generation. A chained 404 is re-anchored on the prior output and re-issued un-chained (`chain_recovered`); a second 404 means the interaction id was not the cause \u2014 check the model id / files uri. Output is JPEG. Local file inputs are confirmed first: a confirmation prompt where the client supports one; otherwise the first call returns a preview and a confirmToken, and only a repeat call with that token proceeds (see MCP_CONFIRM_MODE).",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "aspect_ratio": {
+    "description": "Exact output aspect ratio. For a plain landscape/portrait/square request, `orientation` is the shorthand; this wins if both are given.",
+    "enum": [
+     "1:1",
+     "2:3",
+     "3:2",
+     "3:4",
+     "4:3",
+     "4:5",
+     "5:4",
+     "9:16",
+     "16:9",
+     "21:9",
+     "1:4",
+     "4:1",
+     "1:8",
+     "8:1"
+    ],
+    "type": "string"
+   },
+   "async": {
+    "description": "Return a job_id immediately instead of the result, so a long generation cannot hit the host tools/call timeout (-32001); poll gemini_get_result. On the hosted connector prefer max_wait_ms \u2014 the executor only lives while a request is open, so async is served there as a bounded wait.",
+    "type": "boolean"
+   },
+   "confirmToken": {
+    "description": "ONLY for the two-step confirmation fallback (a client without MCP elicitation). The confirmToken from this same tool's phase-1 \"confirmation-required\" response, passed back ONLY after the user has seen that preview and explicitly approved it in chat \u2014 never on the first call, never invented, never reused. Call again with the same arguments. Ignored when the client supports elicitation.",
+    "type": "string"
+   },
+   "continue_last": {
+    "description": "Continue from the most recent interaction this server created (convenience for previous_interaction_id; an explicit id wins). Survives a server restart by falling back to the newest <image>.json sidecar in the output dir.",
+    "type": "boolean"
+   },
+   "filename": {
+    "description": "Base filename for the output image (extension stripped; default: slugified input)",
+    "type": "string"
+   },
+   "from_clipboard": {
+    "description": "Use the image currently on the macOS system clipboard as an input (downscaled to JPEG)",
+    "type": "boolean"
+   },
+   "google_search": {
+    "description": "Ground the image in live Google Search results (current events, weather, data)",
+    "type": "boolean"
+   },
+   "idempotency_key": {
+    "description": "Repeat calls with this key return the recorded result (reused: true) instead of billing a new generation. Set it when retrying after a host timeout (-32001).",
+    "minLength": 1,
+    "type": "string"
+   },
+   "image_size": {
+    "description": "Output resolution (512 = 0.5K, Flash-only)",
+    "enum": [
+     "512",
+     "1K",
+     "2K",
+     "4K"
+    ],
+    "type": "string"
+   },
+   "images": {
+    "description": "Paths to reference input images. NEW reference images only (e.g. a style or target photo). When chaining with previous_interaction_id, do NOT re-attach the prior turn's output \u2014 the interaction already contains it, and re-sending it anchors the model against your edit.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "images_base64": {
+    "description": "Reference images. NEW reference images only (e.g. a style or target photo). When chaining with previous_interaction_id, do NOT re-attach the prior turn's output \u2014 the interaction already contains it, and re-sending it anchors the model against your edit. Given as base64 strings or data URIs. Last resort \u2014 about 14k tokens per photo; prefer images_url or images_file_uris. The server uploads each one and reports a file_uri under image_inputs: pass that to images_file_uris next time instead of re-sending the bytes.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "images_file_uris": {
+    "description": "Reference images. NEW reference images only (e.g. a style or target photo). When chaining with previous_interaction_id, do NOT re-attach the prior turn's output \u2014 the interaction already contains it, and re-sending it anchors the model against your edit. Given as Files API references (\"files/<id>\" or the full uri) from gemini_upload_file. Upload once and reuse across calls with no bytes in the conversation; retained ~48h, after which the reference stops resolving.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "images_url": {
+    "description": "Reference images. NEW reference images only (e.g. a style or target photo). When chaining with previous_interaction_id, do NOT re-attach the prior turn's output \u2014 the interaction already contains it, and re-sending it anchors the model against your edit. Given as public https URLs \u2014 the server downloads them, so no image bytes cross the conversation. Preferred over images_base64, which costs ~14k tokens per photo. Max 15MB each, Content-Type image/*.",
+    "items": {
+     "format": "uri",
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "inline": {
+    "description": "Return base64 images inline instead of writing to disk",
+    "type": "boolean"
+   },
+   "input": {
+    "description": "Text prompt or editing instruction",
+    "minLength": 1,
+    "type": "string"
+   },
+   "max_wait_ms": {
+    "description": "Wait up to this many ms in-band, then hand back { job_id, status: \"running\" } to poll with gemini_get_result (e.g. 20000 for multi-image sets). Keeps fast results inline and slow ones off the host timeout (-32001). Ignored when async is set.",
+    "exclusiveMinimum": 0,
+    "maximum": 600000,
+    "type": "integer"
+   },
+   "model": {
+    "description": "Model id override (default: server default; see gemini_list_models). gemini-3.1-flash-image (Nano Banana 2, the default) is the generalist: fast, 4K, reliable text, strong multi-reference consistency. gemini-3-pro-image (Pro) is for the hardest work \u2014 best world knowledge, brand precision. gemini-3.1-flash-lite-image (Lite) is cheapest: 1K only, no search grounding.",
+    "type": "string"
+   },
+   "orientation": {
+    "description": "Output shape in plain terms: landscape (16:9), portrait (9:16) or square (1:1). For any other proportion \u2014 3:2, 4:3, 4:5, 21:9 \u2014 use aspect_ratio, which wins if both are given.",
+    "enum": [
+     "landscape",
+     "portrait",
+     "square"
+    ],
+    "type": "string"
+   },
+   "output_dir": {
+    "description": "Directory to write images to (default: $GEMINI_OUTPUT_DIR or cwd)",
+    "type": "string"
+   },
+   "previous_interaction_id": {
+    "description": "ID from a prior gemini_interact call \u2014 continues that multi-turn conversation",
+    "type": "string"
+   },
+   "search_types": {
+    "description": "Grounding search types (implies google_search). image_search (gemini-3.1-flash-image only) uses Google Image Search results as visual references; per Google ToS the returned grounding.search_suggestions HTML must then be displayed to the user. Cannot depict real people from web images.",
+    "items": {
+     "enum": [
+      "web_search",
+      "image_search"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "thinking_level": {
+    "description": "Reasoning depth; higher can help complex/structural edits",
+    "enum": [
+     "minimal",
+     "high"
+    ],
+    "type": "string"
+   },
+   "timeout_ms": {
+    "description": "Upstream timeout in ms for this call (default $GEMINI_TIMEOUT_MS, else 60000 \u2014 120000 at 4K, which runs past 60s)",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "video_path": {
+    "description": "Path to a local video file \u2014 uploaded to the Gemini Files API (~48h retention, 2 GB max) and used as the video reference. Alternative to video_url.",
+    "type": "string"
+   },
+   "video_url": {
+    "description": "Public YouTube URL (or a previously uploaded Files API uri) as a video reference (video\u2192image; use a Flash model e.g. gemini-3.1-flash-image)",
+    "format": "uri",
+    "type": "string"
+   }
+  },
+  "required": [
+   "input"
+  ],
+  "type": "object"
+ },
+ "name": "gemini_interact"
+}

@@ -1,0 +1,358 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Patch Company Customer"
+ },
+ "description": "Updates only the fields present in the body, leaving every other field of the customer as it\nis.\n\n- **Null vs omitted:** a field sent as `null` is cleared, which is different from omitting\n  it (see `PatchCustomerRequest`).\n- **AEAT census:** the customer's Spanish tax identifier is only checked against the AEAT\n  census when the request changes the `nif` or the `legal_name`. Editing anything else \u2014\n  phone, notes, address, billing emails \u2014 never asks the census, so a customer stored long\n  ago stays editable even if its NIF is no longer listed.\n  For a **legal entity** the census checks the CIF only and its `legal_name` is not\n  verified, so the name never causes the rejection; only a **natural person**'s NIF is\n  crossed with the name.\n  Duplicate and format checks run on every update.\n- **Only update verb:** this is the canonical way to edit a customer. There is no `PUT` of\n  full replacement under the company, which would clear the fields you omit.\n\nEndpoint: PATCH /v1/companies/{company_id}/customers/{customer_id}",
+ "inputSchema": {
+  "$defs": {
+   "Address": {
+    "additionalProperties": false,
+    "description": "Address you send when you create or update a company, a customer or an onboarding.\n\nAddresses you read back are described by their own schema.\n",
+    "properties": {
+     "city": {
+      "description": "City or town - Latin characters only",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     },
+     "country": {
+      "description": "Country of the address, as its ISO 3166-1 alpha-2 code (`GB`) or its official name\nin Spanish, English or Catalan (`Reino Unido`, `United Kingdom`, `Regne Unit`;\ncase and accents are ignored). Anything else, such as `UK`, is rejected with\n`422 COUNTRY_CODE_REQUIRED`: send `country_code` instead. If it names a different\ncountry than `country_code`, `422 COUNTRY_CODE_MISMATCH` (`Espa\u00f1a` alone yields to\na foreign `country_code`: it was the old default). What is stored and\nreturned is always the Spanish name derived from the resulting code, never the\ntext sent. With neither field present, the address is Spanish (`Espa\u00f1a`).\n",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     },
+     "country_code": {
+      "description": "ISO 3166-1 alpha-2 country code: the canonical field that decides the country of\nthe address. It must be a real country code (`GB`, not `UK`); otherwise\n`422 COUNTRY_CODE_REQUIRED`. When it is omitted, the code comes from `country`\n(see there). With neither field present, the address is stored as `ES`.\n",
+      "maxLength": 2,
+      "minLength": 2,
+      "pattern": "^[A-Z]{2}$",
+      "type": "string"
+     },
+     "door": {
+      "description": "Door or apartment",
+      "maxLength": 10,
+      "type": "string"
+     },
+     "floor": {
+      "description": "Floor or level",
+      "maxLength": 10,
+      "type": "string"
+     },
+     "number": {
+      "description": "Street number. Optional: omit it when the address has none, or when `street` already\ncarries the address in full.\n",
+      "maxLength": 20,
+      "minLength": 1,
+      "type": "string"
+     },
+     "postal_code": {
+      "description": "Postal code (5 digits for Spain, free format for other countries)",
+      "maxLength": 20,
+      "minLength": 1,
+      "type": "string"
+     },
+     "province": {
+      "description": "Province or state - Latin characters only",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     },
+     "street": {
+      "description": "Full address (street, number, floor, etc.) - Latin characters only",
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "street",
+     "postal_code",
+     "city",
+     "province"
+    ],
+    "type": "object"
+   },
+   "AlternativeIdentifier": {
+    "description": "Alternative identifier for customers without Spanish Tax ID.\n\n### VeriFactu rules (checked when you send it, `422` on violation)\n- `country_code` is required, except for `PASSPORT` (03) and `NOT_REGISTERED` (07), the two\n  types AEAT accepts with `ES`: omitted, `ES` applies. Missing for any other type, the\n  identifier is rejected with `ALTERNATIVE_ID_COUNTRY_REQUIRED`, and `error.details` names\n  the field where it was sent: `alternative_id.country_code` on a customer,\n  `recipient.alternative_id.country_code` on an invoice recipient. Same code in both.\n- If `country_code = ES`, then `type` **must** be `PASSPORT` (03) or `NOT_REGISTERED` (07)\n  (`ALTERNATIVE_ID_SPAIN_INVALID_TYPE`).\n- If `type = NOT_REGISTERED` (07), then `country_code` **must** be `ES`\n  (`ALTERNATIVE_ID_REQUIRES_SPAIN`), and `number` **must** be a Spanish DNI or NIE: a\n  Spanish company is always registered (`RECIPIENT_UNREGISTERED_ID_MUST_BE_DNI_OR_NIE`).\n- If `type = NIF_IVA` (02), `country_code` **must** be an EU member state other than Spain\n  (`ALTERNATIVE_ID_VAT_REQUIRES_EU_COUNTRY`), and `number` **must** have that country's\n  EU VAT number structure as AEAT defines it: the country prefix (`EL` for Greece) followed\n  by the national number, e.g. `FR40303265045`, `DE123456789`, `EL094014201`\n  (`ALTERNATIVE_ID_VAT_INVALID_FORMAT`). Lowercase letters are accepted and stored in\n  uppercase. A customer from outside the EU is identified with another type, such as\n  `OTHER_DOCUMENT` or `COUNTRY_ID`.\n\nA `number` that is blank once trimmed is rejected with `ALTERNATIVE_ID_INVALID`.\n\nWell-formed is not the same as registered: an EU VAT number that is not in the VIES\ncensus is still rejected by VeriFactu after the invoice is issued.\n\nAn identifier returned in a response is the one stored. A customer saved before a rule\nexisted keeps its identifier and can still be read; issuing an invoice to it with an\nidentifier that breaks these rules is rejected with the same code, before a number is used.\n\n### Matrix of allowed combinations\n| `type`                 | `country_code = ES` | `country_code \u2260 ES` |\n|------------------------|:-------------------:|:-------------------:|\n| `NIF_IVA` (02)         | \u2717                   | EU member states only |\n| `PASSPORT` (03)        | \u2713                   | \u2713                   |\n| `COUNTRY_ID` (04)      | \u2717                   | \u2713                   |\n| `RESIDENCE_CERTIFICATE` (05) | \u2717             | \u2713                   |\n| `OTHER_DOCUMENT` (06)  | \u2717                   | \u2713                   |\n| `NOT_REGISTERED` (07)  | \u2713                   | \u2717                   |\n",
+    "properties": {
+     "country_code": {
+      "description": "ISO 3166-1 alpha-2 code of the country that issued the document. Required except for\n`PASSPORT` and `NOT_REGISTERED`, where omitting it means `ES`. Constrains the allowed\n`type` values; see the VeriFactu rules on the parent schema.\n",
+      "maxLength": 2,
+      "minLength": 2,
+      "pattern": "^[A-Z]{2}$",
+      "type": "string"
+     },
+     "number": {
+      "description": "Identifier number. For `NIF_IVA`, the full EU VAT number with its country prefix\n(e.g. `FR40303265045`); see the VeriFactu rules on the parent schema.\n",
+      "maxLength": 20,
+      "minLength": 1,
+      "type": "string"
+     },
+     "type": {
+      "description": "Identifier type. Use descriptive names:\n- **NIF_IVA**: EU VAT number (intra-community) \u2014 *only for an EU member state other than Spain, with that country's VAT number structure*\n- **PASSPORT**: Passport \u2014 *allowed for any country*\n- **COUNTRY_ID**: Country of residence ID \u2014 *not allowed when `country_code = ES`*\n- **RESIDENCE_CERTIFICATE**: Residence certificate \u2014 *not allowed when `country_code = ES`*\n- **OTHER_DOCUMENT**: Other supporting document \u2014 *not allowed when `country_code = ES`*\n- **NOT_REGISTERED**: Not registered in AEAT \u2014 *requires `country_code = ES`*\n\n**\u26a0\ufe0f DEPRECATED numeric codes** (will be removed in v2):\n02, 03, 04, 05, 06, 07 \u2014 use the descriptive names above instead.\n",
+      "enum": [
+       "NIF_IVA",
+       "PASSPORT",
+       "COUNTRY_ID",
+       "RESIDENCE_CERTIFICATE",
+       "OTHER_DOCUMENT",
+       "NOT_REGISTERED",
+       "02",
+       "03",
+       "04",
+       "05",
+       "06",
+       "07"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "type",
+     "number"
+    ],
+    "type": [
+     "object",
+     "null"
+    ]
+   },
+   "Email": {
+    "description": "Email address (minimum valid email is 5 chars, e.g. a@b.co)",
+    "format": "email",
+    "maxLength": 255,
+    "minLength": 5,
+    "type": "string"
+   },
+   "IBAN": {
+    "description": "IBAN (International Bank Account Number).\nRequired when payment method is BANK_TRANSFER.\n",
+    "maxLength": 34,
+    "minLength": 15,
+    "pattern": "^[A-Z]{2}\\d{2}[A-Z0-9]{1,30}$",
+    "type": "string"
+   },
+   "NIF": {
+    "description": "Spanish Tax ID (9 characters, uppercase only). Structural validation:\n- DNI: 8 digits + 1 letter (e.g., 12345678A)\n- NIE: X/Y/Z + 7 digits + 1 letter (e.g., X1234567A)\n- CIF: Organization letter + 7 digits + 1 control digit/letter (e.g., B12345674)\n",
+    "maxLength": 9,
+    "minLength": 9,
+    "pattern": "^(\\d{8}[A-Z]|[ABCDEFGHJKLMNPQRSUVW]\\d{7}[A-Z0-9]|[XYZ]\\d{7}[A-Z])$",
+    "type": "string"
+   },
+   "PatchCustomerRequest": {
+    "additionalProperties": false,
+    "description": "Partial update of a customer (RFC 5789). Only the fields present in the\nbody are touched:\n\n- **field omitted** \u2192 the current value is kept;\n- **field sent with a value** \u2192 replaced;\n- **field sent as `null`** \u2192 cleared (only where documented as nullable\n  below).\n\nThe resulting customer goes through the same validation as `PUT`\n(AEAT census check for Spanish NIFs, duplicate identifier check\nexcluding this customer, field formats). The census check matches\n`legal_name` only for individuals; for a company the name is\n**not verified** and only the CIF decides.\n",
+    "properties": {
+     "active": {
+      "description": "Whether the customer is active or inactive.",
+      "type": "boolean"
+     },
+     "address": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/Address"
+       }
+      ],
+      "description": "Full address. Replaced as a whole (the address itself is not\npatched field by field) and cannot be cleared.\n"
+     },
+     "alternative_id": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/AlternativeIdentifier"
+       }
+      ],
+      "description": "New alternative identifier (non-Spanish customers). Mutually\nexclusive with `nif`. Omit to keep the current identifier.\n"
+     },
+     "billing_emails": {
+      "description": "Addresses that receive the customer's invoice emails. When the send request names no\n`recipients` and the invoice has no `email_config` recipients, invoices go to these\naddresses, and not to `email`; `email` is used only when `billing_emails` is empty.\nReplaced as a whole; send `null` or `[]` to remove them all.\n",
+      "items": {
+       "$ref": "#/$defs/Email"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "contact_person": {
+      "description": "Contact person name. Send `null` to clear it.",
+      "maxLength": 200,
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "email": {
+      "description": "Main contact address. Invoice emails go here only when the customer has no\n`billing_emails`. Send `null` to clear it.\n",
+      "format": "email",
+      "maxLength": 255,
+      "minLength": 5,
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "general_discount": {
+      "description": "General discount percentage. Send `null` to clear it.",
+      "maximum": 100,
+      "minimum": 0,
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "legal_name": {
+      "description": "Customer legal name. Cannot be cleared. Matched against the AEAT census only\nfor individuals; for a company the name is **not verified**.\n",
+      "maxLength": 120,
+      "minLength": 1,
+      "type": "string"
+     },
+     "nif": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/NIF"
+       }
+      ],
+      "description": "New Spanish Tax ID. Mutually exclusive with `alternative_id`.\nOmit to keep the current identifier; it cannot be cleared.\n"
+     },
+     "notes": {
+      "description": "Additional notes. Send `null` to clear it.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "phone": {
+      "anyOf": [
+       {
+        "allOf": [
+         {
+          "$ref": "#/$defs/PhoneInput"
+         }
+        ],
+        "description": "Phone number. Send `null` to clear it."
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "preferred_payment_method": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/PaymentInfo"
+       }
+      ],
+      "description": "Default payment method. Replaced as a whole; omit it to keep the\ncurrent one.\n"
+     },
+     "trade_name": {
+      "description": "Customer trade name. Send `null` to clear it.",
+      "maxLength": 120,
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "website": {
+      "description": "Website URL. Send `null` to clear it.",
+      "maxLength": 255,
+      "pattern": "^(https?://.+|)$",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   },
+   "PaymentInfo": {
+    "additionalProperties": false,
+    "properties": {
+     "iban": {
+      "$ref": "#/$defs/IBAN"
+     },
+     "method": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/PaymentMethod"
+       }
+      ],
+      "description": "Preferred payment method. Omitted, `BANK_TRANSFER` applies.\nIf NONE is selected, no payment information will be shown on the invoice.\n"
+     },
+     "payment_term_days": {
+      "description": "Payment term in days. When marking an invoice as paid, every field of this object\nthat travels replaces the stored one and every omitted field keeps its current value.\n",
+      "maximum": 365,
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "swift": {
+      "$ref": "#/$defs/SWIFT"
+     }
+    },
+    "type": "object"
+   },
+   "PaymentMethod": {
+    "description": "Payment method shown on invoices and recurring invoices.\n\n- `NONE`: no payment information is shown.\n- `BANK_TRANSFER`: bank transfer to the IBAN of the payment details; the only method\n  that requires an IBAN.\n- `CARD`: card payment.\n- `CASH`: cash payment.\n- `CHECK`: payment by cheque.\n- `DIRECT_DEBIT`: direct debit from the customer's bank account.\n- `BIZUM`: payment through Bizum.\n- `OTHER`: any other method.\n",
+    "enum": [
+     "NONE",
+     "BANK_TRANSFER",
+     "CARD",
+     "CASH",
+     "CHECK",
+     "DIRECT_DEBIT",
+     "BIZUM",
+     "OTHER"
+    ],
+    "type": "string"
+   },
+   "PhoneInput": {
+    "description": "A phone number as this API accepts it: 9 to 20 characters, and only digits, spaces,\ndashes, parentheses and an optional leading `+`. Every request that takes a phone number\nuses this schema.\n\nIt is `Phone` plus the rules enforced on input. A value this schema accepts always\nsatisfies `Phone`, so anything you send here is something a response can return.\n",
+    "maxLength": 20,
+    "minLength": 9,
+    "pattern": "^[+]?[0-9\\s\\-\\(\\)]+$",
+    "type": "string"
+   },
+   "SWIFT": {
+    "description": "SWIFT/BIC code",
+    "maxLength": 11,
+    "minLength": 8,
+    "pattern": "^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$",
+    "type": "string"
+   },
+   "UUID": {
+    "description": "Universally Unique Identifier (UUID v4)",
+    "format": "uuid",
+    "type": "string"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "body": {
+    "$ref": "#/$defs/PatchCustomerRequest"
+   },
+   "company_id": {
+    "description": "Unique identifier (UUID) of the company the operation acts on \u2014 its identifier, not its NIF. It is the only source of context: the account that owns it is derived from it, and the `BeeL-Active-Company` header plays no part. A company you do not reach answers `403`, and so does a company that does not exist, so the existence of a company in another account is never disclosed.",
+    "format": "uuid",
+    "type": "string"
+   },
+   "customer_id": {
+    "$ref": "#/$defs/UUID",
+    "description": "Customer ID"
+   }
+  },
+  "required": [
+   "company_id",
+   "customer_id",
+   "body"
+  ],
+  "type": "object"
+ },
+ "name": "beel_patch_customer"
+}

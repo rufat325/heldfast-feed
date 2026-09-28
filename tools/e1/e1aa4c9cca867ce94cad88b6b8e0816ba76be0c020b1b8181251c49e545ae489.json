@@ -1,0 +1,154 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "Generate a short video (~10s) via the Gemini omni model: text\u2192video, image\u2192video / reference\u2192video (supply reference image[s]), interpolate between two stills (pass first frame then last frame as images), or continue a prior video (task: \"edit\" or \"extend\" + previous_interaction_id / continue_last; extensions add ~3-10s each, to ~40s total). Cost scales with `resolution` \u2014 draft at 360p, keep at 1080p/4k. Output is written to disk as MP4 (video has no inline MCP block). Video runs long \u2014 give it a `max_wait_ms` budget (or `async: true` + gemini_get_result on a local install), or raise `timeout_ms`. Needs a funded account. Local file inputs are confirmed first: a confirmation prompt where the client supports one; otherwise the first call returns a preview and a confirmToken, and only a repeat call with that token proceeds (see MCP_CONFIRM_MODE).",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "aspect_ratio": {
+    "description": "Exact output aspect ratio (omni: 16:9 or 9:16). `orientation` is the plain-language shorthand; this wins if both are given.",
+    "enum": [
+     "16:9",
+     "9:16"
+    ],
+    "type": "string"
+   },
+   "async": {
+    "description": "Return a job_id immediately instead of the result, so a long generation cannot hit the host tools/call timeout (-32001); poll gemini_get_result. On the hosted connector prefer max_wait_ms \u2014 the executor only lives while a request is open, so async is served there as a bounded wait.",
+    "type": "boolean"
+   },
+   "background": {
+    "description": "Run the generation on Google's side and poll it, so a killed job can be recovered by gemini_get_result. Trade-off: retrieving a backgrounded interaction is unreliable today (some become permanently unreadable), so the default is off",
+    "type": "boolean"
+   },
+   "confirmToken": {
+    "description": "ONLY for the two-step confirmation fallback (a client without MCP elicitation). The confirmToken from this same tool's phase-1 \"confirmation-required\" response, passed back ONLY after the user has seen that preview and explicitly approved it in chat \u2014 never on the first call, never invented, never reused. Call again with the same arguments. Ignored when the client supports elicitation.",
+    "type": "string"
+   },
+   "continue_last": {
+    "description": "Continue from the most recent video interaction this server created (explicit previous_interaction_id wins)",
+    "type": "boolean"
+   },
+   "delivery": {
+    "description": "How the clip comes back: \"uri\" (default \u2014 a Files API link the server downloads, no size ceiling) or \"inline\" (base64, capped ~4MB)",
+    "enum": [
+     "inline",
+     "uri"
+    ],
+    "type": "string"
+   },
+   "filename": {
+    "description": "Base filename for the output video (extension stripped; default: slugified prompt)",
+    "type": "string"
+   },
+   "from_clipboard": {
+    "description": "Use the image currently on the macOS clipboard as a reference",
+    "type": "boolean"
+   },
+   "idempotency_key": {
+    "description": "Repeat calls with this key return the recorded result (reused: true) instead of billing a new generation. Set it when retrying after a host timeout (-32001).",
+    "minLength": 1,
+    "type": "string"
+   },
+   "images": {
+    "description": "Reference image path(s) for image_to_video / reference_to_video",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "images_base64": {
+    "description": "Reference images as base64 strings or data URIs. Last resort \u2014 about 14k tokens per photo; prefer images_url or images_file_uris. The server uploads each one and reports a file_uri under image_inputs: pass that to images_file_uris next time instead of re-sending the bytes.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "images_file_uris": {
+    "description": "Reference stills as Files API references (\"files/<id>\" or the full uri) from gemini_upload_file. Upload once and reuse across calls with no bytes in the conversation; retained ~48h, after which the reference stops resolving.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "images_url": {
+    "description": "Reference stills as public https URLs \u2014 the server downloads them, so no image bytes cross the conversation. Preferred over images_base64, which costs ~14k tokens per photo. Max 15MB each, Content-Type image/*.",
+    "items": {
+     "format": "uri",
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "max_wait_ms": {
+    "description": "Wait up to this many ms in-band, then hand back { job_id, status: \"running\" } to poll with gemini_get_result (e.g. 20000 for multi-image sets). Keeps fast results inline and slow ones off the host timeout (-32001). Ignored when async is set.",
+    "exclusiveMinimum": 0,
+    "maximum": 600000,
+    "type": "integer"
+   },
+   "model": {
+    "description": "Model id override (default: gemini-omni-1.1-flash)",
+    "pattern": "^[\\w.-]+$",
+    "type": "string"
+   },
+   "orientation": {
+    "description": "Output shape in plain terms: landscape (16:9), portrait (9:16) or square (1:1). For any other proportion \u2014 3:2, 4:3, 4:5, 21:9 \u2014 use aspect_ratio, which wins if both are given.",
+    "enum": [
+     "landscape",
+     "portrait",
+     "square"
+    ],
+    "type": "string"
+   },
+   "output_dir": {
+    "description": "Directory to write the video to (default: $GEMINI_OUTPUT_DIR or cwd)",
+    "type": "string"
+   },
+   "previous_interaction_id": {
+    "description": "Interaction id to edit/continue (with task: \"edit\")",
+    "type": "string"
+   },
+   "prompt": {
+    "description": "Description of the video to generate (or the edit instruction when task=edit)",
+    "minLength": 1,
+    "type": "string"
+   },
+   "resolution": {
+    "description": "Output resolution (default 720p). Video is billed per output token, so 360p costs roughly a third of 720p \u2014 use it for drafts",
+    "enum": [
+     "360p",
+     "720p",
+     "1080p",
+     "4k"
+    ],
+    "type": "string"
+   },
+   "task": {
+    "description": "text_to_video (default), image_to_video / reference_to_video (need image input), or edit / extend (need previous_interaction_id)",
+    "enum": [
+     "text_to_video",
+     "image_to_video",
+     "reference_to_video",
+     "edit",
+     "extend"
+    ],
+    "type": "string"
+   },
+   "timeout_ms": {
+    "description": "Upstream timeout in ms for this call (default $GEMINI_TIMEOUT_MS, else 60000 \u2014 120000 at 4K, which runs past 60s)",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "prompt"
+  ],
+  "type": "object"
+ },
+ "name": "gemini_video_generate"
+}

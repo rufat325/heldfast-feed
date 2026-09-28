@@ -1,0 +1,62 @@
+{
+ "description": "Fetch structured event trace inside a simulator session. Primary debugging tool for *why is my handler not seeing what I expect* \u2014 transcripts not arriving, photo capture failing, toggle changes not propagating, speak getting cut off, connection dropping, display not rendering. Events are grouped into six chips (errors / voice / camera / display / lifecycle / custom) \u2014 one chip per event, with `errors` absorbing every severity\u2265warn row regardless of modality. To see e.g. voice activity plus voice errors, fetch the chips separately and union them. USE to diagnose which capability primitive is misbehaving. DON'T USE for static configuration checking (use validateIntegration) or for live session phase (use getSimulatorStatus). **Scope:** captures the simulator's WebSocket relay \u2014 transport + SDK primitives (audio, camera, speak, toggles, voice triggers, runtime events). Customer-side direct-HTTP calls (BYOK Anthropic / OpenAI / Gemini / etc.) traverse api.<provider>.com from the customer's app, NOT the simulator relay \u2014 invisible by default. **Surface BYOK calls in the event log by wrapping them in `glasses.observability.aiCall(label) { ... }`** \u2014 the wrapper emits `ai_call_start` and `ai_call_end` frames with timing + success/error metadata. These land under the 'custom' chip \u2014 the dedicated 'ai' chip was retired 2026-07-25 after never carrying an event in production. Without the wrapper, BYOK failures show as silent gaps (e.g. capture_photo + photo_result + speak with 3 unexplained seconds between) \u2014 those failures still need logcat / OSLog. Use the wrapper for any AI call that's part of your debug story; leave it off for true fire-and-forget background calls. **Live watch:** pass `follow: true` to block until new events land instead of returning an empty snapshot, and carry the returned `cursor` between calls \u2014 loop the pair to tail the log in real time (e.g. to follow a multi-turn AI conversation the developer built into the app, reacting to each `speak` as it happens). See getCodeExample('agent_test_loop').",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "collapseRepeats": {
+    "description": "When true (default), consecutive payload-identical events (same layer/severity/type/message/details \u2014 timestamps excluded) collapse into ONE entry carrying `repeat: N` and `lastTimestamp`, so a runaway emitter can't fill the response with one line repeated hundreds of times. `totalEvents` and the summary count RAW events. Pass false for the uncollapsed rows.",
+    "type": "boolean"
+   },
+   "cursor": {
+    "description": "Opaque keyset cursor from a prior getEventLog response. Pass it back to fetch ONLY events newer than the last batch \u2014 no duplicates, no gaps, even for events that share a millisecond timestamp. Omit it to read from the start of the log. The cursor is the agent's bookmark: capture one BEFORE injectTranscript, then watch forward from it so nothing that lands between inject and read is missed.",
+    "type": "string"
+   },
+   "filter": {
+    "description": "Chip to filter the event stream by. 'all' (default) returns every event. 'errors' returns severity\u2265warn events across all modalities. 'voice' / 'camera' / 'display' cover hardware/integration capabilities (severity=info only \u2014 failures land under 'errors'). 'display' covers the native glasses display capability \u2014 `display_show` (a tree was rendered, with node count + root kind), `display_navigate` (focus moved), `display_select` (a node's onClick fired \u2014 driven by injectInput or the sim gesture panel), `display_back`, `display_error`; pair it with getDisplayState to verify display flows. 'voice' includes mic/STT (`stt_transcript`, `stt_partial`), TTS (`speak`, `speak_completed`, `tts_audio_chunk`), AND **Phase 4 assistant runtime events** (`Assistant` lifecycle \u2014 session started/ended, user/assistant spoke, tool called/result, reconnected \u2014 emitted by `glasses.assistant.start(provider) { tool(...) { ... } }`; in the sim, `injectAssistantUtterance` drives a turn). Assistant errors are promoted to 'errors' severity automatically. (The earlier Phase 3 `glasses.conversation.*` runtime was REMOVED \u2014 it does not exist on current Android; do not look for `conversation.*` events.) `ai_*` events from `glasses.observability.aiCall(label) { ... }` land under 'custom' (the dedicated 'ai' chip was retired 2026-07-25 \u2014 it never carried an event in production). Wrap BYOK calls to see start/end + duration in the timeline; without the wrapper those calls are invisible to the relay entirely. 'lifecycle' covers connection / session / pairing / hardware / runtime state. 'custom' is the open-world catch-all for app-emitted event types the platform did not anticipate.",
+    "enum": [
+     "all",
+     "errors",
+     "voice",
+     "camera",
+     "display",
+     "lifecycle",
+     "custom"
+    ],
+    "type": "string"
+   },
+   "follow": {
+    "description": "When true, turns this call into a live watch: if no events are newer than `cursor`, the call BLOCKS until something happens (or `timeoutMs` elapses) instead of returning an empty snapshot. Returns the moment activity lands. Run it in a loop \u2014 capture the returned `cursor`, react to `events`, call again \u2014 to tail the log in real time. This is the optimal way to follow an unfolding flow (e.g. a multi-turn AI conversation in the app): the agent sees whatever happened next without having to guess the event type in advance. The response adds `followed: true`, `timedOut`, and `waitedMs`. A `timedOut: true` result is normal (no activity yet) \u2014 not an error; re-call with the same cursor to keep watching.",
+    "type": "boolean"
+   },
+   "limit": {
+    "minimum": 1,
+    "type": "integer"
+   },
+   "redactBinary": {
+    "type": "boolean"
+   },
+   "responseFormat": {
+    "enum": [
+     "concise",
+     "detailed"
+    ],
+    "type": "string"
+   },
+   "sessionId": {
+    "minLength": 1,
+    "type": "string"
+   },
+   "timeoutMs": {
+    "description": "Max time (ms) a `follow` call blocks waiting for new events. Clamped to [1000, 60000]; default 15000. Ignored unless `follow` is true.",
+    "maximum": 60000,
+    "minimum": 1000,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "sessionId"
+  ],
+  "type": "object"
+ },
+ "name": "getEventLog"
+}

@@ -1,0 +1,150 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "Create a batch of outbound phone calls (a calling campaign) from one from_number to many recipients.\n\nWHEN TO USE:\n- User asks to call a list of people (appointment reminders, follow-ups, re-engagement)\n- Scheduled outbound campaigns \u2014 trigger_timestamp defers the start, call_time_window restricts calling hours\n\nCRITICAL: Every task in the batch is a real, billed phone call to a real person. The MCP host MUST surface the full recipient list to the user and get explicit confirmation before invoking this tool. A mistake here rings N phones, not one.\n\nWORKFLOW:\n1. get_concurrency \u2192 confirm the account has headroom for the batch size\n2. list_phone_numbers/get_phone_number \u2192 confirm from_number has an outbound agent bound\n3. update_retell_llm + publish_agent \u2192 set and publish the campaign prompt\n4. create_batch_call \u2192 schedule or start the batch\n5. list_calls (filter by agent) \u2192 monitor results as calls complete\n\nEXAMPLE:\n{ \"from_number\": \"+14155551234\", \"name\": \"March reminder campaign\", \"tasks\": [{ \"to_number\": \"+14155559876\", \"retell_llm_dynamic_variables\": { \"customer_name\": \"Jane\" } }] }\n\nCOMMON MISTAKES:\n- Passing dynamic variables the prompt does not reference; they are silently dropped (check get_retell_llm first)\n- Forgetting the per-call agent binding: from_number needs an outbound_agents binding (update_phone_number), or each task needs override_agent_id + override_agent_version\n- Using seconds for trigger_timestamp; Retell expects milliseconds\n\nERROR RECOVERY:\n- 401: API key is missing or invalid \u2192 configure_retell_api_key\n- 402: payment required \u2192 add a payment method in the Retell dashboard\n- 422: invalid task shape \u2192 verify every to_number is E.164 and the from_number is registered\n\nRELATED TOOLS:\n- get_concurrency: Check capacity before sizing the batch\n- list_phone_numbers/update_phone_number: Verify or fix the outbound binding on from_number\n- update_retell_llm/publish_agent: Prepare the campaign prompt\n- list_calls/get_call: Track individual call outcomes\n\nRETURNS: batch_call_id, name, from_number, scheduled_timestamp, total_task_count, call_time_window when set, and warnings when the pre-call prompt check finds unmatched dynamic variables or could not run. Use list_calls to track the individual calls afterwards.\nCOST: Each task uses phone minutes from your Retell AI plan.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "call_time_window": {
+    "additionalProperties": false,
+    "description": "Restrict calling to specific hours/days in a timezone (e.g. business hours only). Calls outside the window wait for the next window.",
+    "properties": {
+     "day": {
+      "description": "Days the windows apply to. Omit or pass an empty array to allow every day.",
+      "items": {
+       "enum": [
+        "Monday",
+        "Tuesday",
+        "Wednesday",
+        "Thursday",
+        "Friday",
+        "Saturday",
+        "Sunday"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "timezone": {
+      "description": "IANA timezone for the windows (e.g. \"America/New_York\"). Default: America/Los_Angeles.",
+      "type": "string"
+     },
+     "windows": {
+      "description": "Allowed calling windows as half-open [start, end) intervals in local minutes.",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "end": {
+         "description": "Window end in minutes since local midnight (e.g. 1020 = 17:00; 1440 = 24:00). Must be greater than start \u2014 cross-midnight windows are not allowed.",
+         "maximum": 1440,
+         "minimum": 1,
+         "type": "integer"
+        },
+        "start": {
+         "description": "Window start in minutes since local midnight (e.g. 540 = 09:00).",
+         "maximum": 1439,
+         "minimum": 0,
+         "type": "integer"
+        }
+       },
+       "required": [
+        "start",
+        "end"
+       ],
+       "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "windows"
+    ],
+    "type": "object"
+   },
+   "from_number": {
+    "description": "Caller phone number in E.164 format (e.g. +14155551234). Must be registered in Retell with an outbound agent binding. Use list_phone_numbers to find available numbers.",
+    "type": "string"
+   },
+   "name": {
+    "description": "Batch name for your own reference (e.g. \"March reminder campaign\").",
+    "type": "string"
+   },
+   "reserved_concurrency": {
+    "description": "Concurrency slots to keep free for non-batch calls (e.g. inbound). Check get_concurrency before setting this.",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "tasks": {
+    "description": "Recipients to call \u2014 one task per outbound call. Each needs to_number (E.164) and may carry per-call dynamic variables, metadata, and agent overrides.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "metadata": {
+       "additionalProperties": {},
+       "description": "Custom metadata for this call (CRM IDs, campaign IDs, row numbers). Returned on the call object afterwards.",
+       "type": "object"
+      },
+      "override_agent_id": {
+       "description": "Agent ID to use for this specific call (one-time override; does not rebind the number). If set, also pass override_agent_version for reliable routing.",
+       "type": "string"
+      },
+      "override_agent_version": {
+       "anyOf": [
+        {
+         "minimum": 0,
+         "type": "integer"
+        },
+        {
+         "type": "string"
+        }
+       ],
+       "description": "Agent version for this call: number (0, 1, 2...) or tag (e.g. \"latest\"). Use with override_agent_id."
+      },
+      "retell_llm_dynamic_variables": {
+       "additionalProperties": {},
+       "description": "Per-recipient dynamic variables injected into the prompt template (e.g. { customer_name: 'Jane' }). WARNING: only works if the LLM prompt already contains matching {{variable_name}} placeholders; unmatched variables are silently dropped. Check get_retell_llm first.",
+       "type": "object"
+      },
+      "to_number": {
+       "description": "Recipient phone number in E.164 format (e.g. +14155559876).",
+       "type": "string"
+      }
+     },
+     "required": [
+      "to_number"
+     ],
+     "type": "object"
+    },
+    "maxItems": 1000,
+    "minItems": 1,
+    "type": "array"
+   },
+   "trigger_timestamp": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "string"
+     }
+    ],
+    "description": "When to start the batch. Unix timestamp in milliseconds (number, e.g. 1735689600000) or a parseable date string (e.g. \"2026-01-01\"). Omit to start immediately."
+   }
+  },
+  "required": [
+   "from_number",
+   "tasks"
+  ],
+  "type": "object"
+ },
+ "name": "create_batch_call"
+}

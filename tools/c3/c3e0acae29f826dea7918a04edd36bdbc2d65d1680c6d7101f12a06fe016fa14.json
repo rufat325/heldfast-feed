@@ -1,0 +1,584 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Create Company Corrective Invoice"
+ },
+ "description": "Issues a corrective invoice that amends the invoice in the path. It is a new fiscal\ndocument with its own number, not an edit of the original.\n\n- **`rectification_type`:** `TOTAL` leaves the original `VOIDED` and rectifies what is\n  still invoiced on it: every line of the original and of its live correctives (voided ones\n  do not count), negated. It takes no `lines` \u2014 sending them fails with\n  `422 RECTIFICATIVA_TOTAL_CON_LINEAS`. `PARTIAL` leaves the original `RECTIFIED` and\n  requires the adjustment `lines`.\n- **Never more than was invoiced:** a `PARTIAL` may raise any amount, but may not take the\n  taxable base of any rate (tax, rate and equivalence surcharge; `SUPLIDO` lines by their\n  amount) below zero once the previous correctives are counted. That fails with\n  `422 CORRECTIVE_EXCEEDS_INVOICED_AMOUNT`, and `error.details` (`CorrectiveInvoiceErrorDetails`)\n  carries `tax_group` (for example `IVA 21%`) and `max_reduction`, how much of that rate is\n  left to rectify. A\n  `TOTAL` on an invoice that previous correctives already brought to zero fails with\n  `422 CORRECTIVE_NOTHING_LEFT_TO_RECTIFY`.\n- **Not for the withholding alone:** a `PARTIAL` whose lines leave the taxable base of\n  every rate unchanged and only change the withholding fails with\n  `422 CORRECTIVE_WITHHOLDING_ONLY`. A withholding is not a cause for a corrective: void\n  the invoice and issue a new one without it.\n- **The original's PDF:** unchanged by either type. The corrective has its own PDF; the\n  original keeps the one that was delivered, and its new status is in `status`.\n- **Total of 0:** a corrective whose `total_to_pay` is 0 has nothing to refund or\n  collect, so it is issued as `PAID`, with `payment_date` equal to `issue_date`.\n- **What can be rectified:** an ordinary or simplified invoice in `ISSUED`, `SENT`,\n  `PAID`, `OVERDUE` or `RECTIFIED`. Rectifying a corrective fails with\n  `422 CORRECTIVE_NOT_RECTIFIABLE` \u2014 to fix an erroneous corrective, issue another one\n  against the original invoice.\n- **Repeat rectifications:** several `PARTIAL` correctives are allowed, but a `VOIDED`\n  invoice is no longer rectifiable, so a second `TOTAL` against the same invoice fails\n  with `422 INVOICE_NOT_CORRECTIBLE_IN_CURRENT_STATUS`.\n- **Correcting the recipient's data:** when the invoice recorded its recipient with a wrong\n  name, tax ID or address, send the corrected `recipient` with `rectification_type`\n  `PARTIAL`, `rectification_code` `R4` and no `lines`. The corrective carries the corrected\n  recipient and does not change the amounts: its lines negate what is still invoiced and\n  repeat it, so every rate nets to zero. A different person is not a data correction\n  (`422 CORRECTIVE_RECIPIENT_IS_ANOTHER_PERSON`): correct the invoice in full and issue a new\n  one to the right customer.\n- **Original rejected by the AEAT:** when VeriFactu rejected the original's record and it\n  has not been resubmitted, the original is not in the AEAT's books: fix and resubmit it\n  first. Until then the request fails with `422 CORRECTIVE_ORIGINAL_RECORD_REJECTED`.\n- **Deadline:** four years from when the tax accrued (the original's operation date) or,\n  for a cause of article 80 of the VAT Act, from the `circumstance_date` you declare. Past\n  it the request fails with `422 CORRECTIVE_OUT_OF_TIME`, with `deadline` and\n  `counted_from` in `error.details` (`CorrectiveInvoiceErrorDetails`).\n- **What the reason code requires** (Ley 37/1992, art. 80): `R2` (insolvency) and `R3` (bad\n  debt) need a recipient established in Spain, the Canary Islands, Ceuta or Melilla \u2014an\n  `R2` also accepts a recipient in another EU member state, for insolvency proceedings\n  there\u2014 and fail otherwise with `422 CORRECTIVE_RECIPIENT_NOT_ESTABLISHED`. An `R3` needs\n  at least six months since the original's operation date\n  (`422 CORRECTIVE_BAD_DEBT_TOO_EARLY`, with `earliest_date`; one year when the previous\n  year's turnover exceeded 6,010,121.04 \u20ac, which is the issuer's to apply), and on an operation\n  with a base of 50 \u20ac or less it needs `recipient_is_business`\n  (`422 CORRECTIVE_BAD_DEBT_BASE_TOO_LOW`). The other conditions of each code (claims,\n  guarantees, related parties, filing with the AEAT) are the issuer's to meet.\n- **Fiscal inheritance on a `PARTIAL`:** a line that omits `irpf_rate` or\n  `equivalence_surcharge_rate` takes it from the **original invoice** \u2014 the document\n  being amended \u2014 and never from the company's current tax profile, so a profile that\n  changed after the original was issued does not leak into the credit note. An explicit\n  value always wins, `0` included. The surcharge inherits the *regime* (on/off), not the\n  rate: the rate is re-derived from each corrective line's own VAT (21\u21925.2, 10\u21921.4,\n  5\u21920.62, 4\u21920.5), and an original outside the regime pins the line to `0`. `SUPLIDO`\n  lines are out of it on both sides. When the original is not unambiguous BeeL does not\n  pick for you: different IRPF rates per line fail with\n  `422 CORRECTIVE_ORIGINAL_MIXED_IRPF`, and a surcharge applied on some lines but not\n  others fails with `422 CORRECTIVE_ORIGINAL_MIXED_SURCHARGE`. Declare the figure on every\n  line to get past either \u2014 both only fire when some line actually needs to inherit.\n- **`series_id`:** when omitted, the document is numbered in the company's default\n  corrective series, never in the series of the original: corrective invoices go in a\n  series of their own (RD 1619/2012, art. 6.1.a). If the company has none, it is created\n  on first use (code `R`, or the next free one that cannot repeat another series'\n  numbers). An explicit `series_id` must be a corrective series.\n- **Numbering conflict:** if the number the series would assign is already used by another\n  invoice of the same company, in this series or in another one, the request fails with\n  `400 SERIES_NUMBER_COLLISION` without issuing anything or consuming a number. The series\n  needs review, so contact support.\n\nEndpoint: POST /v1/companies/{company_id}/invoices/{invoice_id}/corrective\n\n\u26a0\ufe0f Read before calling:\n- Fiscal rules, domains corrective, void: beel_rules_list with domain, or resource beel://guardrails/<domain>.\n- How a line states its price, and which field combinations are rejected. (resource: beel://guardrails/invoice-lines)\n- The status names, the proforma lifecycle, and which tool performs each operation. (resource: beel://guardrails/invoice-state-machine)\n- How a series formats numbers, and which series configurations are rejected. (resource: beel://guardrails/series-and-numbering)",
+ "inputSchema": {
+  "$defs": {
+   "Address": {
+    "additionalProperties": false,
+    "description": "Address you send when you create or update a company, a customer or an onboarding.\n\nAddresses you read back are described by their own schema.\n",
+    "properties": {
+     "city": {
+      "description": "City or town - Latin characters only",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     },
+     "country": {
+      "description": "Country of the address, as its ISO 3166-1 alpha-2 code (`GB`) or its official name\nin Spanish, English or Catalan (`Reino Unido`, `United Kingdom`, `Regne Unit`;\ncase and accents are ignored). Anything else, such as `UK`, is rejected with\n`422 COUNTRY_CODE_REQUIRED`: send `country_code` instead. If it names a different\ncountry than `country_code`, `422 COUNTRY_CODE_MISMATCH` (`Espa\u00f1a` alone yields to\na foreign `country_code`: it was the old default). What is stored and\nreturned is always the Spanish name derived from the resulting code, never the\ntext sent. With neither field present, the address is Spanish (`Espa\u00f1a`).\n",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     },
+     "country_code": {
+      "description": "ISO 3166-1 alpha-2 country code: the canonical field that decides the country of\nthe address. It must be a real country code (`GB`, not `UK`); otherwise\n`422 COUNTRY_CODE_REQUIRED`. When it is omitted, the code comes from `country`\n(see there). With neither field present, the address is stored as `ES`.\n",
+      "maxLength": 2,
+      "minLength": 2,
+      "pattern": "^[A-Z]{2}$",
+      "type": "string"
+     },
+     "door": {
+      "description": "Door or apartment",
+      "maxLength": 10,
+      "type": "string"
+     },
+     "floor": {
+      "description": "Floor or level",
+      "maxLength": 10,
+      "type": "string"
+     },
+     "number": {
+      "description": "Street number. Optional: omit it when the address has none, or when `street` already\ncarries the address in full.\n",
+      "maxLength": 20,
+      "minLength": 1,
+      "type": "string"
+     },
+     "postal_code": {
+      "description": "Postal code (5 digits for Spain, free format for other countries)",
+      "maxLength": 20,
+      "minLength": 1,
+      "type": "string"
+     },
+     "province": {
+      "description": "Province or state - Latin characters only",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     },
+     "street": {
+      "description": "Full address (street, number, floor, etc.) - Latin characters only",
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "street",
+     "postal_code",
+     "city",
+     "province"
+    ],
+    "type": "object"
+   },
+   "AlternativeIdentifier": {
+    "description": "Alternative identifier for customers without Spanish Tax ID.\n\n### VeriFactu rules (checked when you send it, `422` on violation)\n- `country_code` is required, except for `PASSPORT` (03) and `NOT_REGISTERED` (07), the two\n  types AEAT accepts with `ES`: omitted, `ES` applies. Missing for any other type, the\n  identifier is rejected with `ALTERNATIVE_ID_COUNTRY_REQUIRED`, and `error.details` names\n  the field where it was sent: `alternative_id.country_code` on a customer,\n  `recipient.alternative_id.country_code` on an invoice recipient. Same code in both.\n- If `country_code = ES`, then `type` **must** be `PASSPORT` (03) or `NOT_REGISTERED` (07)\n  (`ALTERNATIVE_ID_SPAIN_INVALID_TYPE`).\n- If `type = NOT_REGISTERED` (07), then `country_code` **must** be `ES`\n  (`ALTERNATIVE_ID_REQUIRES_SPAIN`), and `number` **must** be a Spanish DNI or NIE: a\n  Spanish company is always registered (`RECIPIENT_UNREGISTERED_ID_MUST_BE_DNI_OR_NIE`).\n- If `type = NIF_IVA` (02), `country_code` **must** be an EU member state other than Spain\n  (`ALTERNATIVE_ID_VAT_REQUIRES_EU_COUNTRY`), and `number` **must** have that country's\n  EU VAT number structure as AEAT defines it: the country prefix (`EL` for Greece) followed\n  by the national number, e.g. `FR40303265045`, `DE123456789`, `EL094014201`\n  (`ALTERNATIVE_ID_VAT_INVALID_FORMAT`). Lowercase letters are accepted and stored in\n  uppercase. A customer from outside the EU is identified with another type, such as\n  `OTHER_DOCUMENT` or `COUNTRY_ID`.\n\nA `number` that is blank once trimmed is rejected with `ALTERNATIVE_ID_INVALID`.\n\nWell-formed is not the same as registered: an EU VAT number that is not in the VIES\ncensus is still rejected by VeriFactu after the invoice is issued.\n\nAn identifier returned in a response is the one stored. A customer saved before a rule\nexisted keeps its identifier and can still be read; issuing an invoice to it with an\nidentifier that breaks these rules is rejected with the same code, before a number is used.\n\n### Matrix of allowed combinations\n| `type`                 | `country_code = ES` | `country_code \u2260 ES` |\n|------------------------|:-------------------:|:-------------------:|\n| `NIF_IVA` (02)         | \u2717                   | EU member states only |\n| `PASSPORT` (03)        | \u2713                   | \u2713                   |\n| `COUNTRY_ID` (04)      | \u2717                   | \u2713                   |\n| `RESIDENCE_CERTIFICATE` (05) | \u2717             | \u2713                   |\n| `OTHER_DOCUMENT` (06)  | \u2717                   | \u2713                   |\n| `NOT_REGISTERED` (07)  | \u2713                   | \u2717                   |\n",
+    "properties": {
+     "country_code": {
+      "description": "ISO 3166-1 alpha-2 code of the country that issued the document. Required except for\n`PASSPORT` and `NOT_REGISTERED`, where omitting it means `ES`. Constrains the allowed\n`type` values; see the VeriFactu rules on the parent schema.\n",
+      "maxLength": 2,
+      "minLength": 2,
+      "pattern": "^[A-Z]{2}$",
+      "type": "string"
+     },
+     "number": {
+      "description": "Identifier number. For `NIF_IVA`, the full EU VAT number with its country prefix\n(e.g. `FR40303265045`); see the VeriFactu rules on the parent schema.\n",
+      "maxLength": 20,
+      "minLength": 1,
+      "type": "string"
+     },
+     "type": {
+      "description": "Identifier type. Use descriptive names:\n- **NIF_IVA**: EU VAT number (intra-community) \u2014 *only for an EU member state other than Spain, with that country's VAT number structure*\n- **PASSPORT**: Passport \u2014 *allowed for any country*\n- **COUNTRY_ID**: Country of residence ID \u2014 *not allowed when `country_code = ES`*\n- **RESIDENCE_CERTIFICATE**: Residence certificate \u2014 *not allowed when `country_code = ES`*\n- **OTHER_DOCUMENT**: Other supporting document \u2014 *not allowed when `country_code = ES`*\n- **NOT_REGISTERED**: Not registered in AEAT \u2014 *requires `country_code = ES`*\n\n**\u26a0\ufe0f DEPRECATED numeric codes** (will be removed in v2):\n02, 03, 04, 05, 06, 07 \u2014 use the descriptive names above instead.\n",
+      "enum": [
+       "NIF_IVA",
+       "PASSPORT",
+       "COUNTRY_ID",
+       "RESIDENCE_CERTIFICATE",
+       "OTHER_DOCUMENT",
+       "NOT_REGISTERED",
+       "02",
+       "03",
+       "04",
+       "05",
+       "06",
+       "07"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "type",
+     "number"
+    ],
+    "type": [
+     "object",
+     "null"
+    ]
+   },
+   "CreateCorrectiveInvoiceRequest": {
+    "additionalProperties": false,
+    "properties": {
+     "circumstance_date": {
+      "description": "When the circumstance that causes the rectification took place, if it is one of article\n80 of the VAT Act (Ley 37/1992): a discount granted after the sale, an operation cancelled\nor a price changed after it took place, the customer's insolvency, a bad debt. Optional.\n\nA corrective must be issued within four years from when the tax accrued or, for those\ncauses, from when the circumstance took place (RD 1619/2012, art. 15.3). Without this\ndate the four years count from the original's operation date (its `operation_date`, or\nits `issue_date` when it has none), the stricter of the two. Past the deadline the request\nfails with `422 CORRECTIVE_OUT_OF_TIME`.\n\nOnly for `R1`, `R2`, `R3` and `R5`: `R4` covers causes other than article 80, and sending\nit with `R4` fails with `422 CORRECTIVE_CIRCUMSTANCE_DATE_NOT_APPLICABLE`. It must lie\nbetween the original's operation date and today\n(`422 CORRECTIVE_CIRCUMSTANCE_DATE_OUT_OF_RANGE`).\n",
+      "format": "date",
+      "type": "string"
+     },
+     "external_ref": {
+      "$ref": "#/$defs/ExternalRef"
+     },
+     "lines": {
+      "description": "**TOTAL**: not accepted. A `TOTAL` corrective rectifies what is still invoiced on the\noriginal \u2014its lines and those of its live correctives, negated\u2014 and a request with\n`lines` fails with `422 RECTIFICATIVA_TOTAL_CON_LINEAS`.\n**PARTIAL**: required. The adjustment lines, with positive or negative amounts; they\nmay not take the base of any rate below zero (`422 CORRECTIVE_EXCEEDS_INVOICED_AMOUNT`).\n",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "description": {
+         "description": "Concept description. Required for NORMAL lines; optional for\nSUPLIDO lines.\n",
+         "maxLength": 2000,
+         "type": "string"
+        },
+        "discount_percentage": {
+         "default": 0,
+         "maximum": 100,
+         "minimum": 0,
+         "type": "number"
+        },
+        "equivalence_surcharge_rate": {
+         "allOf": [
+          {
+           "$ref": "#/$defs/EquivalenceSurchargePercentage"
+          }
+         ],
+         "description": "Equivalence surcharge rate for this line of the corrective\ninvoice.\n\n**Default behaviour:** if omitted, the line inherits the\nsurcharge **regime** of the invoice being amended \u2014 not the\ncompany's current tax profile, whose default does not apply to\ncorrective invoices. What travels from the original is the\non/off signal, not the rate: the rate is re-derived from this\nline's own VAT (21\u21925.2, 10\u21921.4, 5\u21920.62, 4\u21920.5), so a\ncorrective line at 10% gets 1.4 even when the original line it\namends was at 21%. If the original was outside the regime the\nline is pinned to `0`, so today's profile never adds a\nsurcharge to the credit note of an invoice that carried none.\nAn explicit value is always respected. If the original applies\nthe surcharge on some lines but not others there is no regime\nto inherit and the request fails with\n`422 CORRECTIVE_ORIGINAL_MIXED_SURCHARGE`: send\n`equivalence_surcharge_rate` on every line. `SUPLIDO` lines\nnever carry a surcharge and are ignored on both sides.\n"
+        },
+        "exemption_reason": {
+         "anyOf": [
+          {
+           "$ref": "#/$defs/ExemptionReason"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "exemption_reason_text": {
+         "maxLength": 500,
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "irpf_rate": {
+         "allOf": [
+          {
+           "$ref": "#/$defs/IrpfPercentage"
+          }
+         ],
+         "description": "IRPF withholding rate for this line of the corrective invoice.\n\n**Default behaviour:** if omitted, the line inherits the rate\nof the invoice being amended \u2014 **not** the account's default\nIRPF rate from the tax profile, whose default does not apply to\ncorrective invoices: a profile that changed after the original\nwas issued must not alter what the credit note withholds. An\nexplicit value is always respected, `0` included, which is how\nyou issue a line **without** withholding. If the original\nwithholds different rates on different lines there is nothing\nunambiguous to inherit and the request fails with\n`422 CORRECTIVE_ORIGINAL_MIXED_IRPF`: send `irpf_rate` on every\nline. `SUPLIDO` lines never carry IRPF and are ignored on both\nsides. On SIMPLIFIED invoices (F2) IRPF withholding is **not\nallowed** (AEAT forbids it on F2): sending an `irpf_rate` other\nthan 0 is **rejected** with `SIMPLIFICADA_FORBIDS_IRPF` \u2014 it is\nnot coerced to 0. Omit the field or send `irpf_rate: 0` on F2\nlines.\n"
+        },
+        "main_tax": {
+         "$ref": "#/$defs/TaxInfo"
+        },
+        "quantity": {
+         "description": "Quantity (can be negative for corrective invoices)",
+         "type": "number"
+        },
+        "total_excluding_tax": {
+         "description": "Declared line total excluding taxes (total-declared mode, e.g. 300 units\ninvoiced for exactly 1.00). The taxable base of the line is EXACTLY this\namount \u2014 it is never recalculated from the unit price. The unit price\nbecomes derived and informational (`total / quantity`, 4 decimals).\nEach line must carry exactly one of `unit_price`, `total_excluding_tax`\nor `total_including_tax` (anything else is rejected with\n`LINE_UNIT_PRICE_XOR_DECLARED_TOTAL`). Incompatible with\n`discount_percentage` (`LINE_DECLARED_TOTAL_FORBIDS_DISCOUNT`): any\ndiscount is already included in the declared total. Can be negative\nin corrective invoices.\n",
+         "maximum": 99999999.99,
+         "type": "number"
+        },
+        "total_including_tax": {
+         "description": "Declared line total including taxes (tax-inclusive total-declared\nmode): what the customer paid for this line \u2014 taxable base + VAT +\nequivalence surcharge. IRPF withholding is NOT part of it (it is a\nretention, not price; it is computed on the derived base as usual).\nThe engine works the breakdown backwards from the unrounded base\n(`base_raw = total / (1 + vat + surcharge)`, DGT V1919-18) so the\nrounded amounts add up to the declared total exactly (e.g. 100.00\nat 21% \u2192 82.64 + 17.36 = 100.00). On exempt or 0% lines it is\nequivalent to `total_excluding_tax` (base = total, quota 0).\nEach line must carry exactly one of `unit_price`, `total_excluding_tax`\nor `total_including_tax` (anything else is rejected with\n`LINE_UNIT_PRICE_XOR_DECLARED_TOTAL`). Incompatible with\n`discount_percentage` (`LINE_DECLARED_TOTAL_FORBIDS_DISCOUNT`).\nCan be negative in corrective invoices.\n",
+         "maximum": 99999999.99,
+         "type": "number"
+        },
+        "unit": {
+         "type": "string"
+        },
+        "unit_price": {
+         "description": "Unit price before taxes (can be negative in corrective invoices).\nSupports up to 4 decimal places for micro-pricing (e.g., \u20ac0.0897/unit for labels, packaging).\nFinal amounts are always rounded to 2 decimals.\n",
+         "maximum": 999999.9999,
+         "type": "number"
+        }
+       },
+       "required": [
+        "quantity"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "metadata": {
+      "$ref": "#/$defs/InvoiceMetadata"
+     },
+     "notes": {
+      "description": "Additional observations about the rectification",
+      "maxLength": 1000,
+      "type": "string"
+     },
+     "options": {
+      "$ref": "#/$defs/InvoiceProcessingOptions"
+     },
+     "reason": {
+      "description": "Detailed reason for rectification (minimum 10 characters)",
+      "maxLength": 1000,
+      "minLength": 10,
+      "type": "string"
+     },
+     "recipient": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/Recipient"
+       }
+      ],
+      "description": "Only to correct the recipient's data. A corrective invoice carries the recipient of the\ninvoice it corrects, with that invoice's data, except when the invoice recorded that same\nrecipient with a wrong name, tax ID or address: then send the corrected recipient here,\nwith `rectification_type` `PARTIAL`, `rectification_code` `R4` and no `lines`. That\ncorrective leaves the amounts unchanged and the original `RECTIFIED`.\n\n- When the original went to a registered customer, send that same `customer_id`, with\n  its data already fixed; another customer fails with\n  `422 CORRECTIVE_RECIPIENT_IS_ANOTHER_PERSON` \u2014 an invoice issued to another person is\n  corrected in full (`TOTAL`) and issued again to the right customer.\n- The same name, tax ID and address as recorded fail with\n  `422 CORRECTIVE_RECIPIENT_UNCHANGED`.\n- A `recipient` in any other corrective fails with\n  `422 CORRECTIVE_RECIPIENT_NOT_ACCEPTED`, and nothing is created.\n"
+     },
+     "recipient_is_business": {
+      "description": "Declares that the recipient acted as a business or professional in the operation being\nrectified. Optional, and it only matters for a bad-debt corrective (`R3`) on an\noperation whose taxable base is 50 \u20ac or less: the law allows that reduction only when\nthe recipient acted as a business or professional, and the invoice does not say so\n(Ley 37/1992, art. 80.Cuatro.A.3.\u00aa). Without it, that `R3` fails with\n`422 CORRECTIVE_BAD_DEBT_BASE_TOO_LOW`.\n",
+      "type": "boolean"
+     },
+     "rectification_code": {
+      "$ref": "#/$defs/VeriFactuRectificationCode"
+     },
+     "rectification_type": {
+      "$ref": "#/$defs/RectificationType"
+     },
+     "series_id": {
+      "description": "Series for the corrective invoice. Optional: if not specified, the company's\n**default series for corrective invoices** is used \u2014 not the original invoice's\nseries, which is an ordinary or simplified one and cannot hold a corrective.\nIf the company has no default corrective series, one is created on first use; a\nseries of the wrong type fails with `422 SERIES_INCOMPATIBLE_DOC_TYPE`.\n",
+      "format": "uuid",
+      "type": "string"
+     }
+    },
+    "required": [
+     "rectification_type",
+     "rectification_code",
+     "reason"
+    ],
+    "type": "object"
+   },
+   "Email": {
+    "description": "Email address (minimum valid email is 5 chars, e.g. a@b.co)",
+    "format": "email",
+    "maxLength": 255,
+    "minLength": 5,
+    "type": "string"
+   },
+   "EmailConfiguration": {
+    "additionalProperties": false,
+    "properties": {
+     "cc": {
+      "description": "List of CC emails (optional)",
+      "items": {
+       "$ref": "#/$defs/Email"
+      },
+      "type": "array"
+     },
+     "message": {
+      "description": "Custom message (optional, added to email body)",
+      "maxLength": 2000,
+      "minLength": 1,
+      "type": "string"
+     },
+     "recipients": {
+      "description": "List of recipient emails (at least 1 required)",
+      "items": {
+       "$ref": "#/$defs/Email"
+      },
+      "minItems": 1,
+      "type": "array"
+     },
+     "subject": {
+      "description": "Custom email subject (optional, if not specified uses a default)",
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "recipients"
+    ],
+    "type": "object"
+   },
+   "EquivalenceSurchargePercentage": {
+    "description": "Equivalence surcharge percentage in decimal format, one of the values AEAT accepts.\nPairs allowed (VAT rate \u2194 surcharge): 21\u21945.2, 21\u21941.75 (tobacco products), 10\u21941.4,\n4\u21940.5, and the temporary ones, only on operations of their period: 5\u21940.5 up to\n2022-12-31, 5\u21940.62 from 2023-01-01 to 2024-09-30, and 7.5\u21941 and 2\u21940.26 from\n2024-10-01 to 2024-12-31. A pair outside its period is rejected with\n`422 SURCHARGE_RATE_NOT_ACCEPTED_ON_DATE`. `GET /v1/tax-types` publishes every pair with\nits `valid_from` / `valid_until`.\nThe backend automatically normalizes equivalent formats (5.20 \u2192 5.2).\n",
+    "enum": [
+     0,
+     0.26,
+     0.5,
+     0.62,
+     1,
+     1.4,
+     1.75,
+     5.2
+    ],
+    "type": "number"
+   },
+   "ExemptionReason": {
+    "description": "Tax exemption reason code per the Spanish VAT Law (Ley 37/1992, LIVA), with the\nVeriFactu code each one is reported as.\n\n- `EXENTA_ART_20`: exempt, art. 20 (domestic operations such as medical, educational,\n  cultural and financial services, or housing rentals). E1.\n- `EXENTA_ART_21`: exempt, art. 21 (exports of goods). E2.\n- `EXENTA_ART_22`: exempt, art. 22 (operations treated as exports). E3.\n- `EXENTA_ART_24`: exempt, art. 24 (free zones, warehouses and customs regimes). E4.\n- `EXENTA_ART_25`: exempt, art. 25 (intra-community supplies of goods). E5.\n- `EXENTA_ART_26`: exempt, art. 26 (intra-community acquisitions of goods). It exempts the\n  buyer's acquisition, not a supply the seller invoices, so an invoice line that carries it\n  is rejected with `EXEMPTION_NOT_FOR_ISSUED_INVOICE`; a supply to another Member State is\n  `EXENTA_ART_25`.\n- `NO_SUJETA_ART_7_9`: not subject under art. 7 (such as the transfer of a business as\n  a going concern, art. 7.1\u00ba). N1.\n- `NO_SUJETA_LOCALIZACION`: not subject by the place-of-supply rules (intra-community\n  or non-EU services, arts. 69 and 70). N2.\n- `ISP_ART_84_2_A` \u2026 `ISP_ART_84_2_F`: reverse charge (the invoice states \u00abinversi\u00f3n del\n  sujeto pasivo\u00bb), art. 84.Uno.2.\u00ba letters a) (supplier not established in Spain), b) (unwrought\n  or semi-finished gold), c) (scrap, waste and recovery materials, plastic, paper, cardboard, glass and textile waste, and semi-finished non-ferrous metal products), d) (greenhouse gas emission\n  allowances), e) (certain real estate supplies: in insolvency proceedings, with the exemption\n  waived, or enforcing a security) and f) (construction or renovation works). S2.\n- `ISP_ART_84_2_G`: reverse charge of letter g) (silver, platinum, palladium, mobile phones,\n  consoles, laptops and tablets). The law requires these supplies to be invoiced in a special\n  series, so an invoice line that carries it is rejected with\n  `REVERSE_CHARGE_CASE_NOT_SUPPORTED`.\n- `EXENTA_ART_140`: investment gold exemption, art. 140 bis (usually with `regime_key`\n  `04`). E6.\n- `REGIMEN_ART_129` (agriculture,\n  livestock and fishing, arts. 124 to 134 bis), `REGIMEN_ART_135` (second-hand goods,\n  art and antiques), `REGIMEN_ART_141` (travel agencies), `REGIMEN_ART_154` (equivalence\n  surcharge) and `REGIMEN_ART_163_DECIES` (cash basis, arts. 163 decies to 163\n  sexiesdecies): operations of special regimes, which VeriFactu identifies by the regime\n  key rather than by an exemption code. An\n  invoice line that carries one is rejected with `EXEMPTION_REGIME_NOT_SUPPORTED_IN_VERIFACTU`;\n  declare the regime with `regime_key` instead.\n- `OTRO`: any other provision. Requires the text in `exemption_reason_text`. E6.\n",
+    "enum": [
+     "EXENTA_ART_20",
+     "EXENTA_ART_21",
+     "EXENTA_ART_22",
+     "EXENTA_ART_24",
+     "EXENTA_ART_25",
+     "EXENTA_ART_26",
+     "EXENTA_ART_140",
+     "NO_SUJETA_ART_7_9",
+     "NO_SUJETA_LOCALIZACION",
+     "ISP_ART_84_2_A",
+     "ISP_ART_84_2_B",
+     "ISP_ART_84_2_C",
+     "ISP_ART_84_2_D",
+     "ISP_ART_84_2_E",
+     "ISP_ART_84_2_F",
+     "ISP_ART_84_2_G",
+     "REGIMEN_ART_129",
+     "REGIMEN_ART_135",
+     "REGIMEN_ART_141",
+     "REGIMEN_ART_154",
+     "REGIMEN_ART_163_DECIES",
+     "OTRO"
+    ],
+    "type": "string"
+   },
+   "ExternalRef": {
+    "description": "Client-supplied identifier from an external system (order, cart, contract\u2026).\nStored as-is, echoed back on read, and filterable via GET /v1/invoices?external_ref=.\nOptional. Enforced UNIQUE per issuer for live standard/simplified invoices:\ncreating a second invoice with the same reference returns 409\n(INVOICE_DUPLICATE_EXTERNAL_REFERENCE); deleting the existing one lets you recreate.\nCorrective invoices are exempt from that uniqueness: a corrective carries the same\norder reference as the invoice it corrects, so both can coexist.\nThis is a business key, NOT the Idempotency-Key (which guards request retries).\n",
+    "maxLength": 255,
+    "type": "string"
+   },
+   "InvoiceMetadata": {
+    "additionalProperties": true,
+    "description": "Your own key/value pairs to cross-reference this invoice with records in\nyour system (order ids, tenants, internal codes). Namespace them to avoid\nclashing with the system keys BeeL adds on payment-generated invoices.\n",
+    "type": "object"
+   },
+   "InvoiceProcessingOptions": {
+    "additionalProperties": false,
+    "description": "Controls how the invoice is processed after creation.\nAll fields default to `false` if not specified.\n\nVeriFactu is **not** an option here: whether an invoice is registered with AEAT is a\nfact of the tax identity (NIF x environment), resolved at issue time against the\ncompany's regime. See `verifactu.enabled` in the invoice response for what was applied.\n\n**Common combinations:**\n- Draft (default): omit `options` or set all to `false`\n- Issue immediately: `{ issue_directly: true }`\n- Issue + wait for PDF: `{ issue_directly: true, wait_for_pdf: true }`\n- Issue + send email: `{ issue_directly: true, send_automatically: true }`\n- Full automation: `{ issue_directly: true, wait_for_pdf: true, send_automatically: true, email_config: { ... } }`\n",
+    "properties": {
+     "attach_source_invoices": {
+      "default": false,
+      "description": "Only applies when `send_automatically` is `true`. If `true`, the email sent after\nissuing also attaches a ZIP (`suplidos_<invoice-number>.zip`) with the PDFs of the\nsource invoices referenced by the invoice's SUPLIDO consolidation lines\n(`source_invoice_ids`). Each PDF inside the ZIP is named\n`<invoice-number>_<issuer-tax-id>.pdf`. Access to sources owned by managed accounts is\nre-checked with the same rules as issuing, and the request fails synchronously with an\nactionable error \u2014 never a partial ZIP \u2014 if the invoice has no consolidation sources\n(`ATTACH_SOURCE_INVOICES_NO_SOURCES`), a source is not reachable\n(`ATTACH_SOURCE_INVOICE_UNAVAILABLE`) or a source has no generated PDF\n(`ATTACH_SOURCE_PDF_MISSING`). The flag belongs to this issuing act only: it is never\nstored on the invoice.\n",
+      "type": "boolean"
+     },
+     "email_config": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/EmailConfiguration"
+       }
+      ],
+      "description": "Only applies when `send_automatically` is `true`.\nOverrides default email settings. If it names no recipients, the email goes to the\ncustomer's `billing_emails`, or to the customer's `email` when there are none.\n"
+     },
+     "issue_directly": {
+      "default": false,
+      "description": "If `true`, creates the invoice directly as **ISSUED** with a definitive number and PDF.\nIf `false` (default), creates as **DRAFT** without number (editable, no PDF).\n",
+      "type": "boolean"
+     },
+     "send_automatically": {
+      "default": false,
+      "description": "Only applies when `issue_directly` is `true`.\nIf `true`, sends the invoice by email with PDF attachment after issuing.\nThe email is sent asynchronously after the invoice is issued.\n",
+      "type": "boolean"
+     },
+     "wait_for_pdf": {
+      "default": false,
+      "description": "Only applies when `issue_directly` is `true`.\nIf `true`, waits for PDF generation before returning the response (~1-3s).\nIf `false` (default), PDF is generated asynchronously in the background.\n",
+      "type": "boolean"
+     }
+    },
+    "type": "object"
+   },
+   "IrpfPercentage": {
+    "description": "Withholding (IRPF) percentage, as the IRPF regulation (Royal Decree 439/2007) sets it: 0 (no withholding), 1 (pig fattening and poultry, and some activities\nunder objective estimation), 2 (other agricultural, livestock and forestry activities),\n7 (professional activity in its first three years, and the other 7 % cases), 15\n(professional activities, and intellectual property income), 19 (rent of urban property\nand other income of art. 75.2.b; also the general rate of the Corporate Income Tax\nwithholding) and 24 (image rights). A company that pays Corporate Income Tax can only use\n0, 19, 24 and 9.5: see `WithholdingOptions`.\n\nCeuta and Melilla: income with the Ceuta and Melilla deduction bears the base rate reduced as\nthe law sets it. Under IRPF, 15 % and 7 % (professional activities) and 19 % (rent of urban\nproperty located there) are reduced by 60 %: 6, 2.8 and 7.6. Under Corporate Income Tax, 19 %\non those rents is halved: 9.5, which only a company can use\n(`IRPF_RATE_ONLY_FOR_CORPORATE_ISSUER` otherwise). Whether the reduction applies is the\nissuer's choice: the NIF does not show it.\n\nThe value counts, not how it is written: `15.0` is `15` and `2.80` is `2.8`.\n",
+    "enum": [
+     0,
+     1,
+     2,
+     2.8,
+     6,
+     7,
+     7.6,
+     9.5,
+     15,
+     19,
+     24
+    ],
+    "type": "number"
+   },
+   "PhoneInput": {
+    "description": "A phone number as this API accepts it: 9 to 20 characters, and only digits, spaces,\ndashes, parentheses and an optional leading `+`. Every request that takes a phone number\nuses this schema.\n\nIt is `Phone` plus the rules enforced on input. A value this schema accepts always\nsatisfies `Phone`, so anything you send here is something a response can return.\n",
+    "maxLength": 20,
+    "minLength": 9,
+    "pattern": "^[+]?[0-9\\s\\-\\(\\)]+$",
+    "type": "string"
+   },
+   "Recipient": {
+    "additionalProperties": false,
+    "description": "Invoice recipient: either a registered customer (`customer_id`) or the recipient's\ndata inline (`legal_name`, `nif`, `address`\u2026), never both. Sending `customer_id`\ntogether with any other recipient field returns 422\n`RECIPIENT_CUSTOMER_AND_DATA_EXCLUSIVE`, on create and on edit.\n\nAll fields are optional at schema level, but for an ad-hoc recipient (no\ncustomer_id) on non-SIMPLIFIED invoices the API requires legal_name, address and\nnif (or alternative_id); omitting the address returns 422\nRECIPIENT_ADDRESS_REQUIRED.\n",
+    "properties": {
+     "address": {
+      "$ref": "#/$defs/Address"
+     },
+     "alternative_id": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/AlternativeIdentifier"
+       },
+       {
+        "description": "Alternative identifier for foreign customers (mutually exclusive with nif).\nNot accepted on SIMPLIFIED invoices, like `nif`: BeeL. requires a STANDARD\ninvoice when the recipient is identified.\n"
+       }
+      ]
+     },
+     "customer_id": {
+      "description": "UUID of a registered customer. The invoice takes the recipient data stored on\nthat customer. Send it alone: combined with any other recipient field it returns\n422 `RECIPIENT_CUSTOMER_AND_DATA_EXCLUSIVE`. To change the recipient's data, edit\nthe customer or send the data inline without `customer_id`.\n",
+      "format": "uuid",
+      "type": "string"
+     },
+     "email": {
+      "$ref": "#/$defs/Email"
+     },
+     "legal_name": {
+      "description": "Recipient legal name. Required when customer_id is not provided\n(except for SIMPLIFIED invoices where all fields are optional).\n",
+      "maxLength": 255,
+      "minLength": 1,
+      "type": "string"
+     },
+     "nif": {
+      "description": "Spanish Tax ID (9 alphanumeric characters).\nRequired when customer_id is not provided and alternative_id is absent.\nNot accepted on SIMPLIFIED invoices: BeeL. requires a STANDARD invoice when the\nrecipient is identified.\n",
+      "maxLength": 9,
+      "minLength": 9,
+      "pattern": "^[A-Za-z0-9]{9}$",
+      "type": "string"
+     },
+     "phone": {
+      "$ref": "#/$defs/PhoneInput"
+     },
+     "trade_name": {
+      "description": "Recipient trade name (optional)",
+      "maxLength": 255,
+      "minLength": 1,
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   },
+   "RectificationType": {
+    "description": "Type of rectification applied to a corrective invoice:\n- TOTAL: Rectifies everything still invoiced on the original, its live correctives included (status \u2192 VOIDED)\n- PARTIAL: Partially corrects the original invoice (status \u2192 RECTIFIED)\n",
+    "enum": [
+     "TOTAL",
+     "PARTIAL"
+    ],
+    "type": "string"
+   },
+   "RegimeKey": {
+    "description": "Regime key according to VeriFactu regulations. Omitted, `01` (general regime) applies:\n- 01: General regime operation\n- 02: Export (IVA and IGIC; not IPSI, whose AEAT list is `01, 08, 11, 18, 19, 20`)\n- 03: Used goods, art, antiques (not accepted, see below)\n- 04: Investment gold\n- 05: Travel agencies\n- 06: Group of entities (not accepted, see below)\n- 07: Cash basis\n- 08: Operation subject to another indirect tax \u2014 IPSI or IGIC on an IVA line, IPSI or IVA\n  on an IGIC line. It is **not** the general regime of IGIC, which is `01`.\n- 09: Mediating agencies\n- 10: Third-party collections\n- 11: Local rental\n- 14: VAT pending in certifications (not accepted, see below)\n- 15: VAT pending successive tract\n- 17: OSS and IOSS\n- 18: Equivalence surcharge\n- 19: REAGYP\n- 20: Simplified regime\n\n**What AEAT requires with each key** (Validaciones VERI*FACTU 3.1.3.15.6), checked on\nIVA and IGIC lines before the invoice is numbered. Otherwise the request is rejected with\n`422` and the code in brackets:\n- `04`: only reverse charge (an `ISP_ART_84_2_*` reason) or an exemption\n  (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n- `08`: only `exemption_reason: NO_SUJETA_LOCALIZACION`, at 0 %\n  (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n- `10`: only `exemption_reason: NO_SUJETA_ART_7_9`, on a `STANDARD` invoice whose\n  recipient has a `nif` (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`,\n  `REGIME_KEY_REQUIRES_STANDARD_INVOICE`, `REGIME_KEY_REQUIRES_RECIPIENT_NIF`).\n- `11` (IVA): a subject line only at 21 %, and no reverse charge\n  (`REGIME_KEY_REQUIRES_VAT_RATE`, `REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n- `06` and `14` are not accepted (`REGIME_KEY_NOT_SUPPORTED`): AEAT requires with them\n  data the invoice does not carry (a cost-based taxable base; an operation date after the\n  issue date and a public-administration recipient).\n- `03` (used goods) is not accepted (`REGIME_KEY_NOT_SUPPORTED`): under it the invoice\n  must not show the tax separately (RD 1619/2012, art. 16.2.c), and it always does. The\n  corrective of an invoice that already carried `03` keeps it.\n- `05` (travel agencies) and `07` (cash basis) are accepted, and the invoice PDF carries\n  the mention of their regime (RD 1619/2012, art. 6.1 n and p). `07`: no reverse charge,\n  no non-subject reason and, of the exemptions, only art. 20 or `OTRO`\n  (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n`GET /v1/tax-types` only offers the keys that are accepted.\n\n**One exception to \"a key you send is the key you get\":** when the line ends up\ncarrying an equivalence surcharge \u2014 whether you sent `equivalence_surcharge_rate`\nor it was inherited from the company's tax configuration \u2014 a `01` is rewritten to\n`18`, because a surcharge under the general regime is fiscally incoherent. Send\n`equivalence_surcharge_rate: 0` explicitly to keep `01`. See\n`equivalence_surcharge_rate` in the invoice line for the full rules.\n",
+    "enum": [
+     "01",
+     "02",
+     "03",
+     "04",
+     "05",
+     "06",
+     "07",
+     "08",
+     "09",
+     "10",
+     "11",
+     "14",
+     "15",
+     "17",
+     "18",
+     "19",
+     "20"
+    ],
+    "type": "string"
+   },
+   "TaxInfo": {
+    "additionalProperties": false,
+    "description": "Complete tax information with cross-validations:\n- IVA: real rates 4, 10, 21, and the temporary 2, 5 and 7.5 (see below for 0)\n- IGIC: 0, 3, 5, 7, 9.5, 15, 20 \u2014 here 0 is the real \"Tipo Cero\"\n- IPSI: real rates 0.5, 1, 2, 4, 8, 10 (see below for 0)\n- OTHER: any percentage between 0 and 100\n\n**0 % under IVA and IPSI is not a rate, it is the exemption sentinel.** It is accepted\non a line, but only together with an `exemption_reason` (exempt or non-subject\noperation); on its own it says nothing and the line is rejected. That is why\n`GET /v1/tax-types` publishes the IVA rates without 0: the legitimate way\nto a 0 % IVA line is through an exemption reason, which the same response also\npublishes. IGIC is different \u2014 its 0 % is a real legal rate (basic necessities) and\nneeds no reason.\n\n**IVA 5 %** (the temporary rate applied from 2022 to electricity, gas and certain\nfoodstuffs) is no longer in force for new operations. AEAT only accepts it on operations\ndated from 2022-07-01 to 2024-09-30: send the `operation_date` of that period, because\nwithout one the issue date decides and a line at 5 % is rejected with\n`422 VAT_RATE_NOT_ACCEPTED_ON_DATE`. Its equivalence surcharge pair is 0.5 up to 2022-12-31\nand 0.62 from 2023-01-01. **IVA 2 % and 7.5 %** (temporary rates of the last quarter of 2024)\nare accepted only on operations dated from 2024-10-01 to 2024-12-31, with surcharges 0.26\nand 1.\n\nException: when regime_key = \"17\" (OSS/IOSS) the invoice applies the destination\ncountry VAT instead of the Spanish one, so any percentage in the EU range [0, 27]\nis accepted regardless of the tax type set \u2014 including 0 without an exemption reason.\n",
+    "properties": {
+     "percentage": {
+      "description": "Tax percentage",
+      "maximum": 100,
+      "minimum": 0,
+      "type": "number"
+     },
+     "regime_key": {
+      "$ref": "#/$defs/RegimeKey"
+     },
+     "type": {
+      "$ref": "#/$defs/TaxType"
+     }
+    },
+    "required": [
+     "type",
+     "percentage"
+    ],
+    "type": "object"
+   },
+   "TaxType": {
+    "description": "Tax type by territory:\n- IVA: Iberian Peninsula and Balearic Islands (4%, 10%, 21%; 2%, 5% and 7.5% only on operations of their period)\n- IGIC: Canary Islands (0%, 3%, 5%, 7%, 9.5%, 15%, 20%)\n- IPSI: Ceuta and Melilla (0.5%, 1%, 2%, 4%, 8%, 10%)\n- OTHER: Configurable 0%-100%\n\nUnder IVA and IPSI, 0% is not one of these rates: it is the exemption/non-subject\nsentinel and always travels with an `exemption_reason`. IGIC's 0% is a real rate.\nSee `TaxInfo` for the full rules.\n",
+    "enum": [
+     "IVA",
+     "IGIC",
+     "IPSI",
+     "OTHER"
+    ],
+    "type": "string"
+   },
+   "UUID": {
+    "description": "Universally Unique Identifier (UUID v4)",
+    "format": "uuid",
+    "type": "string"
+   },
+   "VeriFactuRectificationCode": {
+    "description": "Rectification codes according to VeriFactu regulations (AEAT):\n- R1: Error founded in law and Art. 80 One, Two and Six LIVA\n- R2: Article 80 Three LIVA (Bankruptcy proceedings)\n- R3: Article 80 Four LIVA (Uncollectable debts)\n- R4: Other causes\n- R5: Corrective of a simplified invoice - ONLY for simplified invoices\n",
+    "enum": [
+     "R1",
+     "R2",
+     "R3",
+     "R4",
+     "R5"
+    ],
+    "type": "string"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "body": {
+    "$ref": "#/$defs/CreateCorrectiveInvoiceRequest"
+   },
+   "company_id": {
+    "description": "Unique identifier (UUID) of the company the operation acts on \u2014 its identifier, not its NIF. It is the only source of context: the account that owns it is derived from it, and the `BeeL-Active-Company` header plays no part. A company you do not reach answers `403`, and so does a company that does not exist, so the existence of a company in another account is never disclosed.",
+    "format": "uuid",
+    "type": "string"
+   },
+   "idempotency_key": {
+    "description": "Optional idempotency key for this operation. Omit it and one is derived from the request itself, which makes a blind retry safe but also collapses a SECOND, deliberately identical operation into the first for 24 hours. Set it \u2014 to an order id, or anything unique per intended operation \u2014 whenever you mean to create something that may look identical to what you just created.",
+    "maxLength": 255,
+    "pattern": "^[a-zA-Z0-9_-]+$",
+    "type": "string"
+   },
+   "invoice_id": {
+    "$ref": "#/$defs/UUID",
+    "description": "Invoice ID"
+   }
+  },
+  "required": [
+   "company_id",
+   "invoice_id",
+   "body"
+  ],
+  "type": "object"
+ },
+ "name": "beel_create_corrective_invoice"
+}

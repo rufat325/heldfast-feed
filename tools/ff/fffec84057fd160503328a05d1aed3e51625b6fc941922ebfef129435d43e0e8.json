@@ -1,0 +1,122 @@
+{
+ "annotations": {
+  "readOnlyHint": true
+ },
+ "description": "Extract structured FIELDS from a document (PDF or image) with a vision model.\n\n    USE THIS WHEN you need specific values OUT of a document \u2014 a payslip's gross/net, an invoice's\n    total/ABN, a form's checkboxes, a table's cells \u2014 rather than a yes/no about the document. (For\n    \"is this genuine?\" use verify_document; \"what kind of document is this?\" is\n    `options={\"classify\": true}` right here.)\n\n    Say WHAT to pull, four ways:\n      - `fields`: an ad-hoc list \u2014 names like [\"gross_pay\",\"abn\"], or objects\n        {\"name\":..., \"type\":\"text|amount|date|boolean\", \"description\":...}. THE general case: ask\n        for exactly the fields your task needs. Use type \"boolean\" for a checkbox/tickbox.\n        `\"question\"` works instead of `\"description\"` if you would rather just ask:\n        {\"name\":\"customer_name\", \"question\":\"What is the customer name?\"}.\n      - `template`: a named preset \u2014 \"payslip\", \"tax_invoice\", \"bank_statement\", \"receipt\".\n      - NEITHER: AUTO \u2014 the document is classified and that type's fields are used.\n      - auto on an unrecognised type: schema-free \u2014 every labelled field is returned.\n\n    Provide the document ONE way: `url` (a public http(s) link \u2014 fetched server-side, the cheapest\n    call) OR `bytes_b64` (inline base64, plus `filename` for PDF-vs-image routing). `country` is an\n    optional hint; `max_pages` caps how many pages are read (default a few; hard ceiling 10).\n\n    `options` turns on extra capabilities. Every one defaults OFF, and asking for one that this\n    server does not support is an ERROR naming it \u2014 never a silent no-op, so you can always tell\n    \"asked wrongly\" from \"nothing found\". Available today:\n      - `{\"grounding\": true}` \u2014 every value gains `bbox` (the rectangle it was read from, in PDF\n        points, origin top-left) and `text_layer_match`. Use it to CITE a value back to the page.\n        Born-digital PDFs only for now; a scan returns `bbox: null` and `grounding: \"none\"`.\n      - `{\"flag_below\": 0.7}` \u2014 adds `needs_review`, the fields under that confidence, weakest\n        first. Use it to route the doubtful ones to a human instead of checking everything.\n      - `{\"tables\": true}` \u2014 adds `tables`: whole tables with their rows. On a PDF these are\n        read from the document's own rules and coordinates (exact cells, merged-cell colspans,\n        no model call and NO CREDIT for the table pass); on a scan the model reads the rows and\n        the table says `source: \"vlm\"` with no cell geometry. `{\"tables\": {\"formats\":\n        [\"json\",\"markdown\",\"html\"], \"borderless\": true, \"cells\": true}}` to tune it.\n      - `{\"classify\": true}` \u2014 adds `classification`: the full verdict (type, country,\n        confidence, evidence), not just the routing. Free in auto mode.\n      - `{\"redact\": true}` \u2014 adds `pii` (a MASKED inventory) and `redacted_text`, so you can\n        extract and check for personal data in ONE call. A field you NAMED is still returned in\n        full; the inventory never is. Two things to know before turning it on: `redacted_text`\n        is the document's WHOLE text body with detected PII replaced \u2014 for a PDF that means\n        every page, not just the ones `max_pages` covers \u2014 and redaction is best-effort\n        coverage, so anything it failed to detect stays in that text verbatim. It also costs\n        an extra page-equivalent per page, because it is a second model pass.\n      - `{\"layout\": true}` \u2014 adds `layout.blocks`: every text block with its role\n        (heading/body), font, size, column and reading order. Born-digital PDFs only; free.\n      - `{\"links\": true}` \u2014 adds `links`: the PDF's own link annotations with uri, anchor\n        text and bbox. Free. A URL merely PRINTED on the page is not an annotation.\n      - `{\"figures\": true}` \u2014 adds `figures`: where the embedded images sit (bbox and pixel\n        size), never the bytes. Free.\n      - `{\"chunks\": true}` \u2014 adds `chunks`: retrieval-ready pieces that carry provenance a\n        text splitter cannot give you \u2014 `heading_path` (where in the document), `bbox` and\n        page range (citable back to the page), tables never sliced. Six strategies via\n        `{\"chunks\": {\"strategy\": \"section|page|chars|recursive|element|hierarchical\",\n        \"max_chars\": 1500, \"min_chars\": 200, \"overlap\": 100, \"include_headings\": true}}`.\n        `hierarchical` adds parent context chunks for small-to-big retrieval. Born-digital\n        PDFs only; free.\n      - `{\"split\": true}` \u2014 adds `documents`: the page ranges of the distinct documents in\n        one file (a bundle of 3 stapled PDFs -> 3 entries with types). One classifier call\n        per page, so it costs +1 page-equivalent per page read.\n    `render_scale` (one of 1.0, 1.5, 2.0, 3.0, 4.0; default 2.0) raises rasterisation for small or\n    dense print. Call `GET /v1/extract/capabilities` for the full machine-readable list.\n\n    COST: 1 credit per page read, minimum 1 \u2014 with `fields` or a `template` given, a one-page\n    receipt costs 1 and a ten-page statement costs 10; AUTO mode adds 1 for the routing\n    classification. Options that add model reads add page-equivalents (`redact` +pages, `split`\n    +pages replacing the auto/classify +1, `tables` +pages only on a scan); deterministic work\n    is free, and an encrypted PDF is charged the one-page floor only. Pages charged is\n    min(`max_pages`, the document's real length), resolved before the call runs, so you can\n    predict the price. Set `max_pages` to cap your spend on a long document.\n    CAPABILITY-ONLY: `options.classify` and/or `options.redact` with no `fields`, no\n    `template` and no other option skips field extraction entirely \u2014 classify-only costs\n    1 credit and redact-only 1 per page, exactly what the retired classify_document and\n    redact_pii tools charged.\n\n    Returns `{mode, document_type, fields{name:{value,confidence,page}}, not_found, pages_read,\n    page_limit, page_count}`. `page_count` is the document's real length, so you can see when\n    `max_pages` truncated it. EXTRACTION, not verification \u2014 values are what the document SHOWS,\n    not proof it is genuine. A field that isn't clearly present comes back in `not_found` (it\n    abstains rather than guessing).\n\n    `text_layer_match` is `exact` / `normalised` when the printed value was located on the page,\n    `multiple` when the same string appears more than once (no box \u2014 we will not guess which), and\n    `absent` when it is not there. It reports whether the string was FOUND, not that the value is\n    correct. The document is never stored.\n    ",
+ "inputSchema": {
+  "properties": {
+   "bytes_b64": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Bytes B64"
+   },
+   "country": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Country"
+   },
+   "fields": {
+    "anyOf": [
+     {
+      "items": {},
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Fields"
+   },
+   "filename": {
+    "default": "document.pdf",
+    "title": "Filename",
+    "type": "string"
+   },
+   "max_pages": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Max Pages"
+   },
+   "options": {
+    "anyOf": [
+     {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Options"
+   },
+   "render_scale": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Render Scale"
+   },
+   "template": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Template"
+   },
+   "url": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Url"
+   }
+  },
+  "title": "extract_fieldsArguments",
+  "type": "object"
+ },
+ "name": "extract_fields",
+ "outputSchema": {
+  "additionalProperties": true,
+  "title": "extract_fieldsDictOutput",
+  "type": "object"
+ },
+ "title": "Extract fields from a document"
+}

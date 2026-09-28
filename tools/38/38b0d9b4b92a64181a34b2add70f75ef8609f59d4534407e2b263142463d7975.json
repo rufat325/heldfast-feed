@@ -1,0 +1,121 @@
+{
+ "description": "Source leads in BULK from a registered lead SOURCE: ONE source job covering many search terms across many locations, deduplicated, then split into one downstream job per lead.\n\nUse this instead of create_campaign when you want breadth in a single purchase. A campaign fans out one Maps search PER LOCATION; bulk pulls one flat result set covering every query x location at once, then fans out PER LEAD. Same downstream chain either way (Site -> Verify -> VayaPin), same result envelope.\n\nTHE SOURCES ARE NOT ALL PROVIDERS AND NOT ALL OF THEM COST MONEY. `provider` is deliberately an unconstrained string resolved against the server's adapter registry, so a newly registered source works here with no client upgrade. THE AUTHORITATIVE LIVE LIST IS `GET /api/v1/dashboard/bulk-lead-sourcing/sources` (a client Bearer token is accepted); it reports source_is_free, requires_upload, source_kinds and eligible_stages per source, and it cannot drift from what the server will actually accept. Six were registered when this text was written, and only the first three are submittable THROUGH THIS TOOL:\n\n  outscraper  google_maps                    PAID  Google Maps business records, billed per record.\n  apify       google_maps                    PAID  Google Maps business records, billed per record.\n  sortlist    sortlist_agency                FREE  Public B2B agency directory. queries and geo are NOT free text here \u2014 both must be slugs from Sortlist's own catalogue, which /sources publishes as `vocabulary`. An off-catalogue value is a 422, and so is a pair of individually-valid slugs with no listing page behind it.\n  csv         google_maps      (upload)      FREE  Bring your own records. NOT SUBMITTABLE HERE.\n  json        google_maps      (upload)      FREE  Bring your own records. NOT SUBMITTABLE HERE.\n  internal    unenriched_run | corpus_query  FREE  Re-enrich leads this tenant already owns. NOT SUBMITTABLE HERE.\n\nNOT SUBMITTABLE HERE is literal. This tool always puts `queries` on the wire and never puts `source.upload` or `source.selection` there, while the API requires queries to be EMPTY and exactly one of upload/selection to be set for those three sources. Calling this tool with provider 'csv', 'json' or 'internal' is a 422, not a run. Use the dashboard, or POST /api/v1/bulk-lead-sourcing/submit directly, for those.\n\nWHAT IT SPENDS \u2014 BRANCH ON source_is_free, NEVER ON \"no cost was reported\".\n  * PAID source (source_is_free=false): the run buys records from a third party. estimated_cost_usd on the 202 is the spend. If it is null that means no unit cost is CONFIGURED, NOT that the run is free \u2014 an unpriced provider is indistinguishable from a free source on every money field, so never call it free.\n  * FREE source (source_is_free=true): the run buys NOTHING at the source. Do not narrate a source cost, and do not refuse the run as too expensive.\n  * EITHER WAY the downstream enrichment still spends: N leads x enabled stages. \"Free at the source\" is not \"free\".\n\nThe source is NOT contacted during this request \u2014 the API writes a manifest, returns 202, and the bulk worker drives submit -> poll -> fetch -> parse -> dedup -> fan-out. The 202 carries estimated_queries / estimated_records / estimated_cost_usd, which is what the guards were evaluated against. A run whose estimate exceeds the per-job record ceiling, or whose cost would cross the 24h spend cap, is refused with 429 before any manifest is written, so NOTHING is charged. That 429 carries no Retry-After by design: retrying it unchanged fails identically forever. Narrow the run instead.\n\nTHE SEARCH LIST IS queries x geo LABELS. 3 queries x 4 labelled geo entries = 12 searches in one job. country_code and region are LOCALE hints only \u2014 they do NOT place the search. What places a search is geo[].label (appended to the query text) or an explicit latitude/longitude pair. ALWAYS set max_records_per_query: omitted, every expanded search takes the platform default of 500, so \"6 searches\" is a 3,000-record purchase.\n\nSTAGE ELIGIBILITY IS BOUNDED BY source_kind, not by what you ask for. Enabling an ineligible stage is a 422, never a silent skip.\n  google_maps       every stage.\n  unenriched_run    every stage.  (internal corpus)\n  corpus_query      every stage.  (internal corpus)\n  sortlist_agency   NO vayapin. The reason is REPUBLICATION, not a missing address \u2014 a Sortlist agency HAS one, so do not reason by analogy with linkedin_company below and conclude this is an oversight. VayaPin mints a permanent public profile page per lead with no un-publish path, and republishing a third party's directory that way was not covered by the ruling that opened this source to clients.\n  linkedin_company  NO vayapin \u2014 this one genuinely has no street address and no place_id. Declared, but no adapter serves it yet.\n\nThere is no bulk-specific status route. Poll the returned job_id with get_job_status, and read the sourced leads with get_job_results / IDAP once the fan-out completes.",
+ "inputSchema": {
+  "properties": {
+   "filters": {
+    "description": "Provider-specific knobs. The adapter refuses any key that would overwrite a field this request already owns.",
+    "type": "object"
+   },
+   "format": {
+    "description": "Response format (default: json).",
+    "enum": [
+     "json",
+     "yaml",
+     "md"
+    ],
+    "type": "string"
+   },
+   "geo": {
+    "description": "Geographic targets. A labelled entry multiplies the query list; a coordinate-only entry steers the search centre.",
+    "items": {
+     "properties": {
+      "country_code": {
+       "description": "ISO 2-letter code. A LOCALE hint only \u2014 it does NOT steer the search centre.",
+       "type": "string"
+      },
+      "label": {
+       "description": "Human-readable place appended to each query, e.g. 'Atlanta, Georgia, USA'. THIS is what places the search.",
+       "type": "string"
+      },
+      "latitude": {
+       "description": "Search-centre latitude (-90..90).",
+       "type": "number"
+      },
+      "longitude": {
+       "description": "Search-centre longitude (-180..180).",
+       "type": "number"
+      },
+      "region": {
+       "description": "Provider region/locale hint.",
+       "type": "string"
+      }
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "language": {
+    "description": "Result language (default: \"en\").",
+    "type": "string"
+   },
+   "max_records_per_query": {
+    "description": "Records the provider returns per expanded query (1..100000). Omit for the platform default.",
+    "type": "number"
+   },
+   "max_total_records": {
+    "description": "Ceiling on total records across the whole job (1..1000000).",
+    "type": "number"
+   },
+   "priority": {
+    "description": "Queue priority for the fanned-out leads (0-10, default 5).",
+    "type": "number"
+   },
+   "provider": {
+    "description": "Registered lead-source adapter name, resolved server-side. PAID: 'outscraper', 'apify'. FREE at the source: 'sortlist'. Also registered but NOT submittable through this tool (they need source.upload / source.selection, which this tool does not send): 'csv', 'json', 'internal'. GET /api/v1/dashboard/bulk-lead-sourcing/sources is the authoritative live list.",
+    "type": "string"
+   },
+   "queries": {
+    "description": "Search terms, bare (e.g. [\"restaurants\", \"cafes\"]). The effective search list is queries x geo labels.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "source_kind": {
+    "description": "Shape of the source, and what bounds stage eligibility. Must be one the chosen provider registers. 'google_maps' (every stage) | 'sortlist_agency' (NO vayapin \u2014 republication, not a missing address) | 'unenriched_run' or 'corpus_query' (internal corpus, every stage) | 'linkedin_company' (NO vayapin \u2014 no address, no place_id; declared, no adapter yet).",
+    "type": "string"
+   },
+   "test": {
+    "description": "Route to test queues; no production side effects.",
+    "type": "boolean"
+   },
+   "workflow": {
+    "description": "Which downstream stages each sourced lead runs through. Same shape as a campaign. vayapin publishes a PERMANENT public profile \u2014 set it explicitly.",
+    "properties": {
+     "smartlead": {
+      "description": "Export verified leads into a LIVE outreach campaign at completion. { enabled: boolean, connection_id?: string, remote_campaign_id?: string }",
+      "type": "object"
+     },
+     "social_media_enrichment": {
+      "description": "Recover contacts from social handles. { enabled: boolean }",
+      "type": "object"
+     },
+     "spidersite": {
+      "description": "Crawl each lead\u2019s website. { enabled: boolean, mode?: string }",
+      "type": "object"
+     },
+     "spiderverify": {
+      "description": "Verify extracted emails. { enabled: boolean } \u2014 requires spidersite.",
+      "type": "object"
+     },
+     "vayapin": {
+      "description": "Publish a permanent public map profile, with no un-publish path. { enabled: boolean } \u2014 eligible for google_maps, unenriched_run and corpus_query; a 422 for sortlist_agency and linkedin_company.",
+      "type": "object"
+     }
+    },
+    "type": "object"
+   },
+   "workspace": {
+    "description": "Tenant to target (cli_\u2026). Omit to use the active/bound workspace. list_workspaces shows the options.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "provider",
+   "source_kind",
+   "queries"
+  ],
+  "type": "object"
+ },
+ "name": "submit_bulk_lead_sourcing"
+}

@@ -1,0 +1,290 @@
+{
+ "_meta": {
+  "io.mcpmed/concepts": [
+   {
+    "id": "https://schema.org/SearchAction",
+    "label": "Search action"
+   },
+   {
+    "id": "https://edamontology.org/operation_2421",
+    "label": "Database search"
+   },
+   {
+    "id": "https://edamontology.org/data_1187",
+    "label": "PubMed ID"
+   }
+  ]
+ },
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Search Europe PMC, a broad open-access biomedical corpus. Surfaces preprints (`source: PPR`), patents (`source: PAT`), Agricola (`source: AGR`), plus everything in PubMed (`MED`) and PMC. Use when additional coverage is needed \u2014 preprints and EPMC-only OA records are the typical recovery. Paginate via `cursorMark`. Defaults to `MED`, `PMC`, and `PPR`; pass `sources` to include `PAT` / `AGR`. Abstracts arrive as a bounded `abstractSnippet` with `abstractTruncated` marking the cut ones \u2014 pass a hit\u2019s `source` and `epmcId` to `pubmed_europepmc_fetch` for the complete abstract.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "cursorMark": {
+    "default": "*",
+    "description": "Pagination cursor. Use `*` (default) for the first page; pass the previous response's `nextCursorMark` verbatim for subsequent pages. A whitespace-only cursor, invisible characters included, is rejected before the request, and a cursor Europe PMC cannot read fails with `europepmc_invalid_input` once a retry of it fails again while the first page of the same query is served.",
+    "type": "string"
+   },
+   "pageSize": {
+    "default": 25,
+    "description": "Results per page. Max 100 per EPMC API.",
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "query": {
+    "description": "Europe PMC search query. Supports field tokens like `AUTH:\"<name>\"`, `JOURNAL:\"<title>\"`, `TITLE:\"<words>\"`, `PUB_YEAR:[2020 TO 2024]`, `DOI:\"...\"`, `EXT_ID:<pmid> AND SRC:MED`, `PMCID:PMC<digits>`. Identifier tokens may be quoted or unquoted \u2014 this tool wraps every query with its `sources` filter, and Europe PMC honors a quoted identifier inside that wrapper. A PubMed-indexed article resolves under `SRC:MED`, not `SRC:PMC`, whichever identifier is used. Free text is matched broadly across abstract/title/keywords. A query with no search term \u2014 blank once HTML entities are decoded and markup, parentheses, and invisible characters are disregarded, such as `()` or `<b></b>` \u2014 is rejected; any other query is sent as written.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "resultType": {
+    "default": "core",
+    "description": "`core` returns abstract, IDs, dates, license; `lite` is a smaller payload with IDs and titles only.",
+    "enum": [
+     "core",
+     "lite"
+    ],
+    "type": "string"
+   },
+   "sort": {
+    "description": "Optional EPMC sort: `<field> asc|desc`, or several comma-separated keys applied in order (`PUB_YEAR desc, CITED desc`). Documented sortable fields: `P_PDATE_D` (publication date), `CITED` (citation count), `AUTH_FIRST` (first author surname), `PUB_YEAR` (publication year). Examples: `P_PDATE_D desc` (newest first), `CITED desc` (most cited). Omit for relevance ranking. Field and direction match case-insensitively. A field outside the documented set may be honored, silently ignored, or rejected, and a sort using one \u2014 or a key without `asc`/`desc` \u2014 can fail with `europepmc_invalid_input` naming it, even when Europe PMC honors the field. Note: `P_PDATE_D` is ignored for preprint-only (`sources: [\"PPR\"]`) result sets \u2014 preprints have no populated publication date, so use `PUB_YEAR` to order preprints by date.",
+    "type": "string"
+   },
+   "sources": {
+    "description": "Filter to specific EPMC sources. Defaults to MED, PMC, PPR when omitted. Pass an explicit array including PAT or AGR to broaden coverage. Allowed values: MED, PMC, PPR, PAT, AGR.",
+    "items": {
+     "enum": [
+      "MED",
+      "PMC",
+      "PPR",
+      "PAT",
+      "AGR"
+     ],
+     "type": "string"
+    },
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "required": [
+   "query"
+  ],
+  "type": "object"
+ },
+ "name": "pubmed_europepmc_search",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "hits",
+     "cursorMark",
+     "searchUrl",
+     "totalCount",
+     "query",
+     "appliedSources"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "appliedSources": {
+    "description": "Sources the query was filtered against (defaults applied)",
+    "items": {
+     "enum": [
+      "MED",
+      "PMC",
+      "PPR",
+      "PAT",
+      "AGR"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "cursorMark": {
+    "description": "Cursor used for this response (echoed from the request)",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `europepmc_unreachable`: Europe PMC failed on every retry attempt \u2014 unreachable, an HTTP 404 or 5xx other than a 504 timeout from its search endpoint, or an empty response with no results. `europepmc_invalid_response`: Europe PMC returned a body that could not be parsed (invalid JSON or XML). `europepmc_invalid_input`: Europe PMC rejected the request input \u2014 an error message in place of results, an empty response to a sort with an undocumented field or no asc/desc direction, or a pagination cursor it cannot read (an empty response on the last attempt the retry budget allows, or a second HTTP 503 when the first page of the same query is served). `blank_query`: The query contains no search term: nothing is left once whitespace and invisible characters such as a zero-width space are disregarded. pubmed_search_articles and pubmed_europepmc_search first decode HTML entities and also disregard markup and parentheses, so `()`, `<b></b>`, and `&nbsp;` hold no term there; pubmed_search_articles also disregards bracketed field tags such as `[pdat]`. `blank_cursor`: The `cursorMark` holds only whitespace or invisible characters such as a zero-width space. Europe PMC cannot read it and answers with the HTTP 503 it also uses for an outage. `europepmc_disabled`: Europe PMC service is disabled via EUROPEPMC_ENABLED=false. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "europepmc_unreachable",
+         "europepmc_invalid_response",
+         "europepmc_invalid_input",
+         "blank_query",
+         "blank_cursor",
+         "europepmc_disabled"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "hits": {
+    "description": "Matching Europe PMC records, in the order EPMC returned them",
+    "items": {
+     "additionalProperties": false,
+     "description": "Single Europe PMC record returned by the search",
+     "properties": {
+      "abstractSnippet": {
+       "description": "First 400 characters of the abstract as display-ready plain text \u2014 JATS/HTML markup stripped and HTML entities decoded \u2014 when `resultType: \"core\"` is requested, with a trailing \u2026 appended when the abstract was cut. Check `abstractTruncated` before treating it as the whole abstract.",
+       "type": "string"
+      },
+      "abstractTruncated": {
+       "description": "Whether `abstractSnippet` was cut short of the full abstract. Retrieve the complete text with `pubmed_europepmc_fetch` using this record\u2019s `source` and `epmcId`. Present whenever `abstractSnippet` is; omitted when Europe PMC carries no abstract.",
+       "type": "boolean"
+      },
+      "authors": {
+       "description": "Formatted author string as display-ready plain text \u2014 JATS/HTML markup stripped and HTML entities decoded.",
+       "type": "string"
+      },
+      "citedByCount": {
+       "description": "Citation count reported by Europe PMC",
+       "type": "number"
+      },
+      "doi": {
+       "description": "DOI when present, cased as Europe PMC reports it. DOIs are case-insensitive by spec and no case normalization is applied here, so the same DOI can arrive in a different case from `pubmed_fetch_articles` (Europe PMC `10.1056/nejmoa2212948`, NCBI `10.1056/NEJMoa2212948`) \u2014 a byte-for-byte comparison across the two reports a false mismatch.",
+       "type": "string"
+      },
+      "epmcId": {
+       "description": "Europe PMC's internal record id. Pass it with this hit's `source` to `pubmed_europepmc_fetch` for the complete record. Europe PMC's `fullTextXML` is keyed on `pmcId`, not on this id, so records without a PMC counterpart have no full text to fetch.",
+       "type": "string"
+      },
+      "epmcUrl": {
+       "description": "Europe PMC article URL",
+       "type": "string"
+      },
+      "firstPublicationDate": {
+       "description": "First publication date (ISO YYYY-MM-DD)",
+       "type": "string"
+      },
+      "hasFullTextXml": {
+       "description": "Whether Europe PMC publishes a fullTextXML for this record. Derived from `inPMC` \u2014 only records with a PMC counterpart have JATS via EPMC; preprints (`PPR`) and MED-only records return false.",
+       "type": "boolean"
+      },
+      "isOpenAccess": {
+       "description": "Whether EPMC reports the record as open access",
+       "type": "boolean"
+      },
+      "journal": {
+       "description": "Journal title as display-ready plain text \u2014 JATS/HTML markup stripped and HTML entities decoded.",
+       "type": "string"
+      },
+      "pmcId": {
+       "description": "PMC ID when present in PMC",
+       "type": "string"
+      },
+      "pmid": {
+       "description": "PMID when present in PubMed",
+       "type": "string"
+      },
+      "pubYear": {
+       "description": "Publication year",
+       "type": "string"
+      },
+      "source": {
+       "description": "Europe PMC source \u2014 `MED` (PubMed), `PMC` (PubMed Central), `PPR` (preprint), `PAT` (patent), `AGR` (Agricola)",
+       "enum": [
+        "MED",
+        "PMC",
+        "PPR",
+        "PAT",
+        "AGR"
+       ],
+       "type": "string"
+      },
+      "title": {
+       "description": "Article title as display-ready plain text \u2014 JATS/HTML markup stripped and HTML entities decoded.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "source",
+      "epmcId",
+      "epmcUrl"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "nextCursorMark": {
+    "description": "Cursor to pass back as `cursorMark` for the next page. Absent on the final page.",
+    "type": "string"
+   },
+   "notice": {
+    "description": "Optional guidance when results are empty or paging overshot",
+    "type": "string"
+   },
+   "query": {
+    "description": "Effective query string echoed by Europe PMC",
+    "type": "string"
+   },
+   "searchUrl": {
+    "description": "Europe PMC's website search URL for this query",
+    "type": "string"
+   },
+   "totalCount": {
+    "description": "Total matching records across all pages",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Pubmed Europepmc Search"
+}

@@ -1,0 +1,163 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Create Company Product"
+ },
+ "description": "Creates a product or service in the catalog of the company in the path and returns it with\nits `id`. A product holds reusable defaults for invoice lines: name, price, unit and taxes.\n\n- **Required:** only `name`. Omitted, `category` is `SERVICE`, and the product is created\n  active.\n- **`code`:** optional, and unique within the company. A code another product of the\n  company already uses answers `409` with `PRODUCT_DUPLICATE`.\n- **Taxes:** `equivalence_surcharge_rate` has to be coherent with `main_tax.regime_key`;\n  an incoherent pair answers `422` (see the field).\n- **Several at once:** `POST /v1/companies/{company_id}/products/bulk` creates up to 100\n  in one call.\n\nEndpoint: POST /v1/companies/{company_id}/products",
+ "inputSchema": {
+  "$defs": {
+   "CreateProductRequest": {
+    "additionalProperties": false,
+    "properties": {
+     "category": {
+      "$ref": "#/$defs/ProductCategory"
+     },
+     "code": {
+      "description": "Unique alphanumeric product code (optional)",
+      "maxLength": 50,
+      "pattern": "^[a-zA-Z0-9_-]*$",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "default_price": {
+      "description": "Suggested default price (optional)",
+      "minimum": 0,
+      "multipleOf": 0.0001,
+      "type": "number"
+     },
+     "description": {
+      "description": "Detailed description (optional)",
+      "type": "string"
+     },
+     "equivalence_surcharge_rate": {
+      "description": "Equivalence surcharge percentage (optional).\n\nMust be coherent with `main_tax.regime_key`: a surcharge > 0 is\nonly valid under regime `18`. When `regime_key` is omitted it is\nderived automatically (`18` with a surcharge > 0, `01` otherwise).\nAn explicit `regime_key` that does not admit a surcharge combined\nwith a surcharge > 0 is rejected with a 422\n(`SURCHARGE_REQUIRES_REGIME`), and an explicit regime `18` without\na surcharge > 0 is rejected with a 422\n(`REGIME_REQUIRES_SURCHARGE`).\n",
+      "maximum": 100,
+      "minimum": 0,
+      "multipleOf": 0.01,
+      "type": "number"
+     },
+     "irpf_rate": {
+      "description": "IRPF withholding percentage (optional).\n\nThe rate must be one of `IrpfPercentage` (`INVALID_IRPF` otherwise) and one\nthe company can bear, the same check as an invoice line (see\n`WithholdingOptions` in the tax configuration): an entity gets the rates of\nindividuals rejected with `IRPF_RATE_NOT_FOR_CORPORATE_ISSUER`, and an individual gets\n`9.5` rejected with `IRPF_RATE_ONLY_FOR_CORPORATE_ISSUER`.\n",
+      "maximum": 100,
+      "minimum": 0,
+      "multipleOf": 0.01,
+      "type": "number"
+     },
+     "main_tax": {
+      "$ref": "#/$defs/TaxInfo"
+     },
+     "name": {
+      "description": "Product/service name",
+      "maxLength": 255,
+      "type": "string"
+     },
+     "unit": {
+      "description": "Unit of measure (optional)",
+      "maxLength": 50,
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   },
+   "ProductCategory": {
+    "description": "Product/service category:\n* PRODUCT - Physical, tangible products\n* SERVICE - General services\n* CONSULTING - Consulting and advisory services\n* SOFTWARE - Development, licenses, SaaS\n* TRAINING - Courses, workshops, training\n* OTHER - Other unclassified types\n",
+    "enum": [
+     "PRODUCT",
+     "SERVICE",
+     "CONSULTING",
+     "SOFTWARE",
+     "TRAINING",
+     "OTHER"
+    ],
+    "type": "string"
+   },
+   "RegimeKey": {
+    "description": "Regime key according to VeriFactu regulations. Omitted, `01` (general regime) applies:\n- 01: General regime operation\n- 02: Export (IVA and IGIC; not IPSI, whose AEAT list is `01, 08, 11, 18, 19, 20`)\n- 03: Used goods, art, antiques (not accepted, see below)\n- 04: Investment gold\n- 05: Travel agencies\n- 06: Group of entities (not accepted, see below)\n- 07: Cash basis\n- 08: Operation subject to another indirect tax \u2014 IPSI or IGIC on an IVA line, IPSI or IVA\n  on an IGIC line. It is **not** the general regime of IGIC, which is `01`.\n- 09: Mediating agencies\n- 10: Third-party collections\n- 11: Local rental\n- 14: VAT pending in certifications (not accepted, see below)\n- 15: VAT pending successive tract\n- 17: OSS and IOSS\n- 18: Equivalence surcharge\n- 19: REAGYP\n- 20: Simplified regime\n\n**What AEAT requires with each key** (Validaciones VERI*FACTU 3.1.3.15.6), checked on\nIVA and IGIC lines before the invoice is numbered. Otherwise the request is rejected with\n`422` and the code in brackets:\n- `04`: only reverse charge (an `ISP_ART_84_2_*` reason) or an exemption\n  (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n- `08`: only `exemption_reason: NO_SUJETA_LOCALIZACION`, at 0 %\n  (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n- `10`: only `exemption_reason: NO_SUJETA_ART_7_9`, on a `STANDARD` invoice whose\n  recipient has a `nif` (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`,\n  `REGIME_KEY_REQUIRES_STANDARD_INVOICE`, `REGIME_KEY_REQUIRES_RECIPIENT_NIF`).\n- `11` (IVA): a subject line only at 21 %, and no reverse charge\n  (`REGIME_KEY_REQUIRES_VAT_RATE`, `REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n- `06` and `14` are not accepted (`REGIME_KEY_NOT_SUPPORTED`): AEAT requires with them\n  data the invoice does not carry (a cost-based taxable base; an operation date after the\n  issue date and a public-administration recipient).\n- `03` (used goods) is not accepted (`REGIME_KEY_NOT_SUPPORTED`): under it the invoice\n  must not show the tax separately (RD 1619/2012, art. 16.2.c), and it always does. The\n  corrective of an invoice that already carried `03` keeps it.\n- `05` (travel agencies) and `07` (cash basis) are accepted, and the invoice PDF carries\n  the mention of their regime (RD 1619/2012, art. 6.1 n and p). `07`: no reverse charge,\n  no non-subject reason and, of the exemptions, only art. 20 or `OTRO`\n  (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n`GET /v1/tax-types` only offers the keys that are accepted.\n\n**One exception to \"a key you send is the key you get\":** when the line ends up\ncarrying an equivalence surcharge \u2014 whether you sent `equivalence_surcharge_rate`\nor it was inherited from the company's tax configuration \u2014 a `01` is rewritten to\n`18`, because a surcharge under the general regime is fiscally incoherent. Send\n`equivalence_surcharge_rate: 0` explicitly to keep `01`. See\n`equivalence_surcharge_rate` in the invoice line for the full rules.\n",
+    "enum": [
+     "01",
+     "02",
+     "03",
+     "04",
+     "05",
+     "06",
+     "07",
+     "08",
+     "09",
+     "10",
+     "11",
+     "14",
+     "15",
+     "17",
+     "18",
+     "19",
+     "20"
+    ],
+    "type": "string"
+   },
+   "TaxInfo": {
+    "additionalProperties": false,
+    "description": "Complete tax information with cross-validations:\n- IVA: real rates 4, 10, 21, and the temporary 2, 5 and 7.5 (see below for 0)\n- IGIC: 0, 3, 5, 7, 9.5, 15, 20 \u2014 here 0 is the real \"Tipo Cero\"\n- IPSI: real rates 0.5, 1, 2, 4, 8, 10 (see below for 0)\n- OTHER: any percentage between 0 and 100\n\n**0 % under IVA and IPSI is not a rate, it is the exemption sentinel.** It is accepted\non a line, but only together with an `exemption_reason` (exempt or non-subject\noperation); on its own it says nothing and the line is rejected. That is why\n`GET /v1/tax-types` publishes the IVA rates without 0: the legitimate way\nto a 0 % IVA line is through an exemption reason, which the same response also\npublishes. IGIC is different \u2014 its 0 % is a real legal rate (basic necessities) and\nneeds no reason.\n\n**IVA 5 %** (the temporary rate applied from 2022 to electricity, gas and certain\nfoodstuffs) is no longer in force for new operations. AEAT only accepts it on operations\ndated from 2022-07-01 to 2024-09-30: send the `operation_date` of that period, because\nwithout one the issue date decides and a line at 5 % is rejected with\n`422 VAT_RATE_NOT_ACCEPTED_ON_DATE`. Its equivalence surcharge pair is 0.5 up to 2022-12-31\nand 0.62 from 2023-01-01. **IVA 2 % and 7.5 %** (temporary rates of the last quarter of 2024)\nare accepted only on operations dated from 2024-10-01 to 2024-12-31, with surcharges 0.26\nand 1.\n\nException: when regime_key = \"17\" (OSS/IOSS) the invoice applies the destination\ncountry VAT instead of the Spanish one, so any percentage in the EU range [0, 27]\nis accepted regardless of the tax type set \u2014 including 0 without an exemption reason.\n",
+    "properties": {
+     "percentage": {
+      "description": "Tax percentage",
+      "maximum": 100,
+      "minimum": 0,
+      "type": "number"
+     },
+     "regime_key": {
+      "$ref": "#/$defs/RegimeKey"
+     },
+     "type": {
+      "$ref": "#/$defs/TaxType"
+     }
+    },
+    "required": [
+     "type",
+     "percentage"
+    ],
+    "type": "object"
+   },
+   "TaxType": {
+    "description": "Tax type by territory:\n- IVA: Iberian Peninsula and Balearic Islands (4%, 10%, 21%; 2%, 5% and 7.5% only on operations of their period)\n- IGIC: Canary Islands (0%, 3%, 5%, 7%, 9.5%, 15%, 20%)\n- IPSI: Ceuta and Melilla (0.5%, 1%, 2%, 4%, 8%, 10%)\n- OTHER: Configurable 0%-100%\n\nUnder IVA and IPSI, 0% is not one of these rates: it is the exemption/non-subject\nsentinel and always travels with an `exemption_reason`. IGIC's 0% is a real rate.\nSee `TaxInfo` for the full rules.\n",
+    "enum": [
+     "IVA",
+     "IGIC",
+     "IPSI",
+     "OTHER"
+    ],
+    "type": "string"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "body": {
+    "$ref": "#/$defs/CreateProductRequest"
+   },
+   "company_id": {
+    "description": "Unique identifier (UUID) of the company the operation acts on \u2014 its identifier, not its NIF. It is the only source of context: the account that owns it is derived from it, and the `BeeL-Active-Company` header plays no part. A company you do not reach answers `403`, and so does a company that does not exist, so the existence of a company in another account is never disclosed.",
+    "format": "uuid",
+    "type": "string"
+   },
+   "idempotency_key": {
+    "description": "Optional idempotency key for this operation. Omit it and one is derived from the request itself, which makes a blind retry safe but also collapses a SECOND, deliberately identical operation into the first for 24 hours. Set it \u2014 to an order id, or anything unique per intended operation \u2014 whenever you mean to create something that may look identical to what you just created.",
+    "maxLength": 255,
+    "pattern": "^[a-zA-Z0-9_-]+$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "company_id",
+   "body"
+  ],
+  "type": "object"
+ },
+ "name": "beel_create_product"
+}

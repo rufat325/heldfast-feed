@@ -1,0 +1,47 @@
+{
+ "description": "Populate a directory category from the tenant's IDAP data\n(norm_cli_*.businesses). norm_cli_* is the canonical store for every\nbusiness SpiderIQ has seen for this tenant (SpiderMaps + SpiderSite +\nSpiderCompanyData + SpiderPeople merged). This reads directly \u2014 no\nscheduler, no sync pipeline, no external call.\n\n\ud83d\udd34 THIS IS AN UPSERT KEYED ON (category, slug) \u2014 RE-RUNNING IT NEVER REMOVES\nANYTHING. A business deleted from IDAP, or renamed so it produces a different\nslug, leaves its old listing PUBLISHED IN THE DIRECTORY FOREVER. Successive\nimports only ever add and update, so a category drifts further from its source\non every run. `prune: true` is the fix and it is OFF BY DEFAULT.\n\n`prune: true` ARCHIVES (never deletes \u2014 status='archived', which drops the row\nout of every published door and is reversible with directory_upsert_listing)\nevery listing in the category that this import's own result set did not produce.\nIt refuses rather than guess, and reports the refusal in `prune_skipped_reason`:\n  \u00b7 source_returned_no_rows   \u2014 an empty result set is far more often a filter\n                                that matched nothing than a category that\n                                genuinely emptied; pruning there would archive\n                                everything. Confirm the filter returns rows first.\n  \u00b7 source_truncated_at_limit \u2014 the SELECT hit `limit`, so the full matching set\n                                is unknown and \"absent from the page\" is a\n                                pagination artefact, not a deletion. Raise limit\n                                or narrow the filter.\nA prune-refusal is an ANSWER, not a transient error: re-running unchanged\nrefuses identically.\n\nEvery column the tenant's businesses table declares is carried through (typed\ncolumn where one exists, otherwise into the listing's `data` JSONB) \u2014 this is\nno longer a hand-picked subset.\n\nURL shape produced: /{directory_base}/{category_slug}/{city_slug}/{listing_slug},\nwhere directory_base is the tenant's per-tenant prefix and defaults to\n\"directory\". city_slug is derived server-side from the imported city + state \u2014\nyou never pass it. The same listings are also reachable FLAT (no category/city\nsegments) from a dynamic_list page bound to collection_type \"directory_listings\".\n\nFilters (all optional): category_filter matches the categories[] array,\ncountry_code exact (uppercase), city is ILIKE substring, rating_min is\ninclusive. limit caps at 5000 to align with bulk_upsert.\n\nReturns {upserted, inserted, updated, pruned, failed, source_rows,\naffected_cities, source_schema, fields_mapped, filter, sync_log_id,\nfailures?, prune_skipped_reason?, hint?}. If the tenant has no norm_cli_*\nschema yet (never ran SpiderMaps), hint explains the workaround.",
+ "inputSchema": {
+  "properties": {
+   "category_filter": {
+    "description": "Match businesses.categories array member (e.g. \"Plumber\")",
+    "type": "string"
+   },
+   "category_slug": {
+    "type": "string"
+   },
+   "city": {
+    "description": "ILIKE substring match",
+    "type": "string"
+   },
+   "country_code": {
+    "description": "ISO-2 uppercase (e.g. \"US\")",
+    "type": "string"
+   },
+   "limit": {
+    "description": "Max rows to import (hard cap 5000)",
+    "type": "number"
+   },
+   "project": {
+    "description": "Optional project \u2014 a website inside the workspace (proj_xxx) \u2014 to scope this call to. Sent as the X-Project-Id header. If omitted, the spideriq.json / SPIDERIQ_PROJECT_ID binding (or the workspace default project) is used.",
+    "type": "string"
+   },
+   "prune": {
+    "description": "ARCHIVE listings this import did not produce (default false). Without it the import is add/update only and stale listings stay published forever. Refuses on an empty or limit-truncated result set and tells you which, in `prune_skipped_reason`.",
+    "type": "boolean"
+   },
+   "rating_min": {
+    "description": "Inclusive lower bound on rating",
+    "type": "number"
+   },
+   "workspace": {
+    "description": "Tenant to target (cli_\u2026). Omit to use the active/bound workspace. list_workspaces shows the options.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "category_slug"
+  ],
+  "type": "object"
+ },
+ "name": "directory_import_from_idap"
+}

@@ -1,0 +1,447 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Patch Company By Id"
+ },
+ "description": "Updates the editable fields of a company; the set is the one\n`UpdateCompanyRequest` declares.\n\n- **Immutable fields:** `nif`, `entity_type` and `legal_form`, once set. Sending one of\n  them with a different value answers `422` with a code that names the field; sending the\n  value it already has is not a change.\n- **`legal_name`:** changing it requires the NIF to pass an AEAT census re-validation. For a\n  legal entity (`LEGAL_ENTITY`) the census identifies the company by its NIF alone: the name\n  is not verified, so the name sent cannot make it fail. For an `INDIVIDUAL` the name must\n  match the one the census holds for that NIF.\n- **Census not answering:** if the AEAT census cannot be reached, the change is not\n  rejected. The response is `200` with the new `legal_name` stored, and BeeL repeats the\n  census check in the background. The outcome of that check is not part of this resource:\n  no field of `CompanyData` carries it. To know what the census says about a NIF and a name,\n  ask `POST /v1/nif/validate`.\n- **Addresses:** a Spanish postal code (`country_code` omitted or `ES`) must have 5 digits,\n  in `address` and in `legal_representative.address`; otherwise `422 POSTAL_CODE_INVALID_ES`.\n  Other countries' postal codes are free-form.\n\n## Test credentials on a Live company\n\nOnce the company is activated in Live, a test credential may only write the fields that\naffect how the invoice looks: `logo_url`, `invoice_accent_color`,\n`invoice_template_type`, `invoice_language`, `email_language` and `additional_info`. Any\nother field describes the real business \u2014 fiscal address, legal representative, bank\ndetails, contact data, IAE, activity start date, payment term \u2014 and answers\n`422 FISCAL_IDENTITY_LIVE_ONLY` from Test, since the company is a single record shared by\nboth modes. A company not activated in Live accepts the whole body from Test, and sending\na field its current value is never a change.\n\n## What comes back\n\nThe `200` returns `CompanyData` with **every field this request accepts**, under the same\nname and the same type \u2014 so the response is the confirmation of what was stored, and a\nlater `GET` says the same. A field you never set comes back absent, which means \"nothing\nstored\", not \"hidden\".\n\nTwo things live outside this body and keep their own reads: the invoice series\n(`GET /v1/companies/{company_id}/series`) and the rendering block, which is also served\non its own by `GET /v1/companies/{company_id}/invoice-customization`.\n\nEndpoint: PATCH /v1/companies/{company_id}\n\n\u26a0\ufe0f Read before calling:\n- Which company an operation acts on, and how that is selected. (resource: beel://guardrails/multi-nif)",
+ "inputSchema": {
+  "$defs": {
+   "Address": {
+    "additionalProperties": false,
+    "description": "Address you send when you create or update a company, a customer or an onboarding.\n\nAddresses you read back are described by their own schema.\n",
+    "properties": {
+     "city": {
+      "description": "City or town - Latin characters only",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     },
+     "country": {
+      "description": "Country of the address, as its ISO 3166-1 alpha-2 code (`GB`) or its official name\nin Spanish, English or Catalan (`Reino Unido`, `United Kingdom`, `Regne Unit`;\ncase and accents are ignored). Anything else, such as `UK`, is rejected with\n`422 COUNTRY_CODE_REQUIRED`: send `country_code` instead. If it names a different\ncountry than `country_code`, `422 COUNTRY_CODE_MISMATCH` (`Espa\u00f1a` alone yields to\na foreign `country_code`: it was the old default). What is stored and\nreturned is always the Spanish name derived from the resulting code, never the\ntext sent. With neither field present, the address is Spanish (`Espa\u00f1a`).\n",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     },
+     "country_code": {
+      "description": "ISO 3166-1 alpha-2 country code: the canonical field that decides the country of\nthe address. It must be a real country code (`GB`, not `UK`); otherwise\n`422 COUNTRY_CODE_REQUIRED`. When it is omitted, the code comes from `country`\n(see there). With neither field present, the address is stored as `ES`.\n",
+      "maxLength": 2,
+      "minLength": 2,
+      "pattern": "^[A-Z]{2}$",
+      "type": "string"
+     },
+     "door": {
+      "description": "Door or apartment",
+      "maxLength": 10,
+      "type": "string"
+     },
+     "floor": {
+      "description": "Floor or level",
+      "maxLength": 10,
+      "type": "string"
+     },
+     "number": {
+      "description": "Street number. Optional: omit it when the address has none, or when `street` already\ncarries the address in full.\n",
+      "maxLength": 20,
+      "minLength": 1,
+      "type": "string"
+     },
+     "postal_code": {
+      "description": "Postal code (5 digits for Spain, free format for other countries)",
+      "maxLength": 20,
+      "minLength": 1,
+      "type": "string"
+     },
+     "province": {
+      "description": "Province or state - Latin characters only",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     },
+     "street": {
+      "description": "Full address (street, number, floor, etc.) - Latin characters only",
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "street",
+     "postal_code",
+     "city",
+     "province"
+    ],
+    "type": "object"
+   },
+   "Email": {
+    "description": "Email address (minimum valid email is 5 chars, e.g. a@b.co)",
+    "format": "email",
+    "maxLength": 255,
+    "minLength": 5,
+    "type": "string"
+   },
+   "EntityType": {
+    "description": "Taxpayer type.\nINDIVIDUAL: Natural person (individual self-employed).\nLEGAL_ENTITY: Legal entity (company with legal form: SL, SA, etc.).\n",
+    "enum": [
+     "INDIVIDUAL",
+     "LEGAL_ENTITY"
+    ],
+    "type": "string"
+   },
+   "IBAN": {
+    "description": "IBAN (International Bank Account Number).\nRequired when payment method is BANK_TRANSFER.\n",
+    "maxLength": 34,
+    "minLength": 15,
+    "pattern": "^[A-Z]{2}\\d{2}[A-Z0-9]{1,30}$",
+    "type": "string"
+   },
+   "InvoiceTemplateType": {
+    "description": "Invoice PDF template. `MODERN_TABLE` is a structured table layout for\nproduct/service lines; `PROFESSIONAL_SERVICE` is a text-based layout.\n",
+    "enum": [
+     "MODERN_TABLE",
+     "PROFESSIONAL_SERVICE"
+    ],
+    "type": "string"
+   },
+   "Language": {
+    "description": "Supported languages: `es` Spanish, `en` English, `ca` Catalan.\n",
+    "enum": [
+     "es",
+     "en",
+     "ca"
+    ],
+    "type": "string"
+   },
+   "LegalRepresentative": {
+    "additionalProperties": false,
+    "description": "Legal representative data for a legal entity.\nOnly used when entity_type = LEGAL_ENTITY.\n",
+    "properties": {
+     "address": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/Address"
+       },
+       {
+        "description": "Address of the legal representative"
+       }
+      ]
+     },
+     "full_name": {
+      "description": "Full name of the legal representative",
+      "maxLength": 255,
+      "minLength": 1,
+      "type": "string"
+     },
+     "nif": {
+      "description": "Tax ID of the legal representative (DNI/CIF/NIE)",
+      "maxLength": 9,
+      "minLength": 9,
+      "pattern": "^(\\d{8}[A-Z]|[ABCDEFGHJKLMNPQRSUVW]\\d{7}[A-Z0-9]|[XYZ]\\d{7}[A-Z])$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "full_name",
+     "nif",
+     "address"
+    ],
+    "type": "object"
+   },
+   "NIF": {
+    "description": "Spanish Tax ID (9 characters, uppercase only). Structural validation:\n- DNI: 8 digits + 1 letter (e.g., 12345678A)\n- NIE: X/Y/Z + 7 digits + 1 letter (e.g., X1234567A)\n- CIF: Organization letter + 7 digits + 1 control digit/letter (e.g., B12345674)\n",
+    "maxLength": 9,
+    "minLength": 9,
+    "pattern": "^(\\d{8}[A-Z]|[ABCDEFGHJKLMNPQRSUVW]\\d{7}[A-Z0-9]|[XYZ]\\d{7}[A-Z])$",
+    "type": "string"
+   },
+   "PhoneInput": {
+    "description": "A phone number as this API accepts it: 9 to 20 characters, and only digits, spaces,\ndashes, parentheses and an optional leading `+`. Every request that takes a phone number\nuses this schema.\n\nIt is `Phone` plus the rules enforced on input. A value this schema accepts always\nsatisfies `Phone`, so anything you send here is something a response can return.\n",
+    "maxLength": 20,
+    "minLength": 9,
+    "pattern": "^[+]?[0-9\\s\\-\\(\\)]+$",
+    "type": "string"
+   },
+   "SWIFT": {
+    "description": "SWIFT/BIC code",
+    "maxLength": 11,
+    "minLength": 8,
+    "pattern": "^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$",
+    "type": "string"
+   },
+   "UpdateCompanyRequest": {
+    "additionalProperties": false,
+    "description": "Editable fields of a company.\n`entity_type`, `nif` and `legal_form` are immutable once set;\n`legal_name` can only be corrected together with a successful\nAEAT census re-validation of the NIF. For a company that\nre-validation checks the CIF only \u2014 the name is **not verified**,\nso it can never fail because of the name you send.\n\n**Everything here reads back.** The `200` of the update \u2014 and every later\n`GET /v1/companies/{company_id}` \u2014 returns `CompanyData`, which carries each of these\nfields under the same name and the same type. No need to keep your own copy to\nreconcile: write it, read it back. Five of them also have a read of their own,\n`logo_url`, `invoice_template_type`, `invoice_accent_color`, `invoice_language` and\n`email_language`, all returned by\n`GET /v1/companies/{company_id}/invoice-customization`.\n\nA field you never set is **absent** from the read, which means \"nothing stored\" \u2014 not\n\"hidden from you\", and not a default. What varies by caller is what you may *write*\n(see the Test-credential rule below), never what comes back.\n\n**From Test, on a company activated in Live, only six of these fields are writable**:\n`logo_url`, `invoice_accent_color`, `invoice_template_type`, `invoice_language`,\n`email_language` and `additional_info` \u2014 what the invoice *looks like* and the free\nnote it carries. Everything else describes the real business and answers\n`422 FISCAL_IDENTITY_LIVE_ONLY` unless the call is made with a live credential.\n",
+    "properties": {
+     "account_holder": {
+      "description": "Bank account holder",
+      "maxLength": 255,
+      "minLength": 1,
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "activity_start_date": {
+      "description": "Activity start date",
+      "format": "date",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "additional_info": {
+      "description": "Free note printed on the invoice. It is presentation, not fiscal identity, so a\ntest credential may change it even on a company activated in Live. Read it back in\n`CompanyData.additional_info` (`GET /v1/companies/{company_id}`).\n",
+      "maxLength": 500,
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "address": {
+      "$ref": "#/$defs/Address"
+     },
+     "default_iban": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/IBAN"
+       },
+       {
+        "anyOf": [
+         {},
+         {
+          "type": "null"
+         }
+        ]
+       }
+      ]
+     },
+     "default_payment_term": {
+      "description": "Default payment term in days",
+      "maximum": 365,
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "default_swift": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/SWIFT"
+       },
+       {
+        "anyOf": [
+         {},
+         {
+          "type": "null"
+         }
+        ]
+       }
+      ]
+     },
+     "email": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/Email"
+       },
+       {
+        "anyOf": [
+         {},
+         {
+          "type": "null"
+         }
+        ]
+       }
+      ]
+     },
+     "email_language": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/Language"
+       },
+       {
+        "anyOf": [
+         {
+          "description": "Language for emails"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       }
+      ]
+     },
+     "entity_type": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/EntityType"
+       },
+       {
+        "anyOf": [
+         {
+          "description": "Entity type. IMMUTABLE once set."
+         },
+         {
+          "type": "null"
+         }
+        ]
+       }
+      ]
+     },
+     "iae": {
+      "description": "IAE code",
+      "maxLength": 20,
+      "minLength": 1,
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "invoice_accent_color": {
+      "description": "Invoice PDF accent color (#RRGGBB)",
+      "pattern": "^#[0-9A-Fa-f]{6}$",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "invoice_language": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/Language"
+       },
+       {
+        "anyOf": [
+         {
+          "description": "Language for invoice PDFs"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       }
+      ]
+     },
+     "invoice_template_type": {
+      "anyOf": [
+       {
+        "allOf": [
+         {
+          "$ref": "#/$defs/InvoiceTemplateType"
+         }
+        ],
+        "description": "Invoice PDF template type"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "legal_form": {
+      "description": "Legal form (SL, SA, ...). IMMUTABLE once set. Only for LEGAL_ENTITY.",
+      "maxLength": 100,
+      "minLength": 1,
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "legal_name": {
+      "description": "Legal/fiscal name. Changing it triggers AEAT census re-validation of the NIF.\nFor a self-employed individual the census matches NIF and name together, so a\nname it does not recognise is rejected. For a legal entity the name is\n**not verified**: the re-validation only confirms the CIF, and the business\nname held by the census is the only thing to contrast yours against.\n",
+      "maxLength": 255,
+      "minLength": 1,
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "legal_representative": {
+      "$ref": "#/$defs/LegalRepresentative"
+     },
+     "logo_url": {
+      "description": "Logo URL",
+      "maxLength": 500,
+      "minLength": 1,
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "nif": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/NIF"
+       },
+       {
+        "anyOf": [
+         {
+          "description": "NIF/CIF. IMMUTABLE once set."
+         },
+         {
+          "type": "null"
+         }
+        ]
+       }
+      ]
+     },
+     "phone": {
+      "anyOf": [
+       {
+        "allOf": [
+         {
+          "$ref": "#/$defs/PhoneInput"
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "trade_name": {
+      "description": "Commercial/trade name for the company",
+      "maxLength": 255,
+      "minLength": 1,
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "website": {
+      "description": "Website",
+      "maxLength": 500,
+      "minLength": 1,
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "body": {
+    "$ref": "#/$defs/UpdateCompanyRequest"
+   },
+   "company_id": {
+    "description": "Unique identifier (UUID) of the company the operation acts on \u2014 its identifier, not its NIF. It is the only source of context: the account that owns it is derived from it, and the `BeeL-Active-Company` header plays no part. A company you do not reach answers `403`, and so does a company that does not exist, so the existence of a company in another account is never disclosed.",
+    "format": "uuid",
+    "type": "string"
+   }
+  },
+  "required": [
+   "company_id",
+   "body"
+  ],
+  "type": "object"
+ },
+ "name": "beel_patch_company"
+}

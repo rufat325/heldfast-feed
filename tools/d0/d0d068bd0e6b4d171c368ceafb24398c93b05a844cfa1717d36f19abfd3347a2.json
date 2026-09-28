@@ -1,0 +1,49 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Bulk-resolve Compass listings by street address"
+ },
+ "description": "Resolve up to 100 street addresses to Compass listing URLs in a single call. Returns one row per input, either `{ resolved: true, url, listing_id_sha, pid, address, matched_via }`, `{ resolved: false, error, query }` for a genuine no-match, or \u2014 when the bridge timed out / was unreachable (issue #85) \u2014 `{ resolved: false, status: \"timeout\" | \"bridge_down\", retryable: true, error, query }`. A `status` row is NOT a miss: the lookup never completed, so retry it (a cold bridge usually succeeds on the second call) rather than concluding Compass has no listing. A row with `status: \"auth_required\"` (plus `error` and `hint`) means the browser session was signed out or stuck on an AWS WAF challenge: sign in to compass.com, then retry. Each row walks the same three rungs as `compass_get_by_address` \u2014 first the structured typeahead `POST /api/v3/omnisuggest/autocomplete` (the primary rung that routes around the AWS WAF, issues #78/#79), then `/homes-for-sale/?q=<address>` (freetext), then `/homes-for-sale/<locality-slug>/` (search_fallback, issue #71) \u2014 and verifies candidates against the same whole-token address-match policy (#45). The `matched_via` field on each resolved row indicates which rung found it. Compass's search degrades into far-away top hits when the local market has no match, and bulk amplifies the corruption surface, so a miss returns `resolved: false` with no URL rather than leaking the wrong property. Calls fan out concurrently server-side, and the whole call is bounded by an overall deadline: any row still unsettled when it is reached comes back as `{ resolved: false, status: \"pending\", retryable: true, error, query }` with a top-level `pending` count \u2014 that is NOT a miss, so re-run just those addresses. Read-only; safe to call repeatedly.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "addresses": {
+    "description": "Up to 100 address inputs. For higher counts, batch into multiple calls.",
+    "items": {
+     "additionalProperties": {},
+     "properties": {
+      "address": {
+       "description": "Street address line, e.g. \"126 Sleeping Bear Ln\".",
+       "minLength": 1,
+       "type": "string"
+      },
+      "city": {
+       "type": "string"
+      },
+      "state": {
+       "type": "string"
+      },
+      "zip": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "address"
+     ],
+     "type": "object"
+    },
+    "maxItems": 100,
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "required": [
+   "addresses"
+  ],
+  "type": "object"
+ },
+ "name": "compass_resolve_addresses",
+ "title": "Bulk-resolve Compass listings by street address"
+}

@@ -1,0 +1,768 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "Recognise a passport, national ID card or driver's licence from a photo or scan and return what is printed on it as structured JSON. Inputs: the image as image_base64 (always available), image_path (a local file, and only inside the directory DOC_CHEAP_IMAGE_ROOT names) or image_url (https, on a public address); plus the optional expect_country, return_portrait, retain_hours, reference and idempotency_key. Output: a Scan object \u2013 meta (id, status, billed, confidence, timing), document (kind, issuing country, number, series, date of issue, date of expiry, whether it has expired and how many days are left), holder (given names, surname, date of birth, sex, nationality), fields (every field read off the printed page, each with its own confidence), mrz (whether the machine-readable zone checks out, why not when it does not, and its lines exactly as read), images, quality and authenticity \u2013 plus a one-line summary of the same result. Calls POST /v1/scans. Cost: it bills one credit ($0.01) only when a document is recognised; an unreadable image, an empty frame or an unsupported type costs nothing, and meta.billed says which happened. Without a key, the public sandbox key is used. It gives 10 free recognised documents per address in all, and at most 10 requests per address an hour, whatever their answer. Registering gives 100 free documents every month. Use it whenever someone hands over an identity document and wants it read, transcribed, or checked against what they claim \u2013 a name, a document number, a date of birth or an expiry date.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "expect_country": {
+    "description": "ISO 3166-1 alpha-3 country you expect, or omit for any.",
+    "maxLength": 3,
+    "minLength": 3,
+    "type": "string"
+   },
+   "idempotency_key": {
+    "description": "Makes a retried scan return the first result instead of charging again.",
+    "type": "string"
+   },
+   "image_base64": {
+    "description": "The document image as base64 (a data: URL is also accepted).",
+    "type": "string"
+   },
+   "image_path": {
+    "description": "Path to a local image file, inside the directory named by DOC_CHEAP_IMAGE_ROOT. Disabled unless that variable is set; send image_base64 instead.",
+    "type": "string"
+   },
+   "image_url": {
+    "description": "https: URL of an image on a public internet address, which the server fetches (25 MB maximum).",
+    "type": "string"
+   },
+   "reference": {
+    "description": "Your own correlation string, echoed back in the result.",
+    "maxLength": 128,
+    "type": "string"
+   },
+   "retain_hours": {
+    "description": "Hours the result stays readable via GET /v1/scans/{id} (0 = store nothing). Omit it to use the account's own history-retention setting.",
+    "maximum": 8760,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "return_portrait": {
+    "description": "Whether to include the holder photograph crop, images.main_photo (default true).",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "name": "scan_document",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+   "CheckResult": {
+    "description": "Outcome of a single check.",
+    "enum": [
+     "pass",
+     "warn",
+     "fail"
+    ],
+    "type": "string"
+   },
+   "ConfidenceBand": {
+    "description": "How strongly the recognition backs this value: `high`, `medium` or `low`. An unknown or missing probability reads as `low`.",
+    "enum": [
+     "low",
+     "medium",
+     "high"
+    ],
+    "type": "string"
+   },
+   "FieldCategory": {
+    "description": "Which group of the report a field belongs to.",
+    "enum": [
+     "identity",
+     "document",
+     "dates",
+     "address",
+     "visa",
+     "other"
+    ],
+    "type": "string"
+   },
+   "MrzStatus": {
+    "description": "Verdict on the machine-readable zone: `passed` (present, every check digit valid and nothing contradicting the printed page), `failed` (present but something did not check out) or `absent` (the document carries none).",
+    "enum": [
+     "passed",
+     "failed",
+     "absent"
+    ],
+    "type": "string"
+   },
+   "ScanAuthenticity": {
+    "additionalProperties": false,
+    "properties": {
+     "checks": {
+      "description": "One entry per authenticity check that ran. Always present; empty under the recognition-only scenario, where nothing ran.",
+      "items": {
+       "$ref": "#/definitions/ScanCheck"
+      },
+      "type": "array"
+     },
+     "overall": {
+      "description": "`not_checked` under the recognition-only scenario; populated by authenticity verification later.",
+      "enum": [
+       "not_checked",
+       "pass",
+       "warn",
+       "fail"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "overall",
+     "checks"
+    ],
+    "type": "object"
+   },
+   "ScanCheck": {
+    "additionalProperties": false,
+    "properties": {
+     "detail": {
+      "description": "One plain sentence about what this check saw, or null when it has nothing to add.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "label": {
+      "description": "Our human label for this check.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "name": {
+      "description": "Our stable snake_case key for this check.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "result": {
+      "$ref": "#/definitions/CheckResult"
+     }
+    },
+    "required": [
+     "name",
+     "label",
+     "result",
+     "detail"
+    ],
+    "type": "object"
+   },
+   "ScanDocument": {
+    "additionalProperties": false,
+    "properties": {
+     "country": {
+      "anyOf": [
+       {
+        "description": "ISO 3166-1 alpha-3 country code.",
+        "example": "GRC",
+        "pattern": "^[A-Z]{3}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The state that issued the document, ISO 3166-1 alpha-3. The same reading as `issuing_state` under the name most callers filter on; null when nothing was read."
+     },
+     "country_name": {
+      "description": "The issuing state's name, as read from the document.",
+      "example": "Greece",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "days_remaining": {
+      "anyOf": [
+       {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Days until expiry at the time of the scan; negative once expired."
+     },
+     "expiry_date": {
+      "anyOf": [
+       {
+        "description": "Calendar date, ISO-8601 (`YYYY-MM-DD`).",
+        "format": "date",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The date the document expires, ISO-8601 (`YYYY-MM-DD`). Null when none was read; `is_expired` and `days_remaining` are computed from it."
+     },
+     "is_expired": {
+      "description": "Whether the document had already expired when the scan was made. Null when no expiry date was read, which is a different answer from `false`.",
+      "type": [
+       "boolean",
+       "null"
+      ]
+     },
+     "issue_date": {
+      "anyOf": [
+       {
+        "description": "Calendar date, ISO-8601 (`YYYY-MM-DD`).",
+        "format": "date",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The date the document was issued, ISO-8601 (`YYYY-MM-DD`). Null when none was read."
+     },
+     "issuing_state": {
+      "anyOf": [
+       {
+        "description": "ISO 3166-1 alpha-3 country code.",
+        "example": "GRC",
+        "pattern": "^[A-Z]{3}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The issuing state, ISO 3166-1 alpha-3 \u2013 the same reading as `country`, under the name the machine-readable zone gives it."
+     },
+     "kind": {
+      "description": "Document type, e.g. `passport`.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "number": {
+      "description": "The document number, as printed. Null when none was read. A series the document prints separately is in `series`, never folded into this value.",
+      "example": "AM7304518",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "series": {
+      "description": "The document series, for a document that prints one as a field of its own. Null when the document carries none or none was read; it is never split out of `number`.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "type_confidence": {
+      "allOf": [
+       {
+        "$ref": "#/definitions/ConfidenceBand"
+       }
+      ],
+      "description": "How strongly the document-type match is backed."
+     },
+     "type_name": {
+      "description": "The document type under its full name. Null on a scan read back from storage, which keeps no engine output.",
+      "example": "Greece - Passport",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "kind",
+     "country",
+     "country_name",
+     "issuing_state",
+     "type_name",
+     "type_confidence",
+     "number",
+     "series",
+     "issue_date",
+     "expiry_date",
+     "is_expired",
+     "days_remaining"
+    ],
+    "type": "object"
+   },
+   "ScanField": {
+    "additionalProperties": false,
+    "properties": {
+     "category": {
+      "$ref": "#/definitions/FieldCategory"
+     },
+     "confidence": {
+      "$ref": "#/definitions/ConfidenceBand"
+     },
+     "id": {
+      "description": "Identity of this entry, unique across `fields`: the key and the language identifier the value was read as, plus an occurrence counter when the same pair is reported twice. `name` is the semantic key and repeats \u2013 a document that carries a field in two scripts yields one entry per language \u2013 so use `id`, not `name`, to address or key a single entry.",
+      "example": "surname@1032",
+      "minLength": 1,
+      "type": "string"
+     },
+     "label": {
+      "description": "Our human label.",
+      "example": "Surname",
+      "minLength": 1,
+      "type": "string"
+     },
+     "language": {
+      "description": "The language this reading was made in, e.g. `Greek`; null for the neutral, transliterated Latin reading.",
+      "example": "Greek",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "name": {
+      "description": "Our stable snake_case key.",
+      "example": "surname",
+      "minLength": 1,
+      "type": "string"
+     },
+     "value": {
+      "description": "The value of this reading: the national-script spelling when `language` names one, the transliterated Latin value otherwise. Null when the field is empty.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "id",
+     "name",
+     "label",
+     "category",
+     "value",
+     "language",
+     "confidence"
+    ],
+    "type": "object"
+   },
+   "ScanHolder": {
+    "additionalProperties": false,
+    "properties": {
+     "birth_date": {
+      "anyOf": [
+       {
+        "description": "Calendar date, ISO-8601 (`YYYY-MM-DD`).",
+        "format": "date",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The holder's date of birth, ISO-8601 (`YYYY-MM-DD`). Null when none was read."
+     },
+     "full_name": {
+      "description": "The holder's name as the document prints it in one combined field. Null when the document carries no such field \u2013 it is not composed from the two above.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "given_names": {
+      "description": "The holder's given names, as printed. Null when none was read.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "nationality": {
+      "anyOf": [
+       {
+        "description": "ISO 3166-1 alpha-3 country code.",
+        "example": "GRC",
+        "pattern": "^[A-Z]{3}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The holder's nationality, ISO 3166-1 alpha-3. Null when none was read; it is not assumed from the issuing state."
+     },
+     "sex": {
+      "anyOf": [
+       {
+        "enum": [
+         "M",
+         "F",
+         "X"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The sex the document states: `M`, `F`, or `X` for unspecified. Null when none was read."
+     },
+     "surname": {
+      "description": "The holder's surname, as printed. Null when none was read.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "given_names",
+     "surname",
+     "full_name",
+     "birth_date",
+     "sex",
+     "nationality"
+    ],
+    "type": "object"
+   },
+   "ScanId": {
+    "description": "Scan identifier: a UUID version 7 (RFC 9562), canonical lower-case `8-4-4-4-12`. Its leading 48 bits are the millisecond the scan was made, so ids sort in the order the scans happened \u2013 but treat the value as opaque: nothing else about it is part of the contract.",
+    "example": "01a0af18-cd8d-7a61-9f2d-4c7b8e105da3",
+    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    "type": "string"
+   },
+   "ScanImages": {
+    "additionalProperties": false,
+    "description": "Image crops, returned in the recognition response only. Each is scaled down by height, proportionally and never upwards, to at most 250 px for `document_crop` and 100 px for every other crop, then re-encoded with every metadata block dropped.",
+    "properties": {
+     "barcode": {
+      "anyOf": [
+       {
+        "description": "Image as a `data:` URL with base64 payload.",
+        "pattern": "^data:image\\/(jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The barcode area of the document, when it carries one."
+     },
+     "chip": {
+      "anyOf": [
+       {
+        "description": "Image as a `data:` URL with base64 payload.",
+        "pattern": "^data:image\\/(jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The chip area of the document, when it carries one."
+     },
+     "document_crop": {
+      "anyOf": [
+       {
+        "description": "Image as a `data:` URL with base64 payload.",
+        "pattern": "^data:image\\/(jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The document itself, cropped out of the uploaded picture and deskewed \u2013 the front side of a card, the data page of a booklet."
+     },
+     "main_photo": {
+      "anyOf": [
+       {
+        "description": "Image as a `data:` URL with base64 payload.",
+        "pattern": "^data:image\\/(jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The holder's photograph as printed on the document."
+     },
+     "rear": {
+      "anyOf": [
+       {
+        "description": "Image as a `data:` URL with base64 payload.",
+        "pattern": "^data:image\\/(jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The reverse side of the document, when the picture carried one and a crop of it was produced."
+     },
+     "signature": {
+      "anyOf": [
+       {
+        "description": "Image as a `data:` URL with base64 payload.",
+        "pattern": "^data:image\\/(jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The holder's signature as printed on the document."
+     },
+     "watermark_face": {
+      "anyOf": [
+       {
+        "description": "Image as a `data:` URL with base64 payload.",
+        "pattern": "^data:image\\/(jpeg|png);base64,[A-Za-z0-9+/]+={0,2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The faint second copy of the holder's face printed into the page as a security feature \u2013 a different image from `main_photo`, and the one a verifier compares against it. Null when the document carries none."
+     }
+    },
+    "required": [
+     "document_crop",
+     "rear",
+     "main_photo",
+     "signature",
+     "watermark_face",
+     "barcode",
+     "chip"
+    ],
+    "type": "object"
+   },
+   "ScanMeta": {
+    "additionalProperties": false,
+    "properties": {
+     "billed": {
+      "description": "Whether this scan was charged to the balance.",
+      "type": "boolean"
+     },
+     "confidence": {
+      "allOf": [
+       {
+        "$ref": "#/definitions/ConfidenceBand"
+       }
+      ],
+      "description": "How strongly the recognition backs this reading as a whole. Each entry of `fields` carries its own band as well, and they can differ from this one."
+     },
+     "created_at": {
+      "description": "Timestamp, ISO-8601 in UTC (`YYYY-MM-DDTHH:MM:SSZ`).",
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+      "type": "string"
+     },
+     "id": {
+      "$ref": "#/definitions/ScanId"
+     },
+     "reference": {
+      "description": "The request's `reference`, echoed back.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "schema_version": {
+      "const": "1.0",
+      "description": "The version of this body, always `1.0`. A consumer that pins this value checks that the body is the one it was written against.",
+      "type": "string"
+     },
+     "status": {
+      "$ref": "#/definitions/ScanStatus"
+     },
+     "timing": {
+      "anyOf": [
+       {
+        "$ref": "#/definitions/ScanTiming"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "schema_version",
+     "id",
+     "status",
+     "billed",
+     "confidence",
+     "timing",
+     "created_at",
+     "reference"
+    ],
+    "type": "object"
+   },
+   "ScanMrz": {
+    "additionalProperties": false,
+    "properties": {
+     "lines": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The zone's lines in order, exactly as read \u2013 two for a TD3 passport, three for a TD1 card. The zone's alphabet is `A-Z`, `0-9` and the filler `<`, so a line carries no whitespace. Null when the document carries none."
+     },
+     "reason": {
+      "description": "One plain sentence naming what did not check out, for `failed`; null otherwise.",
+      "example": "Check digit failed for: document number, date of birth",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "status": {
+      "$ref": "#/definitions/MrzStatus"
+     },
+     "text": {
+      "description": "The same lines run together with nothing between them: one unbroken string, with no newlines and no spaces. Null when there are none.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "status",
+     "reason",
+     "lines",
+     "text"
+    ],
+    "type": "object"
+   },
+   "ScanQuality": {
+    "additionalProperties": false,
+    "properties": {
+     "overall": {
+      "description": "Whether the uploaded picture was good enough to recognize from. `not_checked` when nothing measured it \u2013 a scan read back from storage, which keeps no engine output.",
+      "enum": [
+       "not_checked",
+       "pass",
+       "warn",
+       "fail"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "overall"
+    ],
+    "type": "object"
+   },
+   "ScanStatus": {
+    "description": "Outcome of a scan. Exactly these five string values; there are no numeric codes.",
+    "enum": [
+     "recognized",
+     "no_document_found",
+     "unreadable",
+     "unsupported_document",
+     "rejected"
+    ],
+    "type": "string"
+   },
+   "ScanTiming": {
+    "additionalProperties": false,
+    "description": "The split of the request's time. Null on a scan made before the split existed and read back out of storage: only the engine call was timed then, and the two halves cannot be recovered from it.",
+    "properties": {
+     "processing_ms": {
+      "description": "The recognition itself \u2013 the server-side engine call.",
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "total_ms": {
+      "description": "From the request arriving to the result being complete. At least `upload_ms + processing_ms`; the remainder is the gates that run after `upload_ms` is taken \u2013 the allowance, the idempotency check and the credit hold \u2013 plus preparing the result images and mapping the engine's output into this body. It stops there: writing the history row and serializing the response happen after the number is fixed, so the same figure is stored and returned.",
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "upload_ms": {
+      "description": "From the request's headers reaching the server to its body being received and validated, with your key resolved and its rate limit checked. The allowance, idempotency and credit gates are claimed after this number is taken, so they are not in it. Dominated by your own connection and by how large the image is \u2013 this is the half you can shrink, by sending a smaller picture from closer by.",
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "upload_ms",
+     "processing_ms",
+     "total_ms"
+    ],
+    "type": "object"
+   }
+  },
+  "properties": {
+   "authenticity": {
+    "$ref": "#/definitions/ScanAuthenticity"
+   },
+   "document": {
+    "anyOf": [
+     {
+      "$ref": "#/definitions/ScanDocument"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "fields": {
+    "description": "Every field the engine extracted off the printed document, re-keyed to our vocabulary \u2013 the open set. Always present; empty when nothing was extracted. A field read in more than one language appears once per language, so `name` repeats and only `id` is unique.",
+    "items": {
+     "$ref": "#/definitions/ScanField"
+    },
+    "type": "array"
+   },
+   "holder": {
+    "anyOf": [
+     {
+      "$ref": "#/definitions/ScanHolder"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "images": {
+    "$ref": "#/definitions/ScanImages"
+   },
+   "meta": {
+    "$ref": "#/definitions/ScanMeta"
+   },
+   "mrz": {
+    "$ref": "#/definitions/ScanMrz"
+   },
+   "quality": {
+    "$ref": "#/definitions/ScanQuality"
+   }
+  },
+  "required": [
+   "meta",
+   "document",
+   "holder",
+   "fields",
+   "mrz",
+   "images",
+   "quality",
+   "authenticity"
+  ],
+  "type": "object"
+ },
+ "title": "Recognise a passport or ID document"
+}

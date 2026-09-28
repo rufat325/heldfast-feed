@@ -1,0 +1,366 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "readOnlyHint": false,
+  "title": "Release Experiments Create"
+ },
+ "description": "Create an experiment. Creates a new experiment in `draft` status. `name`, `universe`, and `groups` are required; everything else has sensible defaults.",
+ "inputSchema": {
+  "properties": {
+   "allocation_pct": {
+    "default": 0,
+    "description": "Share of the (gated) audience allocated to the experiment, in basis points (0\u201310000 = 0%\u2013100%). `0` = unallocated. Under pooled assignment this is the size of the universe-pool slice claimed. Use `allocation_percent` (0\u2013100) below to think in percent. Immutable while the experiment is running.",
+    "maximum": 10000,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "allocation_percent": {
+    "description": "Allocation as a **percentage** (0\u2013100, fractional ok). Friendlier alias for `allocation_pct`; converted to basis points server-side (e.g. `50` = 5000 bp). If both are set, `allocation_percent` wins.",
+    "maximum": 100,
+    "minimum": 0,
+    "type": "number"
+   },
+   "audience": {
+    "anyOf": [
+     {
+      "maxLength": 256,
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Audience label shown in the editor. Display-only."
+   },
+   "bucket_by": {
+    "anyOf": [
+     {
+      "description": "User-attribute name used as the bucketing key \u2014 e.g. `user_id` (default), `session_id`, `device_id`, or a custom attribute like `company_id` to keep a whole org on one variant. Defaults to `user_id` when omitted.",
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z_][a-zA-Z0-9_]*$",
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "description": {
+    "anyOf": [
+     {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Free-form description. Max 2000 chars, markdown rendered in the dashboard."
+   },
+   "folder": {
+    "anyOf": [
+     {
+      "maxLength": 256,
+      "pattern": "^[a-zA-Z0-9_-]+$",
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Optional folder name grouping items in the dashboard. Alphanumeric, `_` or `-` (no `/`). Part of the SDK lookup key (`<folder>/<name>`)."
+   },
+   "goal_metric": {
+    "additionalProperties": false,
+    "description": "Inline metric \u2014 a DSL `query`, or an `event` (+ `aggregation`/`value`) the server compiles into one.",
+    "properties": {
+     "aggregation": {
+      "description": "Reducer for the `event` form. Defaults to `count_users`.",
+      "enum": [
+       "count_users",
+       "count_events",
+       "retention_7d",
+       "retention_30d",
+       "sum",
+       "avg"
+      ],
+      "type": "string"
+     },
+     "event": {
+      "description": "Event name to build the metric from server-side. Auto-created if missing.",
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+     },
+     "min_effect_of_interest": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Per-experiment override of the metric's default minimum effect of interest (relative, 0\u20131) \u2014 the smallest change worth acting on for this experiment's decision. `null`/omitted inherits the metric default. For a guardrail, the non-inferiority margin."
+     },
+     "name": {
+      "description": "Stable metric key. Single segment or `folder.name`; lowercase letters, digits, `_`/`-`; max 128 chars.",
+      "maxLength": 128,
+      "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?)?$",
+      "type": "string"
+     },
+     "query": {
+      "description": "Metric DSL string. Provide this OR `event`.",
+      "maxLength": 4096,
+      "minLength": 1,
+      "type": "string"
+     },
+     "value": {
+      "description": "Numeric event property for `sum`/`avg` (with `event`).",
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "groups": {
+    "description": "Two or more variants. Weights must sum to `10000 \u2212 reserved_headroom`. Existing weights are immutable while running, but a new variant may be appended into the reserved tail.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One variant. Its `params` may only override keys declared on the universe schema.",
+     "properties": {
+      "name": {
+       "description": "Group label (e.g. `control`, `treatment_a`). Max 64 chars.",
+       "maxLength": 64,
+       "minLength": 1,
+       "type": "string"
+      },
+      "params": {
+       "additionalProperties": {},
+       "default": {},
+       "description": "Per-variant **override map** \u2014 a subset of the universe's `param_schema` keys. A key the variant doesn't set inherits the universe default. Unknown keys (not in the universe schema) are rejected.",
+       "type": "object"
+      },
+      "weight": {
+       "description": "Allocation weight in basis points (0\u201310000). Weights across all groups must sum to `10000 \u2212 reserved_headroom` (100% minus any reserved tail).",
+       "maximum": 10000,
+       "minimum": 0,
+       "type": "integer"
+      }
+     },
+     "required": [
+      "name",
+      "weight"
+     ],
+     "type": "object"
+    },
+    "minItems": 2,
+    "type": "array"
+   },
+   "guardrail_metrics": {
+    "default": [],
+    "description": "Up to 10 guardrail metrics defined inline. Each is upserted (event + metric) and attached with role=guardrail.",
+    "items": {
+     "additionalProperties": false,
+     "description": "Inline metric \u2014 a DSL `query`, or an `event` (+ `aggregation`/`value`) the server compiles into one.",
+     "properties": {
+      "aggregation": {
+       "description": "Reducer for the `event` form. Defaults to `count_users`.",
+       "enum": [
+        "count_users",
+        "count_events",
+        "retention_7d",
+        "retention_30d",
+        "sum",
+        "avg"
+       ],
+       "type": "string"
+      },
+      "event": {
+       "description": "Event name to build the metric from server-side. Auto-created if missing.",
+       "maxLength": 256,
+       "minLength": 1,
+       "type": "string"
+      },
+      "min_effect_of_interest": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "description": "Per-experiment override of the metric's default minimum effect of interest (relative, 0\u20131) \u2014 the smallest change worth acting on for this experiment's decision. `null`/omitted inherits the metric default. For a guardrail, the non-inferiority margin."
+      },
+      "name": {
+       "description": "Stable metric key. Single segment or `folder.name`; lowercase letters, digits, `_`/`-`; max 128 chars.",
+       "maxLength": 128,
+       "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?)?$",
+       "type": "string"
+      },
+      "query": {
+       "description": "Metric DSL string. Provide this OR `event`.",
+       "maxLength": 4096,
+       "minLength": 1,
+       "type": "string"
+      },
+      "value": {
+       "description": "Numeric event property for `sum`/`avg` (with `event`).",
+       "maxLength": 256,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    },
+    "maxItems": 10,
+    "type": "array"
+   },
+   "holdout_gate": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Optional per-experiment holdout gate \u2014 the name of a `holdout`-type flag (public % + whitelist). A caller the flag passes is *held out* (never assigned, sees the universe defaults). Distinct from the universe-level holdout."
+   },
+   "hypothesis": {
+    "anyOf": [
+     {
+      "maxLength": 4000,
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Hypothesis statement shown in the editor. Display-only."
+   },
+   "listToken": {
+    "description": "REQUIRED. The `listToken` returned by the most recent `release_experiments_list` call. It proves you listed existing release experiments and confirmed this one doesn't already exist before creating it. Call `release_experiments_list` first if you don't have a fresh token.",
+    "type": "string"
+   },
+   "min_runtime_days": {
+    "default": 0,
+    "description": "Minimum days the experiment must run before results are considered conclusive.",
+    "maximum": 365,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "min_sample_size": {
+    "default": 100,
+    "description": "Minimum exposures per group before results are considered conclusive.",
+    "maximum": 9007199254740991,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "name": {
+    "description": "Stable experiment key. Single segment or `folder.name` (a-z, 0-9, `_`/`-`; max 128 chars). Used by SDKs as `Shipeasy.getExperiment(user, '<name>')`. Immutable after create.",
+    "maxLength": 128,
+    "pattern": "^[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?(?:\\.[a-z0-9](?:[a-z0-9_-]*[a-z0-9])?)?$",
+    "type": "string"
+   },
+   "owner_email": {
+    "anyOf": [
+     {
+      "maxLength": 254,
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Owner email. Display-only."
+   },
+   "params": {
+    "additionalProperties": {
+     "enum": [
+      "string",
+      "bool",
+      "number"
+     ],
+     "type": "string"
+    },
+    "default": {},
+    "description": "**Deprecated** \u2014 the universe now owns the config schema (`param_schema`). Retained for back-compat; new experiments should leave this empty and declare params on the universe. Map of param-name \u2192 scalar type.",
+    "type": "object"
+   },
+   "reserved_headroom": {
+    "description": "Basis points of this experiment's split kept empty (0\u201310000) so a new variant can be appended into it while running without reshuffling. Group weights must sum to `10000 \u2212 reserved_headroom`. Defaults to the universe's `recommended_headroom` when omitted.",
+    "maximum": 10000,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "salt": {
+    "description": "Hash salt for bucketing. Auto-generated if omitted. Immutable while running.",
+    "maxLength": 64,
+    "minLength": 1,
+    "type": "string"
+   },
+   "sequential_testing": {
+    "default": false,
+    "description": "Enable sequential testing (always-valid p-values). Requires Premium plan or higher.",
+    "type": "boolean"
+   },
+   "significance_threshold": {
+    "default": 0.05,
+    "description": "p-value cutoff used by the analysis pass. Defaults to `0.05`. Values other than 0.05 require Pro plan or higher.",
+    "maximum": 0.5,
+    "minimum": 0.0001,
+    "type": "number"
+   },
+   "tag": {
+    "anyOf": [
+     {
+      "maxLength": 64,
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Short tag chip rendered next to the name. Display-only."
+   },
+   "targeting_gate": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Optional gate name (a `targeting`-type flag). Only callers that pass the gate are enrolled in the experiment."
+   },
+   "universe": {
+    "description": "Name of an existing universe in the project. Returns `422` if the universe doesn't exist.",
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "name",
+   "universe",
+   "groups"
+  ],
+  "type": "object"
+ },
+ "name": "release_experiments_create"
+}

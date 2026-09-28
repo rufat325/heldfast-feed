@@ -1,0 +1,373 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Create Company"
+ },
+ "description": "Creates a company under the account the request resolves to. The NIF is\nregistered in the name of that account's holder, never in the name of the caller.\n\n- **`activate`:** unless it is `false`, the company is switched on in\n  `aeat_environment` and its three default invoice series (ordinary, simplified,\n  corrective) are seeded there. This endpoint never switches an existing company on:\n  that is `POST /v1/companies/{company_id}/activations`.\n- **`numbering`:** decides the code, format, counter reset and starting number those\n  series are born with. Only accepted when the request activates the company.\n- **Billing:** no charge is ever started here. Creating a production NIF requires being\n  the billing subject of the account (`403` otherwise), and an account without billing is\n  rejected with `402`; no checkout is opened in either case.\n- **Duplicates:** a NIF that already exists in the account is rejected with `409`, and\n  the response carries the existing `error.details.company_id`.\n- **Addresses:** a Spanish postal code (`country_code` omitted or `ES`) must have 5 digits,\n  in `address` and in `legal_representative.address`; otherwise `422 POSTAL_CODE_INVALID_ES`\n  and nothing is created. Other countries' postal codes are free-form.\n\nEndpoint: POST /v1/accounts/{account_id}/companies\n\n\u26a0\ufe0f Read before calling:\n- Which company an operation acts on, and how that is selected. (resource: beel://guardrails/multi-nif)\n- Why a name that does not match the census makes an invoice unsubmittable. (resource: beel://guardrails/nif-validation)\n- How a series formats numbers, and which series configurations are rejected. (resource: beel://guardrails/series-and-numbering)",
+ "inputSchema": {
+  "$defs": {
+   "Address": {
+    "additionalProperties": false,
+    "description": "Address you send when you create or update a company, a customer or an onboarding.\n\nAddresses you read back are described by their own schema.\n",
+    "properties": {
+     "city": {
+      "description": "City or town - Latin characters only",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     },
+     "country": {
+      "description": "Country of the address, as its ISO 3166-1 alpha-2 code (`GB`) or its official name\nin Spanish, English or Catalan (`Reino Unido`, `United Kingdom`, `Regne Unit`;\ncase and accents are ignored). Anything else, such as `UK`, is rejected with\n`422 COUNTRY_CODE_REQUIRED`: send `country_code` instead. If it names a different\ncountry than `country_code`, `422 COUNTRY_CODE_MISMATCH` (`Espa\u00f1a` alone yields to\na foreign `country_code`: it was the old default). What is stored and\nreturned is always the Spanish name derived from the resulting code, never the\ntext sent. With neither field present, the address is Spanish (`Espa\u00f1a`).\n",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     },
+     "country_code": {
+      "description": "ISO 3166-1 alpha-2 country code: the canonical field that decides the country of\nthe address. It must be a real country code (`GB`, not `UK`); otherwise\n`422 COUNTRY_CODE_REQUIRED`. When it is omitted, the code comes from `country`\n(see there). With neither field present, the address is stored as `ES`.\n",
+      "maxLength": 2,
+      "minLength": 2,
+      "pattern": "^[A-Z]{2}$",
+      "type": "string"
+     },
+     "door": {
+      "description": "Door or apartment",
+      "maxLength": 10,
+      "type": "string"
+     },
+     "floor": {
+      "description": "Floor or level",
+      "maxLength": 10,
+      "type": "string"
+     },
+     "number": {
+      "description": "Street number. Optional: omit it when the address has none, or when `street` already\ncarries the address in full.\n",
+      "maxLength": 20,
+      "minLength": 1,
+      "type": "string"
+     },
+     "postal_code": {
+      "description": "Postal code (5 digits for Spain, free format for other countries)",
+      "maxLength": 20,
+      "minLength": 1,
+      "type": "string"
+     },
+     "province": {
+      "description": "Province or state - Latin characters only",
+      "maxLength": 100,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     },
+     "street": {
+      "description": "Full address (street, number, floor, etc.) - Latin characters only",
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9\u00c0-\u00ff\\u0100-\\u017F\\u00B7\\u2018\\u2019\\u0060\\u00B4\\s\\.,\\-\\/'\u00ba\u00aa\u00b0:;\"()&#]+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "street",
+     "postal_code",
+     "city",
+     "province"
+    ],
+    "type": "object"
+   },
+   "CompanyNumbering": {
+    "additionalProperties": false,
+    "description": "Configuration of the invoice series the company is born with. Optional and additive:\nomit it \u2014 or any field \u2014 and the system default applies for that field: series\n`F`/`S`/`R`, format `{CODIGO}-{YYYY}-{NUM:4}`, `ANNUAL` counter reset, starting at 1,\nexactly as before.\n\nSend it when the business already issued invoices with another system this year and\nwants to **continue** its numbering, or simply wants its series born with a specific\nshape \u2014 this is the only moment it can be expressed in the same call. Once a series\nissues its first invoice BeeL freezes its numbering: `PATCH\n/v1/companies/{company_id}/series/{series_id}` then rejects `initial_number` with\n`SERIES_INITIAL_NUMBER_LOCKED_HAS_INVOICES`.\n\nIt covers the **three** series a company is born with:\n\n* the **ordinary** one (real invoices) \u2014 the fields at this level, default `F`.\n* the **simplified** one (ticket-style invoices) \u2014 `simplified`, default `S`.\n* the **corrective** one (rectificativas) \u2014 `corrective`, default `R`.\n\nEach series takes `code`, `initial_number`, `format` and `counter_reset`, all\noptional and independent: omit a field and that series keeps the system default\nfor it.\n\n`format` and `counter_reset` must be able to tell reset periods apart, with the\nsame rules and error codes as `POST /v1/companies/{company_id}/series`: a `MONTHLY` reset\nrequires `{MM}` plus a year token in the format\n(`SERIES_MONTHLY_REQUIRES_MONTH_AND_YEAR`); an `ANNUAL` reset requires a year token\n(`SERIES_ANNUAL_REQUIRES_YEAR`). Mind the default reset is `ANNUAL`: a format\nwithout a year token (e.g. `{CODIGO}-{NUM:6}`) also needs `counter_reset: NEVER`\nin the same series block. Two series that could print the same number (for instance,\nthe same literal format with no `{CODIGO}`) are rejected with `409\nSERIES_FORMAT_OVERLAPS`, because an invoice number must be unique per issuer.\n\nThe list of series is **not** negotiable \u2014 a company always starts with exactly\nthese three, one default per document type, because a company without a default\nseries cannot issue at all (`NO_DEFAULT_SERIES`). You configure how each of them is\nborn, not which ones exist. More series can be added later with\n`POST /v1/companies/{company_id}/series`.\n\n**Per environment**: each activation is self-contained and seeds exactly what its\nrequest carries. Activating the same NIF in the other environment later does **not**\ncopy this configuration \u2014 repeat your `numbering` block in that activation call if\nyou want the same series there; without it the other environment gets the system\ndefaults.\n\nOnly valid when the request activates the company: with `activate: false` no series\nare seeded, so a `numbering` block that asks for anything is rejected with `422`\n`NUMBERING_REQUIRES_ACTIVATION` instead of being silently discarded.\n",
+    "properties": {
+     "code": {
+      "$ref": "#/$defs/SeriesCode"
+     },
+     "corrective": {
+      "$ref": "#/$defs/CompanySeriesNumbering"
+     },
+     "counter_reset": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/CounterReset"
+       }
+      ],
+      "description": "When the ordinary series' counter resets (`NEVER`/`ANNUAL`/`MONTHLY`).\nDefaults to `ANNUAL` when omitted \u2014 so a custom `format` without a year token\nmust come with `counter_reset: NEVER`.\n"
+     },
+     "format": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/SeriesFormat"
+       }
+      ],
+      "description": "Format template the ordinary series' invoice numbers are printed with\n(`{CODIGO}`, `{YYYY}`/`{YY}`, `{MM}`, `{NUM}`/`{NUM:X}` \u2014 must contain `{NUM}`\nor `{NUM:X}`). Defaults to `{CODIGO}-{YYYY}-{NUM:4}` when omitted.\n"
+     },
+     "initial_number": {
+      "description": "Number the ordinary series counter starts at. If the last invoice issued\nelsewhere was `2026-0150`, send `151`. Defaults to 1 when omitted. It applies only\nto the first period in which the series issues an invoice; with an `ANNUAL` or\n`MONTHLY` reset every later period starts at 1.\n",
+      "format": "int64",
+      "maximum": 999999,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "simplified": {
+      "$ref": "#/$defs/CompanySeriesNumbering"
+     }
+    },
+    "type": "object"
+   },
+   "CompanySeriesNumbering": {
+    "additionalProperties": false,
+    "description": "How one of the series the company is born with should be seeded. All fields are\noptional and independent: omit one and it falls back to the system default. Same\nformat/reset compatibility rules and error codes as the parent block.\n",
+    "properties": {
+     "code": {
+      "$ref": "#/$defs/SeriesCode"
+     },
+     "counter_reset": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/CounterReset"
+       }
+      ],
+      "description": "When this series' counter resets (`NEVER`/`ANNUAL`/`MONTHLY`). Defaults to\n`ANNUAL` when omitted \u2014 so a custom `format` without a year token must come\nwith `counter_reset: NEVER`.\n"
+     },
+     "format": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/SeriesFormat"
+       }
+      ],
+      "description": "Format template this series' invoice numbers are printed with. Defaults to\n`{CODIGO}-{YYYY}-{NUM:4}` when omitted.\n"
+     },
+     "initial_number": {
+      "description": "Number this series' counter starts at, to continue the numbering already used\nelsewhere. Defaults to 1 when omitted. It applies only to the first period in which\nthe series issues an invoice; with an `ANNUAL` or `MONTHLY` reset every later period\nstarts at 1.\n",
+      "format": "int64",
+      "maximum": 999999,
+      "minimum": 1,
+      "type": "integer"
+     }
+    },
+    "type": "object"
+   },
+   "CounterReset": {
+    "description": "Counter reset policy:\n- NEVER: Counter never resets (continuous numbering)\n- ANNUAL: Counter resets yearly\n- MONTHLY: Counter resets monthly\n",
+    "enum": [
+     "NEVER",
+     "ANNUAL",
+     "MONTHLY"
+    ],
+    "type": "string"
+   },
+   "CreateCompanyRequest": {
+    "additionalProperties": false,
+    "properties": {
+     "activate": {
+      "default": true,
+      "description": "Whether to **switch the company on** in `aeat_environment` as part of this call.\n\nCreating a company and activating it are two different acts. The company record is free\nand always creatable; the activation is what seeds the invoice series, registers the\nNIF and \u2014 in `PROD` \u2014 is what gets billed.\n\n* `true` (default) \u2014 unchanged behaviour: the company is created and switched on in\n  `aeat_environment`, with its default series seeded there.\n* `false` \u2014 only the company record is created. It is switched on nowhere, has\n  no series and cannot issue yet; `aeat_environment` is ignored. Activate it later\n  with `POST /v1/companies/{company_id}/activations`, which is also\n  the only door that opens a Stripe Checkout when the account has no card on file.\n\nSeries numbering travels with the activation that seeds it: a request with\n`activate: false` and a `numbering` block that asks for anything is rejected with\n`422` `NUMBERING_REQUIRES_ACTIVATION` \u2014 the later activation door does not accept\nnumbering, so silently accepting it here would discard it forever. Either drop the\n`numbering` block or activate a mode in the same call.\n",
+      "type": "boolean"
+     },
+     "address": {
+      "$ref": "#/$defs/Address"
+     },
+     "aeat_environment": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/Environment"
+       }
+      ],
+      "default": "TEST",
+      "description": "AEAT/VeriFactu environment to register this NIF against.\n* `TEST` \u2014 Sandbox NIF, invoices reach VeriFactu test (default).\n* `PROD` \u2014 Production NIF; requires the AEAT representation\n  model to be signed (`POST /v1/companies/{company_id}/representation/submit`)\n  before real invoices can be issued.\n\nThis field was previously named `environment`. The old name is still accepted as an\nalias for backwards compatibility and will be withdrawn in a future major version \u2014\nsend `aeat_environment`.\n",
+      "x-field-extra-annotation": "@com.fasterxml.jackson.annotation.JsonAlias(\"environment\")"
+     },
+     "default_irpf_rate": {
+      "description": "Default IRPF retention rate for this company's invoices. Omit it and the company is created with no withholding \u2014 BeeL never assumes a rate nobody declared.",
+      "maximum": 100,
+      "minimum": 0,
+      "type": "number"
+     },
+     "default_main_tax": {
+      "$ref": "#/$defs/TaxInfo"
+     },
+     "entity_type": {
+      "$ref": "#/$defs/EntityType"
+     },
+     "legal_form": {
+      "description": "Legal form (SL, SA, ...). Recommended for LEGAL_ENTITY.",
+      "type": "string"
+     },
+     "legal_name": {
+      "description": "Legal/fiscal name",
+      "type": "string"
+     },
+     "legal_representative": {
+      "$ref": "#/$defs/LegalRepresentative"
+     },
+     "nif": {
+      "description": "NIF/CIF of the business",
+      "type": "string"
+     },
+     "numbering": {
+      "$ref": "#/$defs/CompanyNumbering"
+     },
+     "trade_name": {
+      "description": "Commercial/trade name (optional). When omitted or blank, the company is read back with `trade_name` equal to `legal_name`: the field always carries the name to display.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "nif",
+     "legal_name",
+     "entity_type",
+     "address"
+    ],
+    "type": "object"
+   },
+   "EntityType": {
+    "description": "Taxpayer type.\nINDIVIDUAL: Natural person (individual self-employed).\nLEGAL_ENTITY: Legal entity (company with legal form: SL, SA, etc.).\n",
+    "enum": [
+     "INDIVIDUAL",
+     "LEGAL_ENTITY"
+    ],
+    "type": "string"
+   },
+   "Environment": {
+    "description": "Mode a record lives in \u2014 its Test/Live twin. It decides where invoices, customers and\nquota are accounted.\n\nFor a company it also decides which AEAT its NIF is registered against: switching a\ncompany on in `PROD` is what registers it with the real AEAT, so `aeat_environment`\nis that same mode and uses this same enum.\n",
+    "enum": [
+     "TEST",
+     "PROD"
+    ],
+    "type": "string"
+   },
+   "LegalRepresentative": {
+    "additionalProperties": false,
+    "description": "Legal representative data for a legal entity.\nOnly used when entity_type = LEGAL_ENTITY.\n",
+    "properties": {
+     "address": {
+      "allOf": [
+       {
+        "$ref": "#/$defs/Address"
+       },
+       {
+        "description": "Address of the legal representative"
+       }
+      ]
+     },
+     "full_name": {
+      "description": "Full name of the legal representative",
+      "maxLength": 255,
+      "minLength": 1,
+      "type": "string"
+     },
+     "nif": {
+      "description": "Tax ID of the legal representative (DNI/CIF/NIE)",
+      "maxLength": 9,
+      "minLength": 9,
+      "pattern": "^(\\d{8}[A-Z]|[ABCDEFGHJKLMNPQRSUVW]\\d{7}[A-Z0-9]|[XYZ]\\d{7}[A-Z])$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "full_name",
+     "nif",
+     "address"
+    ],
+    "type": "object"
+   },
+   "RegimeKey": {
+    "description": "Regime key according to VeriFactu regulations. Omitted, `01` (general regime) applies:\n- 01: General regime operation\n- 02: Export (IVA and IGIC; not IPSI, whose AEAT list is `01, 08, 11, 18, 19, 20`)\n- 03: Used goods, art, antiques (not accepted, see below)\n- 04: Investment gold\n- 05: Travel agencies\n- 06: Group of entities (not accepted, see below)\n- 07: Cash basis\n- 08: Operation subject to another indirect tax \u2014 IPSI or IGIC on an IVA line, IPSI or IVA\n  on an IGIC line. It is **not** the general regime of IGIC, which is `01`.\n- 09: Mediating agencies\n- 10: Third-party collections\n- 11: Local rental\n- 14: VAT pending in certifications (not accepted, see below)\n- 15: VAT pending successive tract\n- 17: OSS and IOSS\n- 18: Equivalence surcharge\n- 19: REAGYP\n- 20: Simplified regime\n\n**What AEAT requires with each key** (Validaciones VERI*FACTU 3.1.3.15.6), checked on\nIVA and IGIC lines before the invoice is numbered. Otherwise the request is rejected with\n`422` and the code in brackets:\n- `04`: only reverse charge (an `ISP_ART_84_2_*` reason) or an exemption\n  (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n- `08`: only `exemption_reason: NO_SUJETA_LOCALIZACION`, at 0 %\n  (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n- `10`: only `exemption_reason: NO_SUJETA_ART_7_9`, on a `STANDARD` invoice whose\n  recipient has a `nif` (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`,\n  `REGIME_KEY_REQUIRES_STANDARD_INVOICE`, `REGIME_KEY_REQUIRES_RECIPIENT_NIF`).\n- `11` (IVA): a subject line only at 21 %, and no reverse charge\n  (`REGIME_KEY_REQUIRES_VAT_RATE`, `REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n- `06` and `14` are not accepted (`REGIME_KEY_NOT_SUPPORTED`): AEAT requires with them\n  data the invoice does not carry (a cost-based taxable base; an operation date after the\n  issue date and a public-administration recipient).\n- `03` (used goods) is not accepted (`REGIME_KEY_NOT_SUPPORTED`): under it the invoice\n  must not show the tax separately (RD 1619/2012, art. 16.2.c), and it always does. The\n  corrective of an invoice that already carried `03` keeps it.\n- `05` (travel agencies) and `07` (cash basis) are accepted, and the invoice PDF carries\n  the mention of their regime (RD 1619/2012, art. 6.1 n and p). `07`: no reverse charge,\n  no non-subject reason and, of the exemptions, only art. 20 or `OTRO`\n  (`REGIME_KEY_CLASSIFICATION_NOT_ACCEPTED`).\n`GET /v1/tax-types` only offers the keys that are accepted.\n\n**One exception to \"a key you send is the key you get\":** when the line ends up\ncarrying an equivalence surcharge \u2014 whether you sent `equivalence_surcharge_rate`\nor it was inherited from the company's tax configuration \u2014 a `01` is rewritten to\n`18`, because a surcharge under the general regime is fiscally incoherent. Send\n`equivalence_surcharge_rate: 0` explicitly to keep `01`. See\n`equivalence_surcharge_rate` in the invoice line for the full rules.\n",
+    "enum": [
+     "01",
+     "02",
+     "03",
+     "04",
+     "05",
+     "06",
+     "07",
+     "08",
+     "09",
+     "10",
+     "11",
+     "14",
+     "15",
+     "17",
+     "18",
+     "19",
+     "20"
+    ],
+    "type": "string"
+   },
+   "SeriesCode": {
+    "description": "Alphanumeric series code (used in {CODIGO} variable).\nAllows uppercase letters, numbers, hyphens and underscores.\n",
+    "maxLength": 50,
+    "minLength": 1,
+    "pattern": "^[A-Z0-9\\-_]{1,50}$",
+    "type": "string"
+   },
+   "SeriesFormat": {
+    "description": "Format template with available variables (UPPERCASE ONLY):\n- {CODIGO}: Series code (e.g., \"FAC\")\n- {YYYY}: Year with 4 digits (e.g., \"2025\")\n- {YY}: Year with 2 digits (e.g., \"25\")\n- {MM}: Month with 2 digits (e.g., \"01\")\n- {NUM}: Sequential number without padding (e.g., \"1\")\n- {NUM:X}: Sequential number with padding (e.g., {NUM:4} \u2192 \"0001\")\n\n**REQUIRED**: Must contain at least {NUM} or {NUM:X}\n**IMPORTANT**: Only uppercase (rejects {yy}, {mm}, {codigo}, etc.)\n\nValid examples:\n- \"{CODIGO}-{YYYY}-{NUM:4}\" \u2192 \"FAC-2025-0001\"\n- \"{CODIGO}/{NUM:6}\" \u2192 \"FAC/000001\"\n- \"{YYYY}{MM}-{NUM:3}\" \u2192 \"202501-001\"\n\nThe generated number is the invoice number sent to the AEAT, which accepts at most 60\nprintable ASCII characters and none of `\"`, `'`, `<`, `>`, `=`. A format whose longest\npossible number breaks that rule is rejected with `422 SERIES_FORMAT_NUMBER_TOO_LONG` or\n`SERIES_FORMAT_INVALID_CHARACTERS`. The counter counts as at least 9 digits, with or without\npadding: `{NUM:X}` is a minimum width, not a maximum.\n",
+    "maxLength": 255,
+    "minLength": 1,
+    "pattern": "^[A-Z0-9\\-_/{}:]*$",
+    "type": "string"
+   },
+   "TaxInfo": {
+    "additionalProperties": false,
+    "description": "Complete tax information with cross-validations:\n- IVA: real rates 4, 10, 21, and the temporary 2, 5 and 7.5 (see below for 0)\n- IGIC: 0, 3, 5, 7, 9.5, 15, 20 \u2014 here 0 is the real \"Tipo Cero\"\n- IPSI: real rates 0.5, 1, 2, 4, 8, 10 (see below for 0)\n- OTHER: any percentage between 0 and 100\n\n**0 % under IVA and IPSI is not a rate, it is the exemption sentinel.** It is accepted\non a line, but only together with an `exemption_reason` (exempt or non-subject\noperation); on its own it says nothing and the line is rejected. That is why\n`GET /v1/tax-types` publishes the IVA rates without 0: the legitimate way\nto a 0 % IVA line is through an exemption reason, which the same response also\npublishes. IGIC is different \u2014 its 0 % is a real legal rate (basic necessities) and\nneeds no reason.\n\n**IVA 5 %** (the temporary rate applied from 2022 to electricity, gas and certain\nfoodstuffs) is no longer in force for new operations. AEAT only accepts it on operations\ndated from 2022-07-01 to 2024-09-30: send the `operation_date` of that period, because\nwithout one the issue date decides and a line at 5 % is rejected with\n`422 VAT_RATE_NOT_ACCEPTED_ON_DATE`. Its equivalence surcharge pair is 0.5 up to 2022-12-31\nand 0.62 from 2023-01-01. **IVA 2 % and 7.5 %** (temporary rates of the last quarter of 2024)\nare accepted only on operations dated from 2024-10-01 to 2024-12-31, with surcharges 0.26\nand 1.\n\nException: when regime_key = \"17\" (OSS/IOSS) the invoice applies the destination\ncountry VAT instead of the Spanish one, so any percentage in the EU range [0, 27]\nis accepted regardless of the tax type set \u2014 including 0 without an exemption reason.\n",
+    "properties": {
+     "percentage": {
+      "description": "Tax percentage",
+      "maximum": 100,
+      "minimum": 0,
+      "type": "number"
+     },
+     "regime_key": {
+      "$ref": "#/$defs/RegimeKey"
+     },
+     "type": {
+      "$ref": "#/$defs/TaxType"
+     }
+    },
+    "required": [
+     "type",
+     "percentage"
+    ],
+    "type": "object"
+   },
+   "TaxType": {
+    "description": "Tax type by territory:\n- IVA: Iberian Peninsula and Balearic Islands (4%, 10%, 21%; 2%, 5% and 7.5% only on operations of their period)\n- IGIC: Canary Islands (0%, 3%, 5%, 7%, 9.5%, 15%, 20%)\n- IPSI: Ceuta and Melilla (0.5%, 1%, 2%, 4%, 8%, 10%)\n- OTHER: Configurable 0%-100%\n\nUnder IVA and IPSI, 0% is not one of these rates: it is the exemption/non-subject\nsentinel and always travels with an `exemption_reason`. IGIC's 0% is a real rate.\nSee `TaxInfo` for the full rules.\n",
+    "enum": [
+     "IVA",
+     "IGIC",
+     "IPSI",
+     "OTHER"
+    ],
+    "type": "string"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "account_id": {
+    "description": "Your own account, or an account you provisioned. It \u2014 not the credential \u2014 decides which account the operation acts on; a `403` is returned when you do not reach it, the same response an account that does not exist gets.",
+    "format": "uuid",
+    "type": "string"
+   },
+   "body": {
+    "$ref": "#/$defs/CreateCompanyRequest"
+   },
+   "idempotency_key": {
+    "description": "Optional idempotency key for this operation. Omit it and one is derived from the request itself, which makes a blind retry safe but also collapses a SECOND, deliberately identical operation into the first for 24 hours. Set it \u2014 to an order id, or anything unique per intended operation \u2014 whenever you mean to create something that may look identical to what you just created.",
+    "maxLength": 255,
+    "pattern": "^[a-zA-Z0-9_-]+$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "account_id",
+   "body"
+  ],
+  "type": "object"
+ },
+ "name": "beel_create_company"
+}

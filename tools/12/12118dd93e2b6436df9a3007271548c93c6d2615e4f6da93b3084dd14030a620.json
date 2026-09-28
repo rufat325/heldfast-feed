@@ -1,0 +1,138 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Create Company Recurring Invoice Derivation"
+ },
+ "description": "Creates a recurring invoice template of this company taking its lines, recipient, series\nand payment data from an existing invoice, so only the recurrence has to be described.\n\n- **`from_invoice_id`:** the source invoice. It must belong to the company in the path,\n  and one you cannot reach is reported the same way as one that does not exist. It is\n  not modified by this call.\n- **Recurrence:** `name`, `day_of_month` and `start_date` are required; `end_date` and\n  `frequency` are optional. The cadence is not taken from the source invoice \u2014 a one-off\n  invoice has none to copy \u2014 so it is described here like any other recurrence field:\n  every 1 (`MONTHLY`), 3 (`QUARTERLY`) or 12 (`YEARLY`) months, `MONTHLY` when omitted.\n  It governs the step from the first invoice onwards, not where that first one lands.\n- **VeriFactu:** not inherited from the source invoice. Each generated invoice is\n  registered with AEAT, or not, according to the company's regime when it is issued.\n\nEndpoint: POST /v1/companies/{company_id}/recurring-invoices/derivations\n\n\u26a0\ufe0f Read before calling:\n- Fiscal rules, domains simplified, taxes: beel_rules_list with domain, or resource beel://guardrails/<domain>.",
+ "inputSchema": {
+  "$defs": {
+   "CreateRecurringInvoiceDerivationRequest": {
+    "additionalProperties": false,
+    "description": "Derives a recurring invoice template from an existing invoice: lines, recipient, series and\npayment data are taken from it, so only the recurrence is described here. The source invoice\nis not modified.\n\nDeliberately not a variant of `CreateRecurringInvoiceRequest`: that one requires `series_id`,\n`invoice_type` and `lines`, which this call does not carry. Relaxing them there would let a\ntemplate be created from scratch with no lines at all.\n",
+    "properties": {
+     "day_of_month": {
+      "description": "Day of the month the invoices are issued. A month that does not have that day falls\nback to its last day: a template on `31` issues on 28 February (29 in a leap year)\nand on 30 April. So `31` is how you ask for the last day of the month it generates\nin \u2014 there is no separate flag for it, and the accepted range stays 1\u201331.\n\nThe adjustment does not stick and the schedule does not drift: every generation is\nrecalculated from the `day_of_month` you sent, never from the date it was adjusted\nto (31 Jan \u2192 28 Feb \u2192 31 Mar).\n",
+      "maximum": 31,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "draft_in_advance": {
+      "description": "Whether the template prepares a draft for review before emitting. The window is fixed at\n5 days and both options emit on the scheduled day. Omitted, the template is created\nwithout the review draft. Same field, same meaning and same default as when you create a\ntemplate from scratch: deriving from an invoice does not give it a second semantics.\n",
+      "type": "boolean"
+     },
+     "email_configuration": {
+      "$ref": "#/$defs/RecurringEmailConfigRequest"
+     },
+     "end_date": {
+      "format": "date",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "frequency": {
+      "description": "Generation cadence: `MONTHLY` every month, `QUARTERLY` every 3 months, `YEARLY` every 12 months. Omitted, `MONTHLY` applies.\n\nIt governs the step from the first invoice onwards, not where that first one lands: the\nfirst occurrence is the first `day_of_month` on or after `start_date`, found one month at\na time whatever the cadence. A yearly template starting 15 February with `day_of_month`\n10 first invoices on 10 March, then every 10 March after that \u2014 it does not wait a year.\n",
+      "enum": [
+       "MONTHLY",
+       "QUARTERLY",
+       "YEARLY"
+      ],
+      "type": "string"
+     },
+     "from_invoice_id": {
+      "description": "Invoice the template is derived from. It must belong to the company in the path; an\ninvoice you cannot reach is reported the same way as one that does not exist.\n",
+      "format": "uuid",
+      "type": "string"
+     },
+     "name": {
+      "maxLength": 255,
+      "minLength": 1,
+      "pattern": "^\\S.*$",
+      "type": "string"
+     },
+     "send_automatically": {
+      "default": false,
+      "type": "boolean"
+     },
+     "start_date": {
+      "description": "Date the subscription started. A past date is accepted and stored as sent \u2014 useful\nwhen migrating subscriptions from another system \u2014 but it never anchors generation\nin the past. `next_generation` becomes the next date of the template's own calendar\nthat is still ahead: the grid of `day_of_month` dates anchored at `start_date`, one\nevery `frequency`. On a quarterly or yearly template that can be months from now, not\nthis month. Invoices are never back-dated, so the missed periods are not generated.\n",
+      "format": "date",
+      "type": "string"
+     }
+    },
+    "required": [
+     "from_invoice_id",
+     "name",
+     "day_of_month",
+     "start_date"
+    ],
+    "type": "object"
+   },
+   "Email": {
+    "description": "Email address (minimum valid email is 5 chars, e.g. a@b.co)",
+    "format": "email",
+    "maxLength": 255,
+    "minLength": 5,
+    "type": "string"
+   },
+   "RecurringEmailConfigRequest": {
+    "properties": {
+     "cc": {
+      "items": {
+       "$ref": "#/$defs/Email"
+      },
+      "type": "array"
+     },
+     "message": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "recipients": {
+      "items": {
+       "$ref": "#/$defs/Email"
+      },
+      "type": "array"
+     },
+     "subject": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "type": [
+     "object",
+     "null"
+    ]
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "body": {
+    "$ref": "#/$defs/CreateRecurringInvoiceDerivationRequest"
+   },
+   "company_id": {
+    "description": "Unique identifier (UUID) of the company the operation acts on \u2014 its identifier, not its NIF. It is the only source of context: the account that owns it is derived from it, and the `BeeL-Active-Company` header plays no part. A company you do not reach answers `403`, and so does a company that does not exist, so the existence of a company in another account is never disclosed.",
+    "format": "uuid",
+    "type": "string"
+   },
+   "idempotency_key": {
+    "description": "Optional idempotency key for this operation. Omit it and one is derived from the request itself, which makes a blind retry safe but also collapses a SECOND, deliberately identical operation into the first for 24 hours. Set it \u2014 to an order id, or anything unique per intended operation \u2014 whenever you mean to create something that may look identical to what you just created.",
+    "maxLength": 255,
+    "pattern": "^[a-zA-Z0-9_-]+$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "company_id",
+   "body"
+  ],
+  "type": "object"
+ },
+ "name": "beel_create_recurring_invoice_derivation"
+}

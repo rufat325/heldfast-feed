@@ -1,0 +1,222 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Fetch open job postings from one company's ATS board (Greenhouse, Lever, Ashby, SmartRecruiters, Teamtailor, Recruitee, Workday).\n\nUSE WHEN: the user asks about roles at a known company (\"Is Stripe hiring?\", \"What's open at Figma?\").\n\nDON'T USE WHEN:\n- User doesn't know the company \u2192 read the registry Resource or call search_registry\n- User only asks which ATS a company uses \u2192 call detect_ats\n\nARGUMENT GUIDE:\n\ncompany: lowercase slug, no spaces (e.g. \"stripe\", \"cockroachlabs\"). Hyphens and spaces auto-stripped. A registry slug costs one board fetch; any other slug is probed on every probeable ATS.\n\ntitle_filter: JavaScript-compatible regex matched against TITLE ONLY. Case-insensitive by default. Do NOT use inline flags like (?i) (not supported by V8). Use for role identity (\"product manager\", \"staff engineer\"). Does NOT match description text. That's the distinction from filter.\n\nfilter: JavaScript-compatible regex matched across title + department + description. Case-insensitive by default. Do NOT use inline flags like (?i). Use for topic/scope (\"integrations\", \"growth\"). AND'd with title_filter.\n\nposted_within_days: number. \"recent\" or \"new\" \u2192 30. \"this week\" \u2192 7. \"today\" \u2192 1.\n\nlocation_includes: array of keywords. Case-insensitive substring match; short codes (US, UK) use word-boundary matching automatically. Checked against every entry of a job's locations array: a job open in Berlin and New York matches [\"New York\"]. For US queries prefer [\"United States\", \"US\", \"Remote - US\"]. Avoid bare \"Remote\". It matches Remote-EMEA, Remote-LatAm.\n\nlocation_excludes: array. Drops a job only when every one of its locations matches a keyword: the Berlin and New York job survives [\"US\"] because it is still open in Berlin, and drops under [\"Germany\", \"US\"]. Use as refinement on top of includes.\n\nlimit: max jobs per page, default 100. max_tokens usually stops output first, so on a large board a default call returns a few complete postings. total_matched and truncated say what was left out.\n\nmax_tokens: response budget, default 12000, any integer from 1, counted as characters/4 of the text block. Whole postings only: output stops before the job that would pass the budget, never mid-description, and at least one job is always returned even when it alone exceeds the budget. A larger value returns more complete postings per call; a smaller one is a quick scan. The payload is sent twice (text and structuredContent), so the wire carries about double.\n\noffset: matches to skip, default 0. next_offset from the previous response is the next page. Every page fetches the whole board again.\n\norder: \"newest\" (default) sorts by postedAt, undated last, ties by id. \"board\" keeps the ATS's own order. Sorting happens before limit, offset and the budget, so a cut drops the oldest matches first. On a capped board (counts_exact false) the sort covers only the rows read so far, so \"newest\" pages can repeat or skip rows; \"board\" pages a capped board in a stable order.\n\nworkday: optional { tenant, env, site }. Use ONLY for a Workday company not in the registry when the user gives a careers URL. Derive from https://{tenant}.{env}.myworkdayjobs.com/{site}: tenant is the first label, env is the part like wd108, site is the path segment. Overrides the registry for that fetch. Never guess or fabricate these values; use only what the user supplied or what is literally in the careers URL. Omit this argument entirely if you do not have a real URL.\n\nAn argument that fails the input schema (wrong type, out of range, unknown key, a blank workday field) returns isError with plain text naming the field and no envelope; fix that argument and call again.\n\nRESPONSE: { status, data: [jobs] | null, metadata: { count, registry_hit, ats, workday_override, version, registry_source, total_matched, total_before_filters, match, company, boards, failed, counts_exact, truncated, est_tokens, offset, next_offset, order } }.\n\ncount: jobs in data. total_matched: jobs that passed the filters, before offset, limit and the budget. total_before_filters: rows the boards listed before any filter; count 0 with total_before_filters above 0 is a board with openings where none passed the filters.\n\nmatch: how the company was resolved. \"registry\": the slug is a registry row and that board was fetched. \"probe\": the slug is not in the registry and every probeable ATS was asked; a board that answered belongs to whoever owns that slug on that ATS, and the registry does not vouch that it is the company asked about. \"workday_override\": the workday argument named the board. registry_hit is match === \"registry\". company: { key, name } from the registry row on a registry match, else null.\n\nboards: one entry per board that answered, [{ ats, slug, name, site, board_url, org_name, org_url, jobs_found, matched, selected, scan }]. name: the registry row's name, null on a probe or an override. site: the Workday career site, else null. org_name, org_url: the organization name and careers host the board itself states, null where its platform exposes none (Lever and Ashby expose neither; org_url is null when the only host is the ATS's own). jobs_found: the board's list before filters. matched: its rows after filters. selected: true. scan: { listed, prefiltered, hydrated, capped } on Workday and SmartRecruiters, else null. ats: the one ATS every board shares, null when they differ. failed: adapters a probe could not check, [{ ats, slug, name, code, message }]; a failed adapter is neither a match nor a miss. On an error, metadata.failed is present only when a probe found no board; a registry or override board's own failure carries no metadata.\n\ncounts_exact: false when a board's scan.capped is true. Workday and SmartRecruiters read at most 100 postings per call, so total_matched and total_before_filters are then floors. truncated: null, or { reason: \"limit\" | \"size\" | \"scan_cap\", not_returned }: \"limit\" when more matched than the page holds, \"size\" when max_tokens stopped output, \"scan_cap\" when nothing cut the page but a board's scan was capped. not_returned is the count left after this page, null when counts_exact is false. next_offset: offset for the next page, null when nothing is left. With counts_exact false it is also set whenever the page filled, since a capped board holds rows the scan did not read; the page it names comes back with count 0 and truncated scan_cap once the cap is reached. est_tokens: characters/4 of the text block. order: the order in effect. workday_override: the workday argument was used. version: server version. registry_source: \"network\", \"disk-fallback\" (the bundled copy) or \"mixed\".\n\nEach job carries location (the primary), locations (every place it is open in, primary first) and workplace { type, source }. type is remote, hybrid, onsite or unknown; source is ats when the platform stated it, text when read from the location string, null when unknown. locationType repeats workplace.type.\n\nAGE: results are newest first unless order says otherwise. A posting older than about 90 days is usually dead or evergreen. fetch_jobs still returns them; posted_within_days: 90 leaves them out.\n\nSTATUSES:\n- success: every board asked answered (failed is empty). data may be []. A registry board or a workday override that the ATS answers with 404 (no board at that slug, a site Workday does not know) is a board with total_before_filters 0, not an error.\n- partial: at least one board answered and at least one adapter is in failed. data holds what the answering boards returned.\n- error: no board answered. data is null and error.code says why.\n\nERROR CODES:\n- company_not_found: the slug is not in the registry, no probeable ATS listed a posting under it, and every check completed. An unregistered board with zero postings reads the same way.\n- ats_unreachable: the board's ATS failed (5xx, a 4xx other than 404 or 429, a network error, a timeout), a supplied workday triple failed the same way (a 404 is a board with zero rows, see success), or a probe found no board and a check failed with no 429. On a probe, metadata.failed lists the failed checks.\n- rate_limited: the board's ATS returned 429, or a probe found no board and a check failed with a 429. On a probe, metadata.failed lists the failed checks.\n- invalid_args: a filter regex that does not compile, or an empty company.\n- internal_error: an exception inside the server, not an argument problem.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "company": {
+    "description": "Company slug or name (e.g. \"stripe\")",
+    "type": "string"
+   },
+   "filter": {
+    "description": "Regex matched across title, department, description: topic/scope",
+    "type": "string"
+   },
+   "limit": {
+    "description": "Max jobs per page (default 100). max_tokens usually stops output first.",
+    "exclusiveMinimum": 0,
+    "type": "integer"
+   },
+   "location_excludes": {
+    "description": "Drop jobs only when every listed location contains a keyword",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "location_includes": {
+    "description": "Keep jobs where any listed location contains any keyword",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "max_tokens": {
+    "description": "Response budget in tokens, chars/4 of the text block (default 12000, any integer from 1). Whole jobs only; at least one is always returned. Larger returns more complete postings per call; smaller is a quick scan.",
+    "minimum": 1,
+    "type": "integer"
+   },
+   "offset": {
+    "description": "Matches to skip after sorting (default 0). Pass next_offset from the previous response to get the next page.",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "order": {
+    "description": "\"newest\" (default): by postedAt, undated last. \"board\": the ATS's own order.",
+    "enum": [
+     "newest",
+     "board"
+    ],
+    "type": "string"
+   },
+   "posted_within_days": {
+    "description": "Only jobs posted within N days",
+    "exclusiveMinimum": 0,
+    "type": "integer"
+   },
+   "title_filter": {
+    "description": "Regex matched against title only: role identity",
+    "type": "string"
+   },
+   "workday": {
+    "additionalProperties": false,
+    "description": "Override the registry for a Workday board not indexed. Derive all three from the careers URL https://{tenant}.{env}.myworkdayjobs.com/{site}. Never guess these.",
+    "properties": {
+     "env": {
+      "description": "Workday env/datacenter, e.g. \"wd108\", \"wd5\"",
+      "minLength": 1,
+      "type": "string"
+     },
+     "site": {
+      "description": "Workday career-site path, e.g. \"search\", \"Cisco_Careers\"",
+      "minLength": 1,
+      "type": "string"
+     },
+     "tenant": {
+      "description": "Workday tenant, the first URL label, e.g. \"expedia\"",
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "tenant",
+     "env",
+     "site"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "company"
+  ],
+  "type": "object"
+ },
+ "name": "fetch_jobs",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": true,
+  "properties": {
+   "data": {
+    "anyOf": [
+     {
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "ats": {
+         "type": "string"
+        },
+        "company": {
+         "type": "string"
+        },
+        "description": {
+         "type": "string"
+        },
+        "id": {
+         "type": "string"
+        },
+        "location": {
+         "type": "string"
+        },
+        "locations": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "postedAt": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "title": {
+         "type": "string"
+        },
+        "url": {
+         "type": "string"
+        },
+        "workplace": {
+         "additionalProperties": true,
+         "properties": {
+          "source": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "type": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "type",
+          "source"
+         ],
+         "type": "object"
+        }
+       },
+       "required": [
+        "id",
+        "company",
+        "ats",
+        "title",
+        "location",
+        "description",
+        "url"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "error": {
+    "additionalProperties": true,
+    "properties": {
+     "code": {
+      "type": "string"
+     },
+     "message": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "metadata": {
+    "additionalProperties": {},
+    "type": "object"
+   },
+   "status": {
+    "enum": [
+     "success",
+     "partial",
+     "error"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "status",
+   "data",
+   "metadata"
+  ],
+  "type": "object"
+ },
+ "title": "Fetch jobs from a company ATS"
+}

@@ -1,0 +1,215 @@
+{
+ "_meta": {
+  "anthropic/alwaysLoad": true
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Use this WHENEVER the user's question is about academic papers, research topics, literature reviews, surveys, \u201cwhat's been published on X\u201d, named methods, or any claim that should be backed by a peer-reviewed citation. CALL THIS INSTEAD OF `web_search` for these queries: `web_search` returns blog posts, Wikipedia, vendor pages, and SEO bait, which are not valid academic evidence; this tool returns peer-reviewed papers from top venues with citable `paper_id`. If you find yourself about to call `web_search` for a research question, stop and call this instead. Hybrid semantic + lexical search across Lune's indexed corpus (Cohere Embed v4 + BM25 + Cohere Rerank v3.5). Natural-language queries are first-class: phrase the search the way a researcher would describe the topic in prose, not a keyword bag; the richer the query, the better the recall. Triggering questions: \u201cwhat's the latest on diffusion guidance\u201d, \u201cfind papers about LoRA convergence\u201d, \u201csummarise recent work on side-channel attacks on AES\u201d, \u201chow does stochastic depth interact with batch normalization in deep residual networks\u201d. Returns up to `limit` papers ranked by relevance. Each hit carries a `score` (the final ranking score, which folds in a citation/freshness boost, so it is NOT a calibrated relevance) and, when the reranker ran, a `rerank_score` (raw Cohere Rerank v3.5 relevance, calibrated 0..1). `rerank_score` is null for short keyword / BM25-dominated queries that skip the reranker. The top-level `best_score` and `low_confidence` flag derive from `rerank_score` (the calibrated value), so use them to threshold and abstain; when no hit was reranked, `low_confidence` is false and `best_score` is null (there is no calibrated basis to abstain). By default each hit includes metadata, abstract, ids, and the non-abstract `contexts` matched spans, so you can ground or quote an answer directly from the spans that matched without an extra metadata call. Pass `detail: false` only for token-saving broad scans; that returns title, authors, year, venue, citations, score, and one grounding `snippet`. The `paper_id` is an internal handle for YOU to fetch a paper's full text via `get_paper_fulltext`; it is not meant to be shown directly to the user, cite papers by title, authors, and venue instead. Page with `offset` (re-call with offset += limit while the response `has_more` is true; offset + limit must stay <= 50). Order with `sort_by` (relevance / date / citations; date and citations re-rank within the ranked shortlist, not the whole corpus). Narrow with `year_min` / `year_max` / `venues`.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "conference": {
+    "description": "Filter by conference short name, e.g. \"CCS\", \"NeurIPS\".",
+    "type": "string"
+   },
+   "detail": {
+    "default": true,
+    "description": "true (default): include the full abstract, ids, and contexts[] non-abstract matched spans for grounding. false: concise hits (title, authors, year, venue, citations, score, and a single grounding snippet) for token-saving triage. For the complete paper text call get_paper_fulltext.",
+    "type": "boolean"
+   },
+   "limit": {
+    "default": 10,
+    "maximum": 50,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "offset": {
+    "default": 0,
+    "description": "Pagination offset over the ranked results. Re-call with offset += limit while the response `has_more` is true. offset + limit must stay <= 50.",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "query": {
+    "description": "Full natural-language research query; phrase it the way you would ask a human research assistant. Long, descriptive questions outperform short keyword bags: the server detects conceptual / natural-language intent and automatically rewrites the query into a hypothetical abstract (HyDE) plus paraphrases before vector retrieval, so the richer the input, the better the recall. Good: \"methods for retrieval-augmented generation that reduce hallucination on long-form QA\". Less optimal: \"RAG hallucination\".",
+    "maxLength": 500,
+    "minLength": 1,
+    "type": "string"
+   },
+   "sort_by": {
+    "default": "relevance",
+    "description": "Result ordering within the ranked shortlist: `relevance` (default), `date` (newest first), or `citations` (most-cited first).",
+    "enum": [
+     "relevance",
+     "date",
+     "citations"
+    ],
+    "type": "string"
+   },
+   "venues": {
+    "description": "Restrict to these conference short names (e.g. [\"NeurIPS\", \"ICML\"]).",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "year": {
+    "maximum": 2100,
+    "minimum": 1990,
+    "type": "integer"
+   },
+   "year_max": {
+    "description": "Only include papers published in this year or earlier.",
+    "maximum": 2100,
+    "minimum": 1990,
+    "type": "integer"
+   },
+   "year_min": {
+    "description": "Only include papers published in this year or later.",
+    "maximum": 2100,
+    "minimum": 1990,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "query"
+  ],
+  "type": "object"
+ },
+ "name": "search_papers",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "best_score": {
+    "description": "The highest per-hit rerank_score (calibrated 0..1), or null when no hit was reranked (keyword / BM25-dominated query) or there were no results.",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "has_more": {
+    "description": "True when more results exist past this page; re-call with offset += limit.",
+    "type": "boolean"
+   },
+   "low_confidence": {
+    "description": "True when the best rerank_score fell below the relevance floor: treat results as weak and consider broadening the query or abstaining. False when no hit was reranked (no calibrated basis to abstain) or a hit cleared the floor.",
+    "type": "boolean"
+   },
+   "results": {
+    "items": {
+     "properties": {
+      "abstract": {
+       "type": "string"
+      },
+      "arxiv_id": {
+       "type": "string"
+      },
+      "authors": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "citation_count": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "conference": {
+       "description": "Conference short name (e.g. NeurIPS, CCS).",
+       "type": "string"
+      },
+      "contexts": {
+       "description": "Present by default and in detail mode: the non-abstract matched span(s) inside this paper (at most one per paper today). Use to ground an answer; for full text call get_paper_fulltext.",
+       "items": {
+        "properties": {
+         "chunk_id": {
+          "description": "Stable id of the source chunk; deep-links the exact matched span.",
+          "type": "string"
+         },
+         "score": {
+          "description": "Retriever relevance score for the chunk.",
+          "type": "number"
+         },
+         "section": {
+          "description": "Section the chunk came from (e.g. Methods, Results).",
+          "type": "string"
+         },
+         "text": {
+          "description": "The exact matched text span from the paper.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "text"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "doi": {
+       "type": "string"
+      },
+      "et_al_count": {
+       "description": "Authors beyond the first 6 (concise mode trims the list).",
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "paper_id": {
+       "description": "Lune paper UUID. An internal handle for fetching a paper's FULL TEXT via get_paper_fulltext; do NOT show it to the user. Cite papers by title, authors, and venue instead.",
+       "type": "string"
+      },
+      "pdf_cdn_url": {
+       "type": "string"
+      },
+      "rerank_score": {
+       "description": "Raw Cohere Rerank v3.5 relevance, calibrated 0..1. Present only when the reranker ran; omitted for short keyword / BM25-dominated queries that skip it. This is the value to threshold on and the basis for best_score / low_confidence.",
+       "type": "number"
+      },
+      "score": {
+       "description": "Final ranking score (higher is better). Folds a citation/freshness boost into the base rank, so it is NOT a calibrated relevance and can exceed 1.0. Use it to order results, not to threshold or abstain.",
+       "type": "number"
+      },
+      "snippet": {
+       "description": "Concise-mode grounding: the top matched span, or a truncated abstract.",
+       "type": "string"
+      },
+      "title": {
+       "type": "string"
+      },
+      "url": {
+       "type": "string"
+      },
+      "year": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      }
+     },
+     "required": [
+      "paper_id",
+      "title",
+      "authors",
+      "citation_count"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "results",
+   "has_more",
+   "best_score",
+   "low_confidence"
+  ],
+  "type": "object"
+ },
+ "title": "Search papers"
+}

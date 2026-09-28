@@ -1,0 +1,51 @@
+{
+ "description": "Switch an app between HTTP ingress, raw TCP ingress and dual (both), and choose its public host port. PLATFORM ADMIN ONLY \u2014 this is not an owner self-service field like auth_mode. ingress_type=`tcp` publishes 0.0.0.0:<public_port> -> the container in ADDITION to the loopback publish every app has, so clients connect straight to the host and Caddy never sees the traffic: no forward_auth/SSO, no identity headers, no per-request audit, no rate limiting, no security headers, no TLS from AppCrane. Every control AppCrane has assumes Caddy is the only door; this adds a second one the platform does not control, and the app then owns authentication completely. Do NOT reach for this to make an app reachable without login \u2014 that is auth_mode=`headless`, which still goes through Caddy and keeps TLS, security headers and logging. Use `tcp` ONLY when the app does not speak HTTP at all (a forward/CONNECT proxy tunnels raw bytes; no reverse proxy can express that). ingress_type=`dual` (v2.45.0) is for an app that is BOTH: its HTTP control plane keeps being served through Caddy on container port 3000 with every control intact (and stays the plane its health check probes), while a SECOND listener inside the same container \u2014 data_plane_port, which is REQUIRED and must not be 3000 \u2014 is published raw at 0.0.0.0:<public_port> with none of them. Setting data_plane_port to 3000 is refused: that would republish the ordinary HTTP origin Caddy fronts, unauthenticated and unaudited, which is the exact surface Caddy is in the path to protect. Omit public_port to keep the existing allocation, or to have the lowest free port in 31000-31999 allocated \u2014 a dedicated band so the operator firewalls one predictable block; an explicitly NAMED port may be anything in 1024-65535, because clients are configured with a port by hand or by MDM and a number like 8080 is often not the platform's to choose. Naming a port outside the auto band is legal and safe \u2014 the guards that matter (the WHATWG blocked list, AppCrane's own listening port, collisions with slot-derived backend ports, and one-app-per-host-port) apply at every value \u2014 but the operator must open the firewall for that port too. Switching back to `http` STOPS THE PUBLISH but does not close the port: the publish is a `docker run` flag, so a running container keeps binding it until it is RECREATED (next deploy, or POST /api/apps/<slug>/restart/<env>, which does stop+start). Until then the port stays reachable and unauthenticated, so AppCrane keeps it RESERVED to this app \u2014 no other app can be given it, and it goes back in the pool automatically when the container comes back without the publish. Recreate the container to actually close a port, and do not report an exposure as revoked before that; the app reports the number under `pending_port_release` in the meantime. Do NOT treat the host firewall as a second lock holding this shut: on a Linux host Docker's publish is a DNAT rule evaluated in FORWARD that never traverses INPUT, so a plain `ufw deny <port>` does NOT block it \u2014 filter in DOCKER-USER or upstream. This host also sits behind SDP, so the boundary that exists is the perimeter: publishing makes the port reachable by everything inside it, not by the internet and not by nobody.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "data_plane_port": {
+    "description": "CONTAINER port the raw publish targets, 1024-65535. REQUIRED with ingress_type='dual'. On any other type the only accepted value is null, which DROPS a data plane the app still has pinned \u2014 required to flip a dual app to 'tcp', since that publishes container port 3000 instead. Must NOT be 3000: that is the app's HTTP control plane, the port Caddy proxies to, and publishing it raw would expose the ordinary HTTP origin with no TLS, no forward_auth, no identity headers and no request audit. Give the data plane its own listener on another port inside the container. Unlike public_port this is not globally unique \u2014 container network namespaces are separate, so two apps may each use the same container-side port.",
+    "maximum": 65535,
+    "minimum": 1024,
+    "type": [
+     "integer",
+     "null"
+    ]
+   },
+   "ingress_type": {
+    "description": "http = through Caddy (default). tcp = the container port is published on the host, with no AppCrane authentication in front of it. dual = both \u2014 the HTTP control plane stays behind Caddy on container port 3000, and a separate data_plane_port in the same container is published raw alongside it.",
+    "enum": [
+     "http",
+     "tcp",
+     "dual"
+    ],
+    "type": "string"
+   },
+   "public_port": {
+    "description": "HOST port to publish. Only valid with ingress_type='tcp' or 'dual'. Omit to keep the port the app already holds, or to have one allocated from 31000-31999; name one explicitly and it may be anything in 1024-65535, which is what makes a client fleet already pinned to e.g. 8080 expressible. A port is stored, never derived from the app's slot, so it survives redeploys and renames \u2014 clients pinned to it keep working. Two apps cannot hold the same host port.",
+    "maximum": 65535,
+    "minimum": 1024,
+    "type": "integer"
+   },
+   "sandbox_public_port": {
+    "description": "HOST port to publish for the SANDBOX container, so a raw data plane can be exercised before it goes live. Opt-in and independent of public_port \u2014 omit it and sandbox publishes nothing, exactly as before. Pass null to drop it. Must not equal any port any other app holds in EITHER environment; the registry enforces that. Only valid with ingress_type='tcp' or 'dual'. SECURITY: this is a SECOND unauthenticated door, on the container running your least-reviewed code \u2014 it has no forward_auth, no identity headers, no audit and no TLS from AppCrane, and behind SDP it is reachable by everything inside the perimeter.",
+    "maximum": 65535,
+    "minimum": 1024,
+    "type": [
+     "integer",
+     "null"
+    ]
+   },
+   "slug": {
+    "description": "App slug.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "slug",
+   "ingress_type"
+  ],
+  "type": "object"
+ },
+ "name": "appcrane_set_app_ingress"
+}

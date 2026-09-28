@@ -1,0 +1,179 @@
+{
+ "description": "Create a new multi-location scraping campaign.\n\nCampaigns orchestrate Google Maps searches across multiple locations with optional website scraping and email verification. The backend automatically selects the appropriate WindMill workflow:\n\n- Maps + Site + Verify: Full pipeline (default)\n- Maps + Site: Skip email verification\n- Maps only: Quick business search without site scraping\n\nProvide a search query, country code, and optionally a workflow config to control which steps run.\n\nSMARTLEAD EXPORT (push leads to an outreach campaign automatically): set workflow.smartlead = { enabled: true, connection_id, remote_campaign_id }. When enabled, the campaign's VERIFIED leads are pushed into that SmartLead campaign automatically when the run finishes (no separate push step). You MUST discover the two ids first: call list_outreach_connections (\u2192 connection_id) then list_outreach_campaigns(connection_id) (\u2192 remote_campaign_id). Those two tools live in the SpiderMail slice / kitchen-sink @spideriq/mcp. field_map is optional (backend defaults already map location + VayaPin pin_name). Only leads with a verified email are exported; set only_with_vayapin_seo:true to restrict to businesses that got a VayaPin SEO pin.\n\nSCOPING US ZIP CAMPAIGNS (\"state = country\"): the US is too large to scrape whole. To run a US ZIP campaign, scope it to ONE STATE: set filter = { mode: \"regions\", admin_regions: [\"Texas\"], include_postcodes: true }. Discover valid state names with list_regions(country_code=\"US\") (or list_countries, which lists the 50 states as country-equivalent units). One state runs every ZIP in it as its own Maps search \u2014 list_regions returns each state's postcode_count so you can size it first. Scoping a postcode (ZIP) run to all of the US \u2014 or omitting the state \u2014 is rejected by the API (422, >10K location cap). Pick exactly one state per campaign.",
+ "inputSchema": {
+  "properties": {
+   "country_code": {
+    "description": "2-letter ISO country code (e.g., \"US\", \"DE\", \"IL\")",
+    "type": "string"
+   },
+   "filter": {
+    "description": "Location filter configuration. For a US ZIP campaign, scope to ONE state: { mode: \"regions\", admin_regions: [\"Texas\"], include_postcodes: true }.",
+    "properties": {
+     "admin_regions": {
+      "description": "US state name(s) to scope a \"regions\" campaign to, e.g. [\"Texas\"]. Use exactly ONE state per campaign (single-state model). Discover valid names via list_regions(country_code=\"US\").",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "include_postcodes": {
+      "description": "Opt in to postcode (ZIP) locations (default false = cities only). When true on a state-scoped US campaign, every ZIP runs as its own Maps search. All-US ZIP runs are rejected (422 / >10K cap) \u2014 scope to one state.",
+      "type": "boolean"
+     },
+     "location_ids": {
+      "description": "Specific location IDs (for custom mode)",
+      "items": {
+       "type": "number"
+      },
+      "type": "array"
+     },
+     "max_population": {
+      "description": "Maximum city population",
+      "type": "number"
+     },
+     "min_population": {
+      "description": "Minimum city population",
+      "type": "number"
+     },
+     "mode": {
+      "description": "Location selection mode. \"regions\" = scope to one US state (admin_regions). \"city\" = one city's ZIPs (parent_city). \"all\"/\"population\" = country-wide cities (ZIPs only if include_postcodes).",
+      "enum": [
+       "all",
+       "population",
+       "cities_only",
+       "regions",
+       "city",
+       "custom"
+      ],
+      "type": "string"
+     },
+     "parent_city": {
+      "description": "Narrow to a single city (required for mode \"city\"; optional elsewhere).",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "max_results": {
+    "description": "Max results per location (1-500, default: 100)",
+    "type": "number"
+   },
+   "name": {
+    "description": "Campaign name (auto-generated if not provided)",
+    "type": "string"
+   },
+   "search_query": {
+    "description": "What to search for (e.g., \"restaurants\", \"dentists\", \"plumbers\")",
+    "type": "string"
+   },
+   "test": {
+    "description": "Route to test queue (default: false)",
+    "type": "boolean"
+   },
+   "workflow": {
+    "description": "Workflow configuration to control which pipeline steps run",
+    "properties": {
+     "filter_review_sites": {
+      "description": "Filter out review sites",
+      "type": "boolean"
+     },
+     "filter_social_media": {
+      "description": "Filter out social media URLs",
+      "type": "boolean"
+     },
+     "smartlead": {
+      "description": "SmartLead export (FINALIZE step). When enabled, the campaign's VERIFIED leads are pushed to the chosen SmartLead campaign automatically at completion. Discover the ids first with list_outreach_connections + list_outreach_campaigns.",
+      "properties": {
+       "connection_id": {
+        "description": "mail_outreach_connections.id \u2014 from list_outreach_connections",
+        "type": "number"
+       },
+       "enabled": {
+        "description": "Push verified leads to SmartLead when the campaign finishes (default: false)",
+        "type": "boolean"
+       },
+       "limit": {
+        "description": "Push at most N new leads (trims to the account cap instead of failing)",
+        "type": "number"
+       },
+       "only_with_vayapin_seo": {
+        "description": "Only push leads that have a VayaPin SEO pin (default: false)",
+        "type": "boolean"
+       },
+       "remote_campaign_id": {
+        "description": "Target SmartLead campaign id \u2014 from list_outreach_campaigns",
+        "type": "string"
+       },
+       "remote_campaign_name": {
+        "description": "Optional display snapshot (notifications only)",
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "social_media_enrichment": {
+      "description": "Social Media Enrichment fallback. When a business has no verified email, recovers its public social-media contact info and writes it back to the lead. Only takes effect for clients whose plan includes Social Media Enrichment (an owner-granted entitlement); ignored otherwise. Default ON (opt-out) for entitled clients.",
+      "properties": {
+       "enabled": {
+        "description": "Enable Social Media Enrichment for this campaign (default: true for entitled clients). Set false to skip.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "spidersite": {
+      "properties": {
+       "enabled": {
+        "description": "Enable website scraping (default: true)",
+        "type": "boolean"
+       },
+       "extract_team": {
+        "description": "Extract team/people info",
+        "type": "boolean"
+       },
+       "max_pages": {
+        "description": "Max pages to crawl per site",
+        "type": "number"
+       },
+       "mode": {
+        "description": "Scraping mode: \"contacts\", \"full\"",
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "spiderverify": {
+      "properties": {
+       "enabled": {
+        "description": "Enable email verification (default: true)",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "vayapin": {
+      "description": "VayaPin publish stage. Publishes a PERMANENT public profile on cs.vayapin.com for each business with a website (deleting the campaign does NOT remove them). Set enabled explicitly \u2014 never rely on the default.",
+      "properties": {
+       "enabled": {
+        "description": "Publish VayaPin map profiles for this campaign",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     }
+    },
+    "type": "object"
+   },
+   "workspace": {
+    "description": "Tenant to target (cli_\u2026). Omit to use the active/bound workspace. list_workspaces shows the options.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "search_query",
+   "country_code"
+  ],
+  "type": "object"
+ },
+ "name": "create_campaign"
+}

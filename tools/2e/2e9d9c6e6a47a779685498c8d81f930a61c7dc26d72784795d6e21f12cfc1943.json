@@ -1,0 +1,27 @@
+{
+ "description": "**Phase 4** \u2014 drive an assistant turn from outside the live session for agent-driven E2E tests of `glasses.assistant.start { tool(...) { ... } }`. **As of iter5.2 (2026-05-27) the `text:` path works for BOTH the Mock provider and the real OpenAi Realtime provider** \u2014 same MCP call, provider-appropriate routing: (a) **OpenAi (default in production apps)** \u2014 injected as a synthetic user turn via `conversation.item.create` + `response.create` on the live Realtime WebSocket. Drives REAL model behavior with full conversation context + tool routing decisions; costs real tokens (~$0.005/turn); takes 500-2000ms for the model to respond + dispatch tool. (b) **Mock** \u2014 word-overlap-matches against registered tool descriptions + dispatches synchronously. Sub-ms, deterministic, $0. The library filters inject frames to `source: \"assistant_inject\"` only, so browser-mic STT transcripts (already flowing via the PCM audio path) are NOT double-injected. **Wake first if Dormant.** This handler does NOT auto-wake \u2014 if the session is Dormant (silence-timeout, fresh session, post-`end_conversation`), the library's `injectUserTurn` silently no-ops because `connectionRef` is null + the inject is dropped. Drive the wake faithfully via `injectTranscript({ text: \"<your wake phrase>\" })`, wait for `assistant.session_started` in `getEventLog`, THEN inject. This mirrors what a real user does on real hardware: phrase, wait, command. (The iter5.3 autoWake convenience was shipped + reverted in 0.1.4 \u2014 it collapsed the explicit two-step into one call, hiding the wake step and racing with `onWake` greeting hooks.) audioWavBase64 path is DEFERRED to v1.1 (needs Rust core changes) \u2014 handler returns not_implemented if passed. **Returns `watchCursor`** \u2014 a seq cursor captured immediately before the inject; pass it straight into `assertToolCalled({ sinceCursor })` so the assertion anchors BEFORE this inject and never misses the tool call it triggers (the model fires the tool 0.5-2s later, often after your assertToolCalled call has already started). USE in the agent E2E loop: createSimulatorSession \u2192 injectTranscript(\"<your wake phrase>\") \u2192 (wait for session_started) \u2192 `const r = injectAssistantUtterance({ text: \"...\" })` \u2192 `assertToolCalled({ name: \"...\", sinceCursor: r.watchCursor })` \u2192 getEventLog(types:['assistant.*']) \u2192 cross-verify via adb logcat + screencap. DON'T USE for Phase 3 `glasses.conversation.onWake { listen / speak }` flows \u2014 that's still `injectTranscript`'s domain.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "audioWavBase64": {
+    "description": "DEFERRED to v1.1 \u2014 passing this field returns `not_implemented`. The intended path: base64-encoded WAV (mono i16 LE PCM; rate matched to the live audio path at implementation time); library decodes and feeds through audio_chunks Flow to the active real provider. Needs a Rust core extension that Sprint 1's machine-split deliberately avoids. For end-to-end real-provider validation in the meantime, run the OpenAi provider session with a real mic source (sim browser tab mic, or real glasses).",
+    "minLength": 1,
+    "type": "string"
+   },
+   "sessionId": {
+    "minLength": 1,
+    "type": "string"
+   },
+   "text": {
+    "description": "Utterance text the agent wants the assistant to react to. Routed differently per provider, but always via the same `stt_transcript`/`source: \"assistant_inject\"` frame: (a) **OpenAi provider (iter5.2)** \u2014 injected as a synthetic user turn via `conversation.item.create` + `response.create` on the live Realtime WebSocket. The model decides which tool to call based on its full instructions + the user message. ~$0.005/turn, 500-2000ms latency. Use for real-provider verification without needing real audio or human-in-loop. (b) **Mock provider** \u2014 word-overlap-matches against each registered tool's description (case-insensitive, tokens \u2265 3 chars, first match wins). Sub-ms, $0. Write tool descriptions so the keywords your test utterance contains overlap, e.g. \"Take a photo with the glasses camera\" matches text \"take a photo\". **Mock tool args are an empty object (F-75):** the Mock matches the tool by DESCRIPTION but does not extract arguments from the utterance \u2014 it dispatches with `{}`, so a tool whose args type has REQUIRED fields throws MissingFieldException under Mock injection. Make Mock-testable tools' args optional (nullable / defaulted) or parse them from the utterance text in the tool body; validate required-typed-arg tools against the real OpenAi provider, which fills args from the model.",
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "sessionId"
+  ],
+  "type": "object"
+ },
+ "name": "injectAssistantUtterance"
+}

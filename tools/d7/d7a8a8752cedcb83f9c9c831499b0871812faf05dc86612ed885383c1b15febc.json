@@ -1,0 +1,552 @@
+{
+ "description": "Take off a schedule row's mark from the row itself \u2014 the estimator's own gesture: a transition type sometimes exists only as a schedule row plus tag markers scattered across the plan sheets, and this tool mints the condition FROM the row and finds every occurrence. Pass the row's key (e.g. 'T1') and the tool (1) reads the row from the set's schedule tables (the sheet_graph/find_schedule machinery \u2014 the row is the condition's cited source), (2) anchors a geometric fingerprint on the marker the tag is DRAWN as on a plan sheet (a deterministic pad ladder around the tag text; where the tag occurs more than once the fingerprint must recur at a second occurrence before it is trusted \u2014 `anchor.corroborated`), and (3) sweeps every PLAN-role sheet for it. The count is geometry AND text agreeing: drafting reuses one bubble shape across many marks, so a match counts ONLY when the row's own tag sits within the marker footprint (its bbox rides the match as `tag_at` evidence); a match labeled with a SIBLING row's tag is excluded and says whose it is, an unlabeled match is withheld as a question, and a tag drawn with no matching marker is disclosed as text_only. REFUSAL over guessing, with the reason and the fix: no such row; the same key in two tables (ambiguous); a tag drawn on no plan sheet; no repeatable marker linework around the tag \u2014 a fingerprint is never guessed from text alone (the fallback is always: marquee one instance with symbol_sweep). commit: true commits the counted matches as EA markers under the row's own key \u2014 one undo step for the whole set-wide sweep, every marker carrying origin.assignment {source: \"schedule\"} plus the anchor and row citation on origin.symbol.seed. The COUNT is scale-free (EA), but matching is not: where the anchor sheet and a target sheet both carry a scale, the marker is resized by their exact ratio before matching (`scaled` per sheet), and where one does not, the sweep runs at 1:1 and discloses it (`scale_assumed`) rather than reporting a confident zero. After committing, LOOK: view_sheet {overlay: true} over each swept sheet. Coordinates are image px at render scale 2.0: PDF pt \u00d7 2, origin top-left, y down (the browser canvas's native space). Sheet payloads carry dims in both px and pt. LABEL-FIRST for devices (any trade): when the marker cannot be fingerprinted or does not reach a drawn tag amid linework \u2014 a heater bar or fan drawn to its own size, tagged by a leader \u2014 every such tag on a plan sheet counts as ONE instance BY LABEL, disclosed in found_by_label / label_only / counted_by; a bare mention in a note (no linework near it) is text_only, never a count. Rows come from every schedule family the sheet graph reads: room-finish, finish/material, and equipment (mechanical, electrical, plumbing, fire).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "commit": {
+    "default": false,
+    "description": "Commit every counted match as one EA count marker (excluded/withheld/text_only never commit)",
+    "type": "boolean"
+   },
+   "mirror": {
+    "default": true,
+    "description": "Also match mirrored markers",
+    "type": "boolean"
+   },
+   "rotations": {
+    "default": true,
+    "description": "Also match 90/180/270-rotated markers",
+    "type": "boolean"
+   },
+   "tag": {
+    "description": "The schedule row's key exactly as drawn, e.g. 'T1', 'TR-2' \u2014 it becomes the condition tag on commit",
+    "minLength": 1,
+    "type": "string"
+   },
+   "tolerance_px": {
+    "default": 2,
+    "description": "Endpoint match tolerance in image px (default 2 \u2014 CAD jitter, not drift)",
+    "exclusiveMinimum": 0,
+    "maximum": 20,
+    "type": "number"
+   }
+  },
+  "required": [
+   "tag"
+  ],
+  "type": "object"
+ },
+ "name": "sweep_schedule_row",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "anchor": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "at": {
+        "description": "The anchoring tag occurrence's center (image px)",
+        "items": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "number"
+         }
+        ],
+        "maxItems": 2,
+        "minItems": 2,
+        "type": "array"
+       },
+       "corroborated": {
+        "description": "true = the fingerprint recurred at a second tag occurrence before being trusted; false = the tag is drawn too sparsely to cross-check (see note)",
+        "type": "boolean"
+       },
+       "length_px": {
+        "type": "number"
+       },
+       "occurrences": {
+        "description": "Drawn occurrences of the tag across all plan sheets",
+        "type": "integer"
+       },
+       "rect": {
+        "description": "The fingerprint rect actually used [x0, y0, x1, y1] \u2014 the pad ladder's winning step",
+        "items": {
+         "type": "number"
+        },
+        "maxItems": 4,
+        "minItems": 4,
+        "type": "array"
+       },
+       "segments": {
+        "description": "Vector segments in the marker fingerprint",
+        "type": "integer"
+       },
+       "sheet": {
+        "description": "The plan sheet the fingerprint was anchored on",
+        "type": "string"
+       }
+      },
+      "required": [
+       "sheet",
+       "at",
+       "rect",
+       "segments",
+       "length_px",
+       "corroborated",
+       "occurrences"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "null when the sweep counted BY LABEL: no repeatable marker geometry sits around the drawn tag (the equipment convention \u2014 a device drawn to its own size, tagged by a leader), so nothing was fingerprinted"
+   },
+   "committed": {
+    "description": "commit mode: count shapes committed \u2014 one per counted match, the whole sweep ONE undo step",
+    "type": "integer"
+   },
+   "complete": {
+    "description": "True when every proposed placement was scored on every swept sheet \u2014 false means at least one sheet's count is a FLOOR, not a total (#261)",
+    "type": "boolean"
+   },
+   "condition": {
+    "description": "commit mode: the condition minted FROM the row \u2014 its key is the tag",
+    "type": "string"
+   },
+   "counted_by": {
+    "description": "How the count was made \u2014 \"label\" means no marker geometry was matched at all; look at each label_only placement before pricing",
+    "enum": [
+     "geometry",
+     "label",
+     "mixed"
+    ],
+    "type": "string"
+   },
+   "ea_total": {
+    "type": "number"
+   },
+   "found": {
+    "description": "Instances counted across every plan sheet: geometry matches carrying the row's own tag PLUS drawn tags counted by label \u2014 see counted_by",
+    "type": "integer"
+   },
+   "found_by_geometry": {
+    "description": "\u2026of which marker-fingerprint matches corroborated by the tag",
+    "type": "integer"
+   },
+   "found_by_label": {
+    "description": "\u2026of which drawn tags amid linework the fingerprint did not (or could not) reach \u2014 an installed instance by the equipment convention, disclosed as label-counted",
+    "type": "integer"
+   },
+   "note": {
+    "type": "string"
+   },
+   "row": {
+    "additionalProperties": false,
+    "description": "The schedule row the sweep was seeded from \u2014 the condition's source",
+    "properties": {
+     "cells": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "The row's cells, header \u2192 text \u2014 what the schedule SAYS this mark is",
+      "type": "object"
+     },
+     "citation": {
+      "additionalProperties": false,
+      "description": "An evidence pointer \u2014 the sheet, the literal text, and where it sits (image px). Every edge in the graph carries one; pass the bbox to view_sheet to LOOK at the source.",
+      "properties": {
+       "bbox": {
+        "additionalProperties": false,
+        "properties": {
+         "x0": {
+          "type": "number"
+         },
+         "x1": {
+          "type": "number"
+         },
+         "y0": {
+          "type": "number"
+         },
+         "y1": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "x0",
+         "y0",
+         "x1",
+         "y1"
+        ],
+        "type": "object"
+       },
+       "sheet": {
+        "type": "string"
+       },
+       "text": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "sheet",
+       "text",
+       "bbox"
+      ],
+      "type": "object"
+     },
+     "key": {
+      "type": "string"
+     },
+     "sheet": {
+      "type": "string"
+     },
+     "table": {
+      "description": "The table's title (or kind, when untitled)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "sheet",
+     "table",
+     "key",
+     "cells",
+     "citation"
+    ],
+    "type": "object"
+   },
+   "shape_ids": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "sheets": {
+    "description": "One entry per swept PLAN-role sheet, load order",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "candidates": {
+       "additionalProperties": false,
+       "properties": {
+        "considered": {
+         "type": "integer"
+        },
+        "dropped": {
+         "type": "integer"
+        }
+       },
+       "required": [
+        "considered",
+        "dropped"
+       ],
+       "type": "object"
+      },
+      "complete": {
+       "description": "True when every proposed placement on this sheet was scored \u2014 false means this sheet's count is a FLOOR, not a total (#261)",
+       "type": "boolean"
+      },
+      "elapsed_ms": {
+       "description": "Wall-clock for this sheet's sweep",
+       "type": "number"
+      },
+      "excluded": {
+       "description": "Markers matching the geometry but labeled with a SIBLING row's tag \u2014 the bubble shape is shared across marks, so these belong to that row, not this one",
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "at": {
+          "items": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "number"
+           }
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+         },
+         "tag": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "at",
+         "tag"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "found": {
+       "type": "integer"
+      },
+      "label_only": {
+       "description": "Instances counted BY LABEL: the row's tag drawn amid linework that the marker fingerprint did not match (or none was anchored) \u2014 the equipment convention; each is counted and each deserves a look",
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "at": {
+          "items": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "number"
+           }
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+         },
+         "tag_at": {
+          "$ref": "#/properties/row/properties/citation/properties/bbox"
+         }
+        },
+        "required": [
+         "at",
+         "tag_at"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "matches": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "at": {
+          "description": "The matched marker's centroid (image px)",
+          "items": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "number"
+           }
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+         },
+         "mirrored": {
+          "type": "boolean"
+         },
+         "rotation": {
+          "description": "Detected rotation in degrees (0 | 90 | 180 | 270)",
+          "type": "number"
+         },
+         "score": {
+          "description": "Length-weighted fraction of the anchor's segments matched within tolerance, 0..1",
+          "type": "number"
+         },
+         "tag_at": {
+          "additionalProperties": false,
+          "description": "The corroborating tag text's bbox \u2014 the evidence that this marker is THIS row's",
+          "properties": {
+           "x0": {
+            "$ref": "#/properties/row/properties/citation/properties/bbox/properties/x0"
+           },
+           "x1": {
+            "$ref": "#/properties/row/properties/citation/properties/bbox/properties/x1"
+           },
+           "y0": {
+            "$ref": "#/properties/row/properties/citation/properties/bbox/properties/y0"
+           },
+           "y1": {
+            "$ref": "#/properties/row/properties/citation/properties/bbox/properties/y1"
+           }
+          },
+          "required": [
+           "x0",
+           "y0",
+           "x1",
+           "y1"
+          ],
+          "type": "object"
+         }
+        },
+        "required": [
+         "at",
+         "score",
+         "rotation",
+         "mirrored",
+         "tag_at"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "scale_assumed": {
+       "description": "#186: present when the true ratio is UNKNOWN (a scale is missing on the seed sheet or this one) and the sweep ran at 1:1 \u2014 an unstated ratio plus a zero count is not evidence of absence",
+       "type": "string"
+      },
+      "scaled": {
+       "additionalProperties": false,
+       "description": "#186: present only when the seed was resized for this sheet",
+       "properties": {
+        "footprint_px": {
+         "description": "The symbol's size on THIS sheet after the resize",
+         "type": "number"
+        },
+        "ratio": {
+         "description": "Seed-sheet px per target-sheet px, computed from the two sheets' own committed scales (upp_seed / upp_target) \u2014 stated, never scale-searched",
+         "type": "number"
+        },
+        "segments": {
+         "description": "Fingerprint segments that survived the resize and were actually searched for",
+         "type": "integer"
+        },
+        "sub_pixel_dropped": {
+         "description": "Seed segments that fell below matchable length when scaled down \u2014 excluded from the score rather than depressing it, so a score here is a fraction of what survived, not of the whole seed",
+         "type": "integer"
+        },
+        "tol_px": {
+         "description": "The endpoint tolerance actually applied \u2014 it rides the ratio up when the seed is magnified (its drawn jitter magnifies too) and never down",
+         "type": "number"
+        }
+       },
+       "required": [
+        "ratio",
+        "segments",
+        "sub_pixel_dropped",
+        "footprint_px",
+        "tol_px"
+       ],
+       "type": "object"
+      },
+      "sheet": {
+       "type": "string"
+      },
+      "text_only": {
+       "description": "The tag drawn with no marker match AND no linework near it \u2014 a note mentioning the mark; a question, never a count",
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "at": {
+          "items": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "number"
+           }
+          ],
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+         }
+        },
+        "required": [
+         "at"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "withheld": {
+       "description": "Questions, never counts: markers matching the geometry but carrying no tag (an unlabeled instance or a shared bubble shape), and near-miss scores in the [0.75, 0.92) band",
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "at": {
+          "$ref": "#/properties/sheets/items/properties/matches/items/properties/at"
+         },
+         "mirrored": {
+          "$ref": "#/properties/sheets/items/properties/matches/items/properties/mirrored"
+         },
+         "reason": {
+          "type": "string"
+         },
+         "rotation": {
+          "$ref": "#/properties/sheets/items/properties/matches/items/properties/rotation"
+         },
+         "score": {
+          "$ref": "#/properties/sheets/items/properties/matches/items/properties/score"
+         }
+        },
+        "required": [
+         "at",
+         "score",
+         "rotation",
+         "mirrored",
+         "reason"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      }
+     },
+     "required": [
+      "sheet",
+      "found",
+      "matches",
+      "withheld",
+      "excluded",
+      "text_only",
+      "label_only",
+      "candidates",
+      "complete",
+      "elapsed_ms"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "skipped": {
+    "description": "Sheets excluded from counting (schedule/detail/legend/unknown), each with its reason",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "reason": {
+       "type": "string"
+      },
+      "role": {
+       "type": "string"
+      },
+      "sheet": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "sheet",
+      "role",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "tag": {
+    "description": "The row key as normalized (the tag as drawn)",
+    "type": "string"
+   },
+   "warning": {
+    "description": "Present when the per-sheet work cap dropped candidates",
+    "type": "string"
+   }
+  },
+  "required": [
+   "tag",
+   "row",
+   "anchor",
+   "found",
+   "found_by_geometry",
+   "found_by_label",
+   "counted_by",
+   "sheets",
+   "complete",
+   "skipped"
+  ],
+  "type": "object"
+ }
+}

@@ -1,0 +1,149 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "List Company Payment Events"
+ },
+ "description": "Lists the payment events received through the payment provider connection of a NIF\n(company), most recent first. Use it to audit the charges that produced an invoice and to\nfind the ones that did not.\n\n- **By default, every event is listed.** Nothing is hidden: events the connection\n  skipped, duplicates and disputes are all returned. Narrow the list with the filters\n  below; what you do not filter, you get. Set `charges_only=true` to read the same events\n  as one row per money movement instead.\n- **Scope:** events belong to the connection, not to the NIF directly. The\n  `{connection_id}` segment picks one connection of the NIF in the path, and only the\n  events of that connection are returned; an event of another NIF of the same account is\n  never reachable from here.\n- **Unknown connection:** a `{connection_id}` that belongs to no connection of this NIF\n  returns `404`.\n\nEndpoint: GET /v1/companies/{company_id}/payment-connections/{connection_id}/events",
+ "inputSchema": {
+  "$defs": {
+   "PaymentEventFailureCategory": {
+    "description": "High-level cause of an event that did not complete, so you can tell apart what you can fix\nfrom what you cannot.\n\n- `USER_CONFIGURATION`: your configuration stopped it (filters, missing series)\n- `PROVIDER_DATA`: the provider data was insufficient or inconsistent\n- `DOMAIN_RULE`: an invoicing rule forbade it \u2014 permanent, retrying changes nothing\n- `INFRASTRUCTURE`: a transient failure; retrying may work\n- `SYSTEM_ERROR`: a defect on our side\n",
+    "enum": [
+     "USER_CONFIGURATION",
+     "PROVIDER_DATA",
+     "DOMAIN_RULE",
+     "INFRASTRUCTURE",
+     "SYSTEM_ERROR"
+    ],
+    "type": "string"
+   },
+   "PaymentEventStatus": {
+    "description": "Processing status of a payment event.\n\n- RECEIVED: queued, awaiting processing\n- PROCESSING: in flight\n- PROCESSED: invoice was created (`invoice_id` is set)\n- FAILED: processing failed (see failure_reason / failure_message)\n- SKIPPED: filtered out by user rules (see skip_reason)\n- MANUALLY_RESOLVED: operator marked it as resolved outside BeeL \u2014 terminal\n",
+    "enum": [
+     "RECEIVED",
+     "PROCESSING",
+     "PROCESSED",
+     "FAILED",
+     "SKIPPED",
+     "MANUALLY_RESOLVED"
+    ],
+    "type": "string"
+   },
+   "PaymentEventType": {
+    "description": "What a payment event is about, once the provider's own event name has been classified.\n\n- `PAYMENT_COMPLETED`: a charge went through\n- `PAYMENT_FAILED`: a charge was attempted and did not go through\n- `REFUND_COMPLETED`: money was returned (refund or credit note)\n- `DISPUTE_OPENED`: the payer disputed a charge\n- `DISPUTE_CLOSED`: a dispute was settled, in favour of either party\n- `UNKNOWN`: the provider event does not fall in any of the above\n",
+    "enum": [
+     "PAYMENT_COMPLETED",
+     "PAYMENT_FAILED",
+     "REFUND_COMPLETED",
+     "DISPUTE_OPENED",
+     "DISPUTE_CLOSED",
+     "UNKNOWN"
+    ],
+    "type": "string"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "charges_only": {
+    "default": false,
+    "description": "Return one row per money movement instead of one row per event. Today, when this\nparameter is omitted or `false`, every event is listed.\n\n**The default changes on 11 December 2026.** From that day, omitting this parameter\nreads the listing as `charges_only=true` \u2014 one row per money movement. Until then a\nrequest that omits it answers with `Deprecation`, `Sunset` and `Link` headers. Send\nthe value you want explicitly, whichever it is, so the change of default cannot\nsurprise you. See the [migration guide](https://docs.beel.es/changelog/payments-cleanup).\n\nA money movement is a sale, a failed payment, each refund and each dispute. The\nprovider usually reports a single movement through several events. When this\nparameter is `true`, each movement is returned in at most two rows: its outcome and,\nwhen any of its events requires action, its incident. The outcome row stands for the\nevents of the movement that require no action; the incident row stands for the events\nof the movement that require action, so an invoiced movement that still has something\nto resolve always shows it. Within each row, the event that produced an invoice comes\nfirst, then an event of a classified kind before an unclassified one, and then the\nmost recent one. A sale and a failed payment of the same charge are two movements, and\nevery refund and every dispute of a charge is a movement of its own; the opening and\nthe closing of a dispute are the same movement.\n\nAn event of an unclassified kind that requires action joins the incident row of the\nmovement its identifier names: a charge joins its sale, a dispute joins that dispute,\nand a refund or a credit note joins that refund. An event whose identifier names no\nmovement, or that carries no identifier at all, stays a row of its own and is never\nmerged with another. Events that moved no money, such as a customer, a price or a\nproduct being created, are left out, except those that require action, which are\nalways listed.\n\nDiscarded events of a movement that is still listed through a live event are ignored: they are\nneither returned nor counted. A movement whose events are all discarded is returned as\na single row, only when `include_discarded` is `true`, and counts once in `discarded`.\nWithout other filters, the number of rows returned with `include_discarded=true` is\ntherefore `total` plus `discarded`.\n\nThe other filters narrow the rows returned and `pagination.total_items`, and nothing\nelse. `counts` describes the whole connection in the view you asked for and disregards\nevery other filter: with `charges_only=true`, its `total`, `discarded`, `needs_action`\nand `by_status` values count money movements rather than individual events, while its\n`ignored` and `failure_reasons` values keep counting events. A request that filters by\n`q` may therefore return a single row while `counts.total` still reports every movement\nof the connection.\n",
+    "type": "boolean"
+   },
+   "company_id": {
+    "description": "Unique identifier (UUID) of the company the events belong to \u2014 its identifier, not its NIF. It is the only source of context: the account that owns it is derived from it, and the `BeeL-Active-Company` header plays no part. A company you do not reach answers `403`, and so does a company that does not exist, so the existence of a company in another account is never disclosed.",
+    "format": "uuid",
+    "type": "string"
+   },
+   "connection_id": {
+    "description": "Unique identifier (UUID) of the payment connection the operation acts on, as returned by `GET /v1/companies/{company_id}/payment-connections`. A NIF can hold several connections of the same provider, so the provider slug alone does not name one. A connection of another NIF answers `404`, exactly like one that does not exist.",
+    "format": "uuid",
+    "type": "string"
+   },
+   "event_kind": {
+    "description": "Keep only the events of these kinds. Matches `event_kind`, never `event_type`: the\nkind is what the event is about, while `event_type` is the raw name the provider\nemitted (`payment_intent.succeeded`) and is not filterable. `UNKNOWN` keeps every\nevent whose provider name we do not classify. Repeat the parameter to combine kinds.\nAn empty value (`event_kind=`) is the same as omitting it.\n",
+    "items": {
+     "$ref": "#/$defs/PaymentEventType"
+    },
+    "type": "array"
+   },
+   "failure_category": {
+    "description": "Keep only the events that did not complete for a cause in these categories. Repeat the\nparameter to combine categories. Events that completed carry no category and are\ntherefore never kept by this filter. An empty value (`failure_category=`) is the same\nas omitting it.\n",
+    "items": {
+     "$ref": "#/$defs/PaymentEventFailureCategory"
+    },
+    "type": "array"
+   },
+   "failure_reason": {
+    "description": "Keep only the events that did not complete for these reasons. Repeat the parameter to\ncombine reasons. An empty value (`failure_reason=`) is the same as omitting it.\n",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "from": {
+    "description": "Keep only the events received at or after this instant.",
+    "format": "date-time",
+    "type": "string"
+   },
+   "include_discarded": {
+    "default": false,
+    "description": "Include the events you discarded. They are excluded by default; discarding is a\ndecision about the list, not a state of the event.\n",
+    "type": "boolean"
+   },
+   "limit": {
+    "default": 20,
+    "description": "How many items to return per page. The response echoes it back as `pagination.items_per_page`.",
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "max_amount": {
+    "description": "Keep only the events whose `amount` is at or below this value.",
+    "minimum": 0,
+    "type": "number"
+   },
+   "min_amount": {
+    "description": "Keep only the events whose `amount` is at or above this value.",
+    "minimum": 0,
+    "type": "number"
+   },
+   "needs_action": {
+    "description": "`true` keeps only the events still worth acting on; `false`, only the ones that are\nnot. Omit it for both.\n",
+    "type": "boolean"
+   },
+   "page": {
+    "default": 1,
+    "description": "Page number, starting at 1. The response echoes it back as `pagination.current_page`.",
+    "minimum": 1,
+    "type": "integer"
+   },
+   "q": {
+    "description": "Free-text search over the payer name and the provider identifiers of the charge\n(`pi_`, `ch_`, `cs_`, `evt_`). Case-insensitive, partial matches allowed. The payer\nemail is deliberately not searchable.\n",
+    "maxLength": 200,
+    "minLength": 1,
+    "type": "string"
+   },
+   "status": {
+    "description": "Keep only the events in these processing states. Repeat the parameter to combine\nstates; omit it, or send it empty (`status=`), for all of them.\n",
+    "items": {
+     "$ref": "#/$defs/PaymentEventStatus"
+    },
+    "type": "array"
+   },
+   "to": {
+    "description": "Keep only the events received at or before this instant.",
+    "format": "date-time",
+    "type": "string"
+   }
+  },
+  "required": [
+   "company_id",
+   "connection_id"
+  ],
+  "type": "object"
+ },
+ "name": "beel_list_payment_events"
+}

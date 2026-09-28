@@ -1,0 +1,289 @@
+{
+ "description": "Attendance (registro horario): list/get/create/update/delete shift records, clock_in, clock_out and status for live clocking, gaps and audit to find days that do not match the contract, log_range / log_days to enter many days at once, and list_edit_requests / create_edit_request for days whose timesheet has already been signed off. Without date and time, clock_in and clock_out record the current moment; given both, they record the declared moment instead, for someone who forgot to clock and knows when they started or stopped. A declared moment in the future is refused before anything is sent, and clock_out with a declared moment is refused if nothing is open or if it would close a shift before it started. Bulk writes, writes for another employee and edit requests preview first: the call returns a plan and a confirmation_token, and nothing is written until the identical call is repeated with that token within 15 minutes. audit, gaps and every preview begin with a Data read line saying how much of the window was actually read; audit reports a day Factorial returned nothing for as no_contract_data, and log_range never writes such a day (log_days, which takes explicit dates, will). Times are HH:MM in company local time, applied by Factorial in the company zone; the server never converts.\n\nDeclared time versus entry time: a shift carries two independent sets of timestamps. The declared working time is date, clock_in, clock_out and, for a shift that crosses midnight, reference_date; these are inputs, and they are what the attendance sheet and the hour totals show. Separately, Factorial sets created_at, updated_at, in_source and out_source on the server to record when and how the record was entered; they are read-only through this API and no action here can set or change them. For example, a record written on 2026-09-07 for 2024-01-02 09:59 comes back with date: 2024-01-02, clock_in: 09:59, created_at of 2026-09-07 and in_source: api; that is the correct and only correct outcome. Both facts are true at once: a backfilled record shows the real working day on the attendance sheet while Factorial's activity log shows it was entered later through the API.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "action": {
+    "description": "Action",
+    "enum": [
+     "list",
+     "get",
+     "create",
+     "update",
+     "delete",
+     "clock_in",
+     "clock_out",
+     "status",
+     "gaps",
+     "audit",
+     "log_range",
+     "log_days",
+     "list_edit_requests",
+     "create_edit_request"
+    ],
+    "type": "string"
+   },
+   "attendance_shift_id": {
+    "description": "The shift this edit request refers to (create_edit_request). Required for update_shift and delete_shift, since without it the request names no shift",
+    "type": "number"
+   },
+   "clock_in": {
+    "anyOf": [
+     {
+      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$",
+      "type": "string"
+     },
+     {
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}(:\\d{2}(\\.\\d+)?)?(Z|[+-]\\d{2}:\\d{2})$",
+      "type": "string"
+     }
+    ],
+    "description": "Clock in: HH:MM company local, or ISO 8601 with offset (create, update)"
+   },
+   "clock_out": {
+    "anyOf": [
+     {
+      "$ref": "#/properties/clock_in/anyOf/0"
+     },
+     {
+      "$ref": "#/properties/clock_in/anyOf/1"
+     }
+    ],
+    "description": "Clock out: HH:MM company local, or ISO 8601 with offset (create, update)"
+   },
+   "confirm": {
+    "description": "Confirm delete",
+    "type": "boolean"
+   },
+   "confirmation_token": {
+    "description": "Token from a previous preview, to execute a gated write. Valid for 15 minutes and bound to exactly the plan that was previewed; if anything changed in between it is refused and a fresh preview is returned.",
+    "type": "string"
+   },
+   "date": {
+    "description": "Shift date YYYY-MM-DD (create, update). For clock_in/clock_out, the declared day; give it together with time to record a declared moment instead of the current one",
+    "type": "string"
+   },
+   "days": {
+    "description": "Explicit days for log_days: [{date:\"2026-03-02\",segments:[...]}, ...]",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "date": {
+       "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+       "type": "string"
+      },
+      "segments": {
+       "items": {
+        "$ref": "#/properties/segments/items"
+       },
+       "minItems": 1,
+       "type": "array"
+      }
+     },
+     "required": [
+      "date",
+      "segments"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "employee_id": {
+    "description": "Employee ID. Defaults to FACTORIAL_EMPLOYEE_ID when set",
+    "type": "number"
+   },
+   "employee_ids": {
+    "description": "Employee IDs (list). Defaults to FACTORIAL_EMPLOYEE_ID; pass [] for the whole company",
+    "items": {
+     "type": "number"
+    },
+    "type": "array"
+   },
+   "end_on": {
+    "description": "End date YYYY-MM-DD (list, gaps, log_range)",
+    "type": "string"
+   },
+   "exclude_dates": {
+    "description": "log_range: dates (YYYY-MM-DD) inside the range to leave alone, for days that were not worked. The preview lists them so the omission is visible before confirming",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "fields": {
+    "default": "full",
+    "description": "list: \"compact\" returns date, clock_in, clock_out, minutes and in_source only; \"full\" (default) returns id, employee_id, date, clock_in, clock_out, minutes, in_source and observations. Neither is every field of the raw record; use action: \"get\" for the complete record.",
+    "enum": [
+     "full",
+     "compact"
+    ],
+    "type": "string"
+   },
+   "format": {
+    "default": "summary",
+    "description": "audit: \"summary\" (default) lists only the days that need attention, \"table\" lists every day, \"json\" returns the full ledger. expected counts bank holidays and leave at full contract minutes; the header also gives the workday expected total, which is the number tracked hours should meet.",
+    "enum": [
+     "summary",
+     "table",
+     "json"
+    ],
+    "type": "string"
+   },
+   "half_day": {
+    "description": "Half day marker. \"beggining_of_day\" is Factorial's own spelling of the value and must be sent exactly as it is; do not correct it.",
+    "enum": [
+     "beggining_of_day",
+     "end_of_day"
+    ],
+    "type": "string"
+   },
+   "id": {
+    "description": "Shift ID (get, update, delete)",
+    "type": "number"
+   },
+   "ids": {
+    "description": "Shift IDs (list)",
+    "items": {
+     "type": "number"
+    },
+    "type": "array"
+   },
+   "jitter_minutes": {
+    "default": 0,
+    "description": "log_range/log_days: shift each segment by up to this many minutes, normally keeping its length (only a segment that would otherwise run into its neighbour or past midnight is shortened instead), so a month of entries does not all read 09:00 exactly. Recommended 5 to 10 when reconstructing approximate hours. It varies segments within a day; for the start time to drift from day to day use variation_minutes. Deterministic per record, so the preview lists the exact times that will be written.",
+    "maximum": 30,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "limit": {
+    "default": 100,
+    "description": "Items per page (list, client-side). The API returns every record in range in one response, so this only slices output that has already been read.",
+    "type": "number"
+   },
+   "location_type": {
+    "description": "office | business_trip | work_from_home",
+    "enum": [
+     "office",
+     "business_trip",
+     "work_from_home"
+    ],
+    "type": "string"
+   },
+   "observations": {
+    "description": "Free-text note stored on the record(s)",
+    "type": "string"
+   },
+   "page": {
+    "default": 1,
+    "description": "Page number (list, client-side). The API returns every record in range in one response, so paging only slices output that has already been read.",
+    "type": "number"
+   },
+   "reason": {
+    "description": "Why the timesheet needs changing (create_edit_request, required)",
+    "type": "string"
+   },
+   "reference_date": {
+    "description": "The day an overnight shift is attributed to (create, update). It must equal date unless the shift crosses midnight. This is not when the record was entered; that is created_at, which Factorial sets and is read-only.",
+    "type": "string"
+   },
+   "request_type": {
+    "description": "What the edit request asks for (create_edit_request, default create_shift). create_shift requires date; update_shift and delete_shift require attendance_shift_id",
+    "enum": [
+     "create_shift",
+     "delete_shift",
+     "update_shift"
+    ],
+    "type": "string"
+   },
+   "segments": {
+    "description": "Daily pattern for log_range, e.g. [{clock_in:\"09:00\",clock_out:\"14:00\"},{clock_in:\"15:00\",clock_out:\"18:00\"}]",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "clock_in": {
+       "$ref": "#/properties/clock_in/anyOf/0"
+      },
+      "clock_out": {
+       "$ref": "#/properties/clock_in/anyOf/0"
+      }
+     },
+     "required": [
+      "clock_in",
+      "clock_out"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "skip_leave": {
+    "default": true,
+    "description": "Skip days covered by approved leave (default true)",
+    "type": "boolean"
+   },
+   "start_on": {
+    "description": "Start date YYYY-MM-DD (list, gaps, log_range)",
+    "type": "string"
+   },
+   "statuses": {
+    "description": "audit: list only days with these statuses. Default lists everything needing attention: missing, short, over, half_day_leave and no_contract_data",
+    "items": {
+     "enum": [
+      "future",
+      "weekend",
+      "bank_holiday",
+      "not_workable",
+      "no_contract_data",
+      "on_leave",
+      "half_day_leave",
+      "complete",
+      "missing",
+      "short",
+      "over"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "time": {
+    "description": "clock_in/clock_out: the declared time HH:MM in company local time. Without date and time the action records the current moment; with them it records the declared moment. Use this when the person forgot to clock and knows when they started or stopped",
+    "type": "string"
+   },
+   "tolerance_minutes": {
+    "default": 15,
+    "description": "gaps/audit: a day within this many minutes of the expected total counts as complete (default 15). Real clocks are never exact, so a day a few minutes over is normal and needs no correction.",
+    "maximum": 120,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "updated_at": {
+    "description": "Shifts updated at this date (list)",
+    "type": "string"
+   },
+   "variation_minutes": {
+    "default": 0,
+    "description": "log_range/log_days: shift each whole day by up to this many minutes, the segments moving together, so the start time drifts from day to day. This is the variation jitter_minutes cannot produce, since jitter varies segments within a day. Deterministic per day",
+    "maximum": 120,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "workable": {
+    "description": "Filter or set the workable flag",
+    "type": "boolean"
+   },
+   "workplace_id": {
+    "description": "Workplace (location) ID",
+    "type": "number"
+   }
+  },
+  "required": [
+   "action"
+  ],
+  "type": "object"
+ },
+ "name": "factorial_attendance",
+ "title": "FactorialHR Attendance"
+}

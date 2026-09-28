@@ -1,0 +1,262 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "High and low tide predictions for a CO-OPS tide station over a date range. The default hilo interval returns the time, height, and tide type (H for high, L for low) of each event, while the 6-minute interval returns the detailed tide curve. Most tide stations are subordinate \u2014 CO-OPS derives their high and low events as offsets from a reference station and publishes no 6-minute curve for them \u2014 so interval=\"6min\" reaches only a reference station, and a subordinate station comes back as subordinate_no_6min naming the reference station to ask instead; the prediction_class on a noaa_marine_find_stations tide row says which kind a station is before the call. Datum defaults to MLLW, mean lower low water, the standard for US nautical charts, and the date range is limited to 1 year per request. A range whose predictions fit the response budget is returned whole; a longer one is returned as a page of leading rows, and rows_matched, rows_returned, and next_offset then report how much matched and which offset reaches the rest, so a year of events is read by walking offset rather than by splitting the range. Use noaa_marine_find_stations first to resolve a station name or location to a numeric station ID.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "begin_date": {
+    "description": "Start date, YYYYMMDD or YYYY-MM-DD, e.g. \"20240601\" or \"2024-06-01\".",
+    "pattern": "^(\\d{8}|\\d{4}-\\d{2}-\\d{2})$",
+    "type": "string"
+   },
+   "datum": {
+    "default": "MLLW",
+    "description": "Datum the predicted heights are referenced to. MLLW (default) is the US nautical chart datum, and MHHW (mean higher high water) is the flooding reference; MHW, MTL, MSL, MLW, and DTL (diurnal tide level) are the other tidal planes. NAVD is NAVD88 and reads only where the station has an NAVD88 tie. STND is the station's own datum and is the plane that works where no tidal datum exists. CRD applies at Columbia River stations only. A datum this station does not carry comes back as datum_unavailable naming the ones it does.",
+    "enum": [
+     "MLLW",
+     "MHHW",
+     "MHW",
+     "MTL",
+     "MSL",
+     "MLW",
+     "DTL",
+     "NAVD",
+     "STND",
+     "CRD"
+    ],
+    "type": "string"
+   },
+   "end_date": {
+    "description": "End date (inclusive), YYYYMMDD or YYYY-MM-DD, e.g. \"20240607\" or \"2024-06-07\".",
+    "pattern": "^(\\d{8}|\\d{4}-\\d{2}-\\d{2})$",
+    "type": "string"
+   },
+   "interval": {
+    "default": "hilo",
+    "description": "Prediction interval: hilo (default) returns only high and low tide events; 6min returns a continuous prediction curve at 6-minute intervals, and is served only by a reference station \u2014 a subordinate station has no 6-minute curve.",
+    "enum": [
+     "hilo",
+     "6min"
+    ],
+    "type": "string"
+   },
+   "limit": {
+    "description": "Maximum prediction rows to return on this page, for a caller that wants fewer than the response budget allows. Omit for the largest page that fits; a value larger than the budget allows does not widen the page.",
+    "maximum": 9007199254740991,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "offset": {
+    "default": 0,
+    "description": "Row offset into the matched prediction series, for reading a range whose rows do not fit one response. 0 (default) starts at the first row; pass the next_offset from a previous call to continue. An offset past the last row returns an empty page rather than an error.",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "station_id": {
+    "description": "CO-OPS tide station ID (numeric, e.g. \"9447130\" for Seattle). Obtain from noaa_marine_find_stations with types=[\"tide\"].",
+    "pattern": "^[A-Za-z0-9_-]{1,20}$",
+    "type": "string"
+   },
+   "time_zone": {
+    "default": "lst_ldt",
+    "description": "Time zone for returned timestamps. lst_ldt = local standard/daylight time (default); gmt = UTC; lst = local standard time year-round.",
+    "enum": [
+     "lst_ldt",
+     "gmt",
+     "lst"
+    ],
+    "type": "string"
+   },
+   "units": {
+    "default": "english",
+    "description": "Unit system for heights: english = feet; metric = meters.",
+    "enum": [
+     "english",
+     "metric"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "station_id",
+   "begin_date",
+   "end_date"
+  ],
+  "type": "object"
+ },
+ "name": "noaa_marine_get_tide_predictions",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "station_id",
+     "station_name",
+     "datum",
+     "units",
+     "predictions"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "datum": {
+    "description": "Tidal datum used (e.g. MLLW) \u2014 echoed for correct interpretation of heights.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `station_not_found`: CO-OPS returned an error for the station ID \u2014 likely wrong type or invalid ID. `invalid_date_range`: begin_date/end_date is not a real calendar date or begin_date is after end_date. `date_range_exceeded`: Requested date range exceeds the 1-year CO-OPS limit. `no_predictions`: Station exists but CO-OPS returned no prediction data for the date range. `subordinate_no_6min`: interval=\"6min\" was requested for a subordinate station, whose predictions are high and low events derived from a reference station. `datum_unavailable`: The station does not carry the requested datum \u2014 NAVD reads only where the station has an NAVD88 tie, and CRD only on the Columbia River. `upstream_throttled`: CO-OPS answered HTTP 403, which it returns for about two minutes while it throttles a burst of requests from one address. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "station_not_found",
+         "invalid_date_range",
+         "date_range_exceeded",
+         "no_predictions",
+         "subordinate_no_6min",
+         "datum_unavailable",
+         "upstream_throttled"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "next_offset": {
+    "anyOf": [
+     {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Offset to pass as offset on the next call, or null when this page reaches the last matched row. Absent when the whole matched series was returned."
+   },
+   "notice": {
+    "description": "What this page of the prediction series covers and how to reach the next one. Present only when the response is a page rather than the whole matched series.",
+    "type": "string"
+   },
+   "page_offset": {
+    "description": "Row offset this page starts at, echoed from the request. Absent when the whole matched series was returned.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "predictions": {
+    "description": "Tide predictions for the requested date range \u2014 the whole series when it fits one response, otherwise the leading page starting at offset. rows_matched and next_offset report what a page left behind.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A single tide prediction event.",
+     "properties": {
+      "height": {
+       "description": "Predicted water height in the requested units (feet or meters) relative to the datum.",
+       "type": "number"
+      },
+      "time": {
+       "description": "Prediction datetime in the requested time zone (YYYY-MM-DD HH:MM format).",
+       "type": "string"
+      },
+      "type": {
+       "description": "Tide type: H = high tide, L = low tide (only present for hilo interval).",
+       "type": "string"
+      }
+     },
+     "required": [
+      "time",
+      "height"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "rows_matched": {
+    "description": "Prediction rows the requested date range matched, before the page was cut. Absent when the whole matched series was returned.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "rows_returned": {
+    "description": "Prediction rows this page carries \u2014 the length of predictions. Absent when the whole matched series was returned.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "station_id": {
+    "description": "Station ID echoed from the request \u2014 for chaining.",
+    "type": "string"
+   },
+   "station_name": {
+    "description": "Station name as returned by CO-OPS \u2014 confirms the correct station was queried.",
+    "type": "string"
+   },
+   "truncated": {
+    "description": "True when this page stops short of the last matched row, so further rows remain at next_offset. False on the final page and on a page past the end. Absent when the whole matched series was returned.",
+    "type": "boolean"
+   },
+   "units": {
+    "description": "Height units: \"english\" (feet) or \"metric\" (meters).",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Get Tide Predictions"
+}
