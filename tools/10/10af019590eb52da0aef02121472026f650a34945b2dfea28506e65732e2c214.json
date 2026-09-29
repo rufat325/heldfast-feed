@@ -1,0 +1,552 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Generate an IFC (BIM) model"
+ },
+ "description": "WHEN the drawing must leave as a real BIM file, openable in Revit/ArchiCAD/Solibri \u2014 not just a drawing. Draw a building scene and get an IFC4 file in millimetres: real spatial hierarchy (project/site/building/storeys), STABLE IFC GlobalIds (the same model keeps them across exports; pass projet_id; imported elements keep theirs), structural columns and beams (`poteaux[]`, `poutres[]` become IfcColumn, IfcBeam; see GET /cao/schema), one named IfcSpace per room with its areas (floor, French habitable and Carrez), floor slabs cut by their stair openings, an IfcRoof, IfcStair flights, standard Pset/Qto quantities, and material layers carrying density and thermal conductivity. Wall/slab/door/window types, 2nd-level space boundaries, and Lambert-93 georeferencing (EPSG:2154, Scale 0.001) are included so Revit/Archicad can open a typed, located model. Declare compositions{} to replace type compositions. Doors/windows really cut their host wall (IfcOpeningElement + IfcRelFillsElement). Passes IFC4 schema and EXPRESS-rule validation. Validate locally with cao_valider_ifc (no buildingSMART account). Call cao_verifier first. Same scene as cao_generer_dxf. Returns a JSON object {ifc, elements, unites, schema}: the IFC file arrives INLINE as text in `ifc` \u2014 no download URL, nothing stored server-side, so write it to a .ifc file yourself. `elements` counts the IFC objects emitted and `schema` names the IFC version produced. Set `armatures: true` to add the reinforcement: IfcReinforcingBar with exact geometry for footings and lintels (aggregated to their host), one IfcReinforcingMesh per slab.",
+ "inputSchema": {
+  "properties": {
+   "armatures": {
+    "default": false,
+    "description": "Add the reinforcement computed per Eurocode 2 (bars and slab meshes).",
+    "type": "boolean"
+   },
+   "boites": {
+    "description": "Boxes (furniture, volumes): a rectangular block placed by its CENTRE, not by a corner. Millimetres, same frame as murs[].",
+    "items": {
+     "properties": {
+      "h": {
+       "description": "Height along Z (mm)",
+       "type": "number"
+      },
+      "l": {
+       "description": "Length along X before rotation (mm)",
+       "type": "number"
+      },
+      "p": {
+       "description": "Depth along Y before rotation (mm)",
+       "type": "number"
+      },
+      "rotation": {
+       "default": 0,
+       "description": "Rotation around the box centre, in DEGREES counter-clockwise (not radians). Default 0",
+       "type": "number"
+      },
+      "x": {
+       "description": "Centre X of the box (mm) \u2014 not a corner",
+       "type": "number"
+      },
+      "y": {
+       "description": "Centre Y of the box (mm) \u2014 not a corner",
+       "type": "number"
+      },
+      "z": {
+       "default": 0,
+       "description": "Underside height above the floor (mm). 0 = resting on the floor; raise it for a wall unit or a shelf",
+       "type": "number"
+      }
+     },
+     "required": [
+      "x",
+      "y",
+      "l",
+      "p",
+      "h"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "cercles": {
+    "description": "Circles on the 2D plan, alongside plan[] lines: each has a centre and a radius, in the same unit as the plan. Use for round shapes a polyline would render badly \u2014 fillets, posts, manholes.",
+    "items": {
+     "properties": {
+      "r": {
+       "description": "Radius, same unit as plan[]",
+       "type": "number"
+      },
+      "x": {
+       "description": "Centre X, same unit as plan[]",
+       "type": "number"
+      },
+      "y": {
+       "description": "Centre Y, same unit as plan[]",
+       "type": "number"
+      }
+     },
+     "required": [
+      "x",
+      "y",
+      "r"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "compositions": {
+    "description": "Named wall/slab layer sets declared by the project. A key that matches an inferred kind (mur_exterieur, refend, cloison, plancher, toiture) or murs[].composition drops the Hypothese flag. Each value is {libelle, couches: [{cle, epaisseur?}]}. cle: enduit, bloc_beton, isolant, ba13, ossature, enduit_platre, beton_arme, tuile, charpente, etancheite. Omit epaisseur on the load-bearing layer.",
+    "type": "object"
+   },
+   "decoration": {
+    "description": "Paint/finish per wall \u2014 used only by cao_pdf. Colors the elevations (exterior face) and the axonometric view (face auto-detected by orientation relative to the building's centroid).",
+    "items": {
+     "properties": {
+      "couleur": {
+       "description": "Hex color, e.g. '#e2e0d5' \u2014 default per type",
+       "type": "string"
+      },
+      "face": {
+       "default": "interieur",
+       "enum": [
+        "interieur",
+        "exterieur"
+       ],
+       "type": "string"
+      },
+      "finition": {
+       "description": "Informational only, doesn't affect rendering",
+       "enum": [
+        "mat",
+        "satin",
+        "brillant",
+        "structure"
+       ],
+       "type": "string"
+      },
+      "mur": {
+       "description": "Index in murs[]",
+       "type": "integer"
+      },
+      "type": {
+       "default": "peinture",
+       "enum": [
+        "beton_cire",
+        "carrelage_mural",
+        "enduit",
+        "lambris",
+        "papier_peint",
+        "peinture"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "mur"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "electricite": {
+    "description": "Electrical symbols (outlets, switches, lights\u2026) \u2014 used only by cao_pdf (dedicated technical plan + quantities), no effect on dxf/metres/render. Position: attached to a wall (`mur`+`position`, like ouvertures) or free (`x`,`y`).",
+    "items": {
+     "properties": {
+      "mur": {
+       "type": "integer"
+      },
+      "position": {
+       "type": "number"
+      },
+      "type": {
+       "default": "prise",
+       "enum": [
+        "detecteur_fumee",
+        "interrupteur",
+        "luminaire",
+        "prise",
+        "prise_rj45",
+        "prise_spe",
+        "tableau_electrique",
+        "va_et_vient",
+        "vmc"
+       ],
+       "type": "string"
+      },
+      "x": {
+       "type": "number"
+      },
+      "y": {
+       "type": "number"
+      },
+      "z": {
+       "description": "Default per type (NF C 15-100-informed: outlets 30cm, switches 110cm; light/smoke detector/vmc default to ceiling height)",
+       "type": "number"
+      }
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "georef": {
+    "description": "Optional Lambert-93 (EPSG:2154) false origin for IfcMapConversion. Local millimetres are scaled by 0.001 to CRS metres. Do not invent coordinates: omit est/nord if unknown (origin stays 0). orientation is the angle in degrees of project X from map East, counterclockwise.",
+    "properties": {
+     "altitude": {
+      "description": "Orthogonal height in metres (NGF-IGN69 for Lambert-93).",
+      "type": "number"
+     },
+     "crs": {
+      "description": "Projected CRS name. Default EPSG:2154 (Lambert-93).",
+      "type": "string"
+     },
+     "est": {
+      "description": "Easting in metres in the CRS. Omit if unknown \u2014 never invent.",
+      "type": "number"
+     },
+     "nord": {
+      "description": "Northing in metres in the CRS. Omit if unknown \u2014 never invent.",
+      "type": "number"
+     },
+     "orientation": {
+      "description": "Angle in degrees of the project's X axis from map East, counterclockwise. Default 0.",
+      "type": "number"
+     }
+    },
+    "type": "object"
+   },
+   "murs": {
+    "description": "Walls: plan segments extruded vertically. Every coordinate in this whole scene is in MILLIMETRES, in a single plan frame whose origin you choose \u2014 X to the right, Y upward, Z up from the floor. Keep one consistent origin across murs/boites/plan: the generators never recentre anything for you.",
+    "items": {
+     "properties": {
+      "composition": {
+       "description": "Optional key into the scene-level compositions object. When omitted, the exporter infers mur_exterieur / refend / cloison from geometry. A matching declared composition drops the Hypothese flag in the IFC.",
+       "type": "string"
+      },
+      "couches": {
+       "description": "Optional inline material layers [{cle, epaisseur?}]. cle is one of enduit, bloc_beton, isolant, ba13, ossature, enduit_platre, beton_arme, tuile, charpente, etancheite. Omit epaisseur on the load-bearing layer so it takes the remainder of the wall thickness.",
+       "type": "array"
+      },
+      "epaisseur": {
+       "default": 200,
+       "description": "Wall thickness (mm), spread evenly on both sides of the axis \u2014 the axis is the centreline, not a face. Default 200",
+       "type": "number"
+      },
+      "existant": {
+       "description": "Optional: true for a wall of the EXISTING building when the scene is an extension. cao_permis then counts as created only what the works add.",
+       "type": "boolean"
+      },
+      "hauteur": {
+       "default": 2500,
+       "description": "Wall height (mm) from floor level. Default 2500, a usual French ceiling height",
+       "type": "number"
+      },
+      "materiau": {
+       "description": "Optional single material key: the whole thickness becomes one load-bearing layer instead of a type composition.",
+       "type": "string"
+      },
+      "x1": {
+       "description": "Start point X of the wall axis (mm)",
+       "type": "number"
+      },
+      "x2": {
+       "description": "End point X of the wall axis (mm)",
+       "type": "number"
+      },
+      "y1": {
+       "description": "Start point Y of the wall axis (mm)",
+       "type": "number"
+      },
+      "y2": {
+       "description": "End point Y of the wall axis (mm)",
+       "type": "number"
+      }
+     },
+     "required": [
+      "x1",
+      "y1",
+      "x2",
+      "y2"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "ouvertures": {
+    "description": "Doors/windows embedded in a wall \u2014 used only by cao_pdf (elevations + axonometric view), no effect on dxf/metres.",
+    "items": {
+     "properties": {
+      "hauteur": {
+       "description": "Opening height (mm), measured up from `z`. `z + hauteur` must stay under the wall height",
+       "type": "number"
+      },
+      "largeur": {
+       "description": "Opening width (mm) measured along the wall, from `position`. Must fit inside the wall segment",
+       "type": "number"
+      },
+      "mur": {
+       "description": "Index of the host wall in murs[] (0-based)",
+       "type": "integer"
+      },
+      "position": {
+       "description": "Distance in mm from the wall's start (x1,y1)",
+       "type": "number"
+      },
+      "type": {
+       "default": "fenetre",
+       "enum": [
+        "fenetre",
+        "porte"
+       ],
+       "type": "string"
+      },
+      "z": {
+       "description": "Sill height (mm) \u2014 default 900 (window) or 0 (door)",
+       "type": "number"
+      }
+     },
+     "required": [
+      "mur",
+      "position",
+      "largeur",
+      "hauteur"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "plan": {
+    "description": "2D reference lines \u2014 drawn flat, never extruded and never counted in the quantities. Use them for axes, plot limits or setting-out marks.",
+    "items": {
+     "properties": {
+      "x1": {
+       "description": "Start X (mm), same frame as murs[]",
+       "type": "number"
+      },
+      "x2": {
+       "description": "End X (mm), same frame as murs[]",
+       "type": "number"
+      },
+      "y1": {
+       "description": "Start Y (mm), same frame as murs[]",
+       "type": "number"
+      },
+      "y2": {
+       "description": "End Y (mm), same frame as murs[]",
+       "type": "number"
+      }
+     },
+     "required": [
+      "x1",
+      "y1",
+      "x2",
+      "y2"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "plomberie": {
+    "description": "Sanitary fixtures (sink, WC, shower\u2026) \u2014 used only by cao_pdf. Same positioning as electricite.",
+    "items": {
+     "properties": {
+      "h": {
+       "type": "number"
+      },
+      "l": {
+       "type": "number"
+      },
+      "mur": {
+       "type": "integer"
+      },
+      "p": {
+       "type": "number"
+      },
+      "position": {
+       "type": "number"
+      },
+      "rotation": {
+       "default": 0,
+       "type": "number"
+      },
+      "type": {
+       "default": "evier",
+       "enum": [
+        "baignoire",
+        "chauffe_eau",
+        "compteur_eau",
+        "douche",
+        "evier",
+        "lavabo",
+        "module_hydraulique",
+        "pac_exterieure",
+        "radiateur",
+        "wc"
+       ],
+       "type": "string"
+      },
+      "x": {
+       "type": "number"
+      },
+      "y": {
+       "type": "number"
+      },
+      "z": {
+       "type": "number"
+      }
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "reseaux": {
+    "description": "Plumbing pipe runs (EF/EC/EU/EV/EP/chauffage) \u2014 used only by cao_pdf (technical plan + linear-meter quantities per type).",
+    "items": {
+     "properties": {
+      "diametre": {
+       "description": "mm, default per type",
+       "type": "number"
+      },
+      "trace": {
+       "description": "At least 2 points (mm), freely drawn in plan",
+       "items": {
+        "properties": {
+         "x": {
+          "type": "number"
+         },
+         "y": {
+          "type": "number"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "type": {
+       "default": "ef",
+       "enum": [
+        "ef",
+        "ec",
+        "eu",
+        "ev",
+        "ep",
+        "chauffage"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "trace"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "toitures": {
+    "description": "Roofs \u2014 used only by cao_pdf. WITHOUT this field: a flat roof is auto-generated over the footprint of ALL walls (legacy default). WITH it: compose freely \u2014 each entry can target a subset of walls (via `murs`), letting you build an L-shaped building's roof, or add a dormer on top of a main roof.",
+    "items": {
+     "properties": {
+      "apex": {
+       "description": "Free apex position \u2014 'personnalise' only (default: 'plat' if omitted)",
+       "properties": {
+        "x": {
+         "type": "number"
+        },
+        "y": {
+         "type": "number"
+        },
+        "z": {
+         "type": "number"
+        }
+       },
+       "type": "object"
+      },
+      "debord": {
+       "default": 200,
+       "description": "Eaves overhang (mm) on the auto footprint",
+       "type": "number"
+      },
+      "epaisseur": {
+       "default": 180,
+       "description": "Slab thickness (mm) \u2014 'plat' only",
+       "type": "number"
+      },
+      "hauteur": {
+       "description": "'chien_assis' only: front wall height, default 900",
+       "type": "number"
+      },
+      "hauteur_faitage": {
+       "default": 1200,
+       "description": "Ridge/apex/dome height above z (mm); 600 for 'chien_assis'",
+       "type": "number"
+      },
+      "largeur": {
+       "description": "'chien_assis' only, default 1000",
+       "type": "number"
+      },
+      "murs": {
+       "description": "Wall indices this roof section covers (default: all walls). Ignored if `polygone` is given.",
+       "items": {
+        "type": "integer"
+       },
+       "type": "array"
+      },
+      "polygone": {
+       "description": "Custom footprint (mm) \u2014 overrides the auto rectangle. Any type except 'chien_assis'.",
+       "items": {
+        "properties": {
+         "x": {
+          "type": "number"
+         },
+         "y": {
+          "type": "number"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "profondeur": {
+       "description": "'chien_assis' only, default 800",
+       "type": "number"
+      },
+      "rayon": {
+       "description": "Base radius (mm) \u2014 'conique'/'dome' (default: from footprint)",
+       "type": "number"
+      },
+      "rotation": {
+       "default": 0,
+       "description": "Ridge orientation in degrees \u2014 'deux_pans' only (0 = along X axis)",
+       "type": "number"
+      },
+      "segments": {
+       "default": 16,
+       "description": "Facet count \u2014 'conique'/'dome'",
+       "type": "integer"
+      },
+      "type": {
+       "default": "plat",
+       "enum": [
+        "chien_assis",
+        "conique",
+        "deux_pans",
+        "dome",
+        "personnalise",
+        "plat",
+        "quatre_pans"
+       ],
+       "type": "string"
+      },
+      "x": {
+       "description": "'chien_assis' only: center x",
+       "type": "number"
+      },
+      "y": {
+       "description": "'chien_assis' only: center y \u2014 POSITION it on the carrying roof slope",
+       "type": "number"
+      },
+      "z": {
+       "description": "Base altitude (mm) \u2014 default: top of the walls covered",
+       "type": "number"
+      }
+     },
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "name": "cao_generer_ifc",
+ "title": "Generate an IFC (BIM) model"
+}
