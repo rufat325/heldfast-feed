@@ -1,0 +1,284 @@
+{
+ "description": "Create on-chain verification (attestation). Verify 1-10 conditions (token balances, NFT ownership, EAS attestations, Farcaster identity, arbitrary boolean view calls, supply/amount ratios, ERC-8004 agent registration, ERC-7710 delegation validity) across 37 chains (31 EVM + Solana + XRPL + Bitcoin + Tron + Stellar + Sui). nft_ownership is supported on 33 of the 37 (31 EVM + Solana + XRPL); Bitcoin, Tron, Stellar and Sui are token_balance only. Returns ECDSA-signed boolean results with a kid field identifying the signing key (fetch public key via insumer_jwks). Never exposes actual balances. Each result includes evaluatedCondition (exact logic checked), conditionHash (SHA-256 for tamper-evidence), and blockNumber/blockTimestamp for EVM chains (freshness). XRPL results include ledgerIndex and ledgerHash instead of blockNumber/blockTimestamp; trust line results also include trustLineState: { frozen: boolean }. Stellar results include ledgerIndex and ledgerHash and surface assetCode (which flows into conditionHash for non-native asset binding). Sui results include checkpointSequence and checkpointDigest. Standard mode costs 1 credit. Pass proof: 'merkle' for EIP-1186 Merkle storage proofs (2 credits), available on 27 of the 31 EVM chains. For EAS attestations, use a compliance template (Coinbase Verifications, Gitcoin Passport) or raw schemaId. For Farcaster, use type 'farcaster_id' (checks IdRegistry on Optimism). For arbitrary contract checks, use type 'evm_view_call' (single-address-argument view function returning bool; RPC EVM chains only). For self-scaling agent-spend limits, use type 'ratio_to_amount' (met iff balance >= multiple * amount; RPC EVM chains only). For share-of-supply rules, use type 'ratio_to_supply' (met iff balance / totalSupply >= minFraction, a fraction in (0,1]; RPC EVM chains, ERC-20 only). For agent standing, use type 'erc8004_agent' (is this wallet a registered ERC-8004 agent on Base; agentId required) or 'erc7710_delegation' (is this signed MetaMask-framework delegation from principal to agent currently valid on Base: signature incl. ERC-1271, unrevoked at the anchored block, recognized caveats, time window; spend/target/call limits are REPORTED as declaredLimits, not simulated). Attestations containing a delegation condition expire in 5 minutes instead of 30. On failure a delegation result carries failReason (delegate_mismatch, principal_mismatch, invalid_signature, delegator_not_deployed, revoked, unknown_caveat_enforcer, outside_time_window). Use insumer_compliance_templates to list available templates.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "bitcoinWallet": {
+    "description": "Bitcoin address (P2PKH, P2SH, bech32, or Taproot). For verifying native BTC balance. Use chainId 'bitcoin' with contractAddress 'native'.",
+    "type": "string"
+   },
+   "conditions": {
+    "description": "1-10 on-chain conditions to verify",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "agentId": {
+       "description": "Required for erc8004_agent. The ERC-8004 agent ID as a uint256 decimal string \u2014 the caller must supply it (the deployed Identity Registry has no wallet-to-agentId reverse lookup). Met iff the attested wallet owns the agent NFT (ownerOf) or is the registry's signature-verified agentWallet binding. Registry 0x8004A169FB4a3325136EB29fA0ceB6D2e539a432 on Base; chainId 8453 only. Honest semantics: registration is permissionless minting \u2014 the signed statement implies no vetting, no reputation, no endorsement.",
+       "type": "string"
+      },
+      "amount": {
+       "description": "For ratio_to_amount: per-request reference amount in token/display units as a decimal string (e.g. \"100\" for 100 USDC, not base units/wei). Numbers are accepted and coerced. Must be > 0.",
+       "type": [
+        "string",
+        "number"
+       ]
+      },
+      "assetCode": {
+       "description": "Stellar trustline asset code (e.g. 'USDC', 'BENJI'). Required for Stellar non-native (trustline) tokens. Use contractAddress 'native' for XLM. Ignored for other chains. Flows into conditionHash so different assets on the same issuer produce different hashes.",
+       "type": "string"
+      },
+      "attester": {
+       "description": "Expected attester address (optional, for eas_attestation)",
+       "type": "string"
+      },
+      "chainId": {
+       "anyOf": [
+        {
+         "description": "EVM chain ID",
+         "type": "integer"
+        },
+        {
+         "const": "solana",
+         "type": "string"
+        },
+        {
+         "const": "xrpl",
+         "type": "string"
+        },
+        {
+         "const": "bitcoin",
+         "type": "string"
+        },
+        {
+         "const": "tron",
+         "type": "string"
+        },
+        {
+         "const": "stellar",
+         "type": "string"
+        },
+        {
+         "const": "sui",
+         "type": "string"
+        }
+       ],
+       "description": "Chain identifier: EVM chain ID (integer, includes 50 for XDC), 'solana', 'xrpl', 'bitcoin', 'tron', 'stellar', or 'sui'"
+      },
+      "contractAddress": {
+       "description": "Token or NFT contract address (required for token_balance, nft_ownership, ratio_to_amount, and ratio_to_supply; ratio_to_supply requires an ERC-20 contract, no native). 'native' means the chain's native coin and is for token_balance and ratio_to_amount only. nft_ownership needs the NFT contract address (0x + 40 hex on EVM); 'native' with nft_ownership is rejected with a 400, so use token_balance for the native coin. On Sui, pass a coin type address::module::Name: native SUI is '0x2::sui::SUI', and 'native' is not accepted there.",
+       "type": "string"
+      },
+      "currency": {
+       "description": "XRPL trust line currency code (e.g. 'RLUSD', 'USDC'). Required for XRPL trust line tokens, ignored for other chains.",
+       "type": "string"
+      },
+      "decimals": {
+       "description": "Optional. Leave it out: the token's own decimals are always read from the chain. If sent it is only a cross-check, and a value that differs from the token's own decimals is rejected with a 400.",
+       "maximum": 77,
+       "minimum": 0,
+       "type": "integer"
+      },
+      "delegation": {
+       "additionalProperties": false,
+       "description": "Required for erc7710_delegation. The signed ERC-7710 delegation to evaluate. Met iff ALL of: attested wallet is the delegate; declared delegator is expectedDelegator; EIP-712 signature verifies (EOA or ERC-1271); unrevoked at the anchored block; every caveat enforcer recognized; any time-window caveat currently satisfied. Recognized enforcers (5): timestamp (evaluated), erc20_transfer_amount, native_transfer_amount, allowed_targets, limited_calls (the last four are REPORTED as declaredLimits \u2014 redemption enforces them, the attestation does not simulate enforcement).",
+       "properties": {
+        "authority": {
+         "description": "Root authority only (0xffff\u2026ffff, 32 bytes of 0xff). Delegation chains are unsupported in v1.",
+         "type": "string"
+        },
+        "caveats": {
+         "description": "Caveats the principal signed (max 16). Every enforcer must be recognized or the condition fails \u2014 no override.",
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "enforcer": {
+            "description": "Caveat enforcer contract address",
+            "type": "string"
+           },
+           "terms": {
+            "description": "ABI-encoded caveat terms (hex)",
+            "type": "string"
+           }
+          },
+          "required": [
+           "enforcer",
+           "terms"
+          ],
+          "type": "object"
+         },
+         "maxItems": 16,
+         "type": "array"
+        },
+        "delegate": {
+         "description": "Agent wallet the delegation authorizes. Must equal the attested wallet.",
+         "type": "string"
+        },
+        "delegator": {
+         "description": "Principal address that signed the delegation. Must equal expectedDelegator.",
+         "type": "string"
+        },
+        "salt": {
+         "description": "Delegation salt (decimal string; numbers coerced)",
+         "type": [
+          "string",
+          "number"
+         ]
+        },
+        "signature": {
+         "description": "EIP-712 signature over the delegation (hex). EOA recovery, or ERC-1271 for smart-contract principals.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "delegator",
+        "delegate",
+        "authority",
+        "caveats",
+        "salt",
+        "signature"
+       ],
+       "type": "object"
+      },
+      "delegationManager": {
+       "description": "Required for erc7710_delegation. DelegationManager contract the delegation was signed against \u2014 one of the three recognized MetaMask Delegation Framework managers on Base (1.0.0 / 1.1.0 / 1.3.0; current default 0xdb9B1e94B5b69Df7e401DDbedE43491141047dB3). chainId 8453 only.",
+       "type": "string"
+      },
+      "expectedDelegator": {
+       "description": "Required for erc7710_delegation. The principal address the caller asserts authorized this agent. The condition fails unless the delegation's declared delegator matches \u2014 without it a self-delegation would read as authority, so there is no structural-only mode.",
+       "type": "string"
+      },
+      "indexer": {
+       "description": "EAS indexer contract address (optional, for eas_attestation)",
+       "type": "string"
+      },
+      "label": {
+       "description": "Human-readable label",
+       "maxLength": 100,
+       "type": "string"
+      },
+      "minFraction": {
+       "description": "For ratio_to_supply: required share of total supply, a decimal string in (0,1] (e.g. \"0.005\" for 0.5%). Met iff balance / totalSupply() >= minFraction. Numbers are accepted and coerced. For project/governance tokens, not stablecoins.",
+       "type": [
+        "string",
+        "number"
+       ]
+      },
+      "multiple": {
+       "description": "For ratio_to_amount: collateralization multiple as a decimal string (e.g. \"10\" for 'hold >= 10x the amount'). Met iff balance >= multiple * amount. Numbers are accepted and coerced. Must be > 0.",
+       "type": [
+        "string",
+        "number"
+       ]
+      },
+      "schemaId": {
+       "description": "EAS schema ID (bytes32 hex). Required for eas_attestation unless template is provided.",
+       "type": "string"
+      },
+      "selector": {
+       "description": "Required for evm_view_call. Canonical signature of a view function returning bool, in the form 'functionName(address)' (e.g. 'hasAccess(address)'). v1 supports single-address-argument view functions only; the 4-byte selector is derived from this signature.",
+       "type": "string"
+      },
+      "taxon": {
+       "description": "XRPL NFToken taxon filter (optional, for nft_ownership on XRPL only). Filters NFTs by issuer + taxon.",
+       "type": "integer"
+      },
+      "template": {
+       "description": "Compliance template name. Use instead of raw schemaId/attester/indexer for eas_attestation. Gitcoin Passport templates check Sybil resistance on Optimism.",
+       "enum": [
+        "coinbase_verified_account",
+        "coinbase_verified_country",
+        "coinbase_one",
+        "gitcoin_passport_score",
+        "gitcoin_passport_active"
+       ],
+       "type": "string"
+      },
+      "threshold": {
+       "description": "Minimum balance for token_balance, as a decimal string in token/display units (e.g. \"100\", not base units). Numbers are accepted and coerced to a string. Must be > 0 when proof is merkle.",
+       "type": [
+        "string",
+        "number"
+       ]
+      },
+      "type": {
+       "description": "Condition type: token_balance, nft_ownership (33 of 37 chains: 31 EVM + Solana + XRPL), eas_attestation, farcaster_id (Farcaster IdRegistry on Optimism), evm_view_call (arbitrary single-address-argument view function returning bool; RPC EVM chains only), ratio_to_amount (balance >= multiple * amount; RPC EVM chains only), ratio_to_supply (balance / totalSupply >= minFraction; RPC EVM chains, ERC-20 only), erc8004_agent (registered ERC-8004 agent on Base; agentId required), or erc7710_delegation (signed MetaMask-framework delegation validity on Base; delegationManager, expectedDelegator, and delegation required; max 3 per request)",
+       "enum": [
+        "token_balance",
+        "nft_ownership",
+        "eas_attestation",
+        "farcaster_id",
+        "evm_view_call",
+        "ratio_to_amount",
+        "ratio_to_supply",
+        "erc8004_agent",
+        "erc7710_delegation"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "type"
+     ],
+     "type": "object"
+    },
+    "maxItems": 10,
+    "minItems": 1,
+    "type": "array"
+   },
+   "declaredLimits": {
+    "description": "Set to 'omit' to leave decoded caveat limits out of the signed results of erc7710_delegation conditions, so a forwarded attestation does not carry the principal's spending ceiling. met, delegationHash, and conditionHash are byte-identical either way.",
+    "enum": [
+     "omit"
+    ],
+    "type": "string"
+   },
+   "format": {
+    "description": "Set to 'jwt' to include a Wallet Auth by InsumerAPI token (ES256-signed JWT) in the response, with its ML-DSA-65 sibling pqJwt beside it. The jwt is verifiable by any standard JWT library using JWKS at /.well-known/jwks.json.",
+    "enum": [
+     "jwt"
+    ],
+    "type": "string"
+   },
+   "proof": {
+    "description": "Set to 'merkle' for EIP-1186 Merkle storage proofs (2 credits). Available for token_balance on 27 of the 31 EVM chains: not on ZKsync Era (324), Sei (1329), Viction (88) or XDC Network (50), and not on any non-EVM chain. Also available for erc7710_delegation as a storage proof of the revocation slot (subject 'delegation_revocation'; managers with an on-chain-verified layout only, currently the v1.3.0 manager on Base).",
+    "enum": [
+     "merkle"
+    ],
+    "type": "string"
+   },
+   "solanaWallet": {
+    "description": "Solana wallet address (base58)",
+    "type": "string"
+   },
+   "stellarWallet": {
+    "description": "Stellar wallet address (G-prefixed). For verifying XLM or trustline assets (USDC, BENJI, etc.). Use chainId 'stellar' with the asset issuer's G-address as contractAddress and pass assetCode (e.g. 'USDC'). Soroban contract balances not visible \u2014 classic trustlines only.",
+    "type": "string"
+   },
+   "suiWallet": {
+    "description": "Sui wallet address (0x + 64 hex chars). For verifying SUI or other Sui coins (e.g. USDC). Use chainId 'sui' with the Sui coin type as contractAddress: '0x2::sui::SUI' for native SUI, or the full coin type address::module::Name for other coins (e.g. '0xdba34672e30cb065b1f93e3ab55318768fd6fef66c15942c9f7cb846e2f900e7::usdc::USDC'). The string 'native' is not accepted on Sui.",
+    "type": "string"
+   },
+   "tronWallet": {
+    "description": "Tron wallet address (T-prefixed, base58). For verifying TRX or TRC20 tokens (USDT-TRC20). Use chainId 'tron'.",
+    "type": "string"
+   },
+   "wallet": {
+    "description": "EVM wallet address (0x...)",
+    "type": "string"
+   },
+   "xrplWallet": {
+    "description": "XRPL wallet address (r-address). For verifying XRP, trust line tokens (RLUSD, USDC), or NFTs on XRP Ledger.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "conditions"
+  ],
+  "type": "object"
+ },
+ "name": "insumer_attest"
+}

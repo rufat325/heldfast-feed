@@ -1,0 +1,413 @@
+{
+ "annotations": {
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Assemble a global profile for one commodity in a single call: top-producing countries, the annual production trend, and trade flows (top exporters and importers). Accepts a commodity name, resolves it to item codes, then queries the production (QCL) and trade (TCL) domains and merges the results. Each ranking is a per-country sum across the resolved items, taken at that country's own latest year with data and grouped by unit so incomparable quantities are never added. The trend is returned inline as year/value points. Country-level only (aggregates excluded). When a required domain is not indexed locally, returns a partial profile with a notice naming the gap rather than failing. The full merged observation set spills to a DataCanvas table for deeper SQL via faostat_dataframe_query.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "canvas_id": {
+    "description": "Canvas ID to stage onto, as returned by a prior faostat_query_observations / faostat_commodity_profile call \u2014 exactly 10 characters of letters, digits, hyphens, and underscores. Omit to stage onto this session\u2019s canvas, created on the first spill and reused by every later call, so tables staged earlier in the session sit alongside this one.",
+    "pattern": "^[A-Za-z0-9_-]{10}$",
+    "type": "string"
+   },
+   "item_query": {
+    "description": "Commodity name to profile (e.g. \"maize\", \"wheat\", \"coffee green\"). Matched by relevance; the 5 best-matching items are folded into one profile, so a broad name such as \"milk\" is narrowed \u2014 the response discloses how many items matched in total.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "top_n": {
+    "default": 10,
+    "description": "Number of top producers / exporters / importers to return. Max 50.",
+    "maximum": 50,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "year_end": {
+    "description": "Inclusive end year for the trend (e.g. 2022).",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "year_start": {
+    "description": "Inclusive start year for the trend (e.g. 1990).",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "item_query"
+  ],
+  "type": "object"
+ },
+ "name": "faostat_commodity_profile",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "item_query",
+     "resolved_items",
+     "top_producers",
+     "top_exporters",
+     "top_importers",
+     "production_trend",
+     "trend_points",
+     "spilled",
+     "truncated",
+     "resolvedItemCodes",
+     "resolvedItemMatches",
+     "itemsTruncated"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "canvas_id": {
+    "description": "Canvas ID holding the merged set \u2014 pass to faostat_dataframe_query / _describe.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `no_match`: The item query resolved to no commodity code. `index_not_ready`: The production (QCL) mirror is cold \u2014 its initial sync has never completed. `invalid_year_range`: year_start is greater than year_end \u2014 a self-contradictory range that can never match. The bounds reach the production, trade, and merged canvas-stream queries alike, so every one of them would return nothing. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "no_match",
+         "index_not_ready",
+         "invalid_year_range"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "item_query": {
+    "description": "The commodity query echoed back.",
+    "type": "string"
+   },
+   "itemsTruncated": {
+    "description": "True when the commodity name matched more items than the profile folded in \u2014 the profile then covers only the most relevant few.",
+    "type": "boolean"
+   },
+   "notice": {
+    "description": "Names any required domain that was not indexed, item-resolution truncation, mixed units in the rankings, or other partial-result context.",
+    "type": "string"
+   },
+   "production_trend": {
+    "description": "The annual production series for the resolved commodity, summed over countries and items per year and ordered oldest-first. Aggregated in SQL over the complete filtered match, so it is not affected by the canvas staging cap.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One annual trend point.",
+     "properties": {
+      "flags": {
+       "description": "Distinct data-quality flags across the summed observations, comma-separated and sorted \u2014 commonly A=Official, B=time-series break, E=Estimated, I=Imputed, M=Missing (value cannot exist), T=Unofficial, X=from an international organization, plus others FAOSTAT defines per domain; treat any unrecognized flag as informational, never assume official. Null when no summed observation carried a flag. More than one flag means the total mixes data qualities.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "observations": {
+       "description": "Observations summed into value \u2014 read it alongside value, since a change in coverage moves the total independently of production.",
+       "type": "number"
+      },
+      "unit": {
+       "description": "Unit of measure for value; null when unspecified. Points are grouped by unit, so a year can appear once per unit rather than summing incomparable quantities.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "value": {
+       "description": "Production summed across every country and resolved item reporting that year.",
+       "type": "number"
+      },
+      "year": {
+       "description": "Observation year.",
+       "type": "number"
+      }
+     },
+     "required": [
+      "year",
+      "value",
+      "observations",
+      "unit",
+      "flags"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "resolvedItemCodes": {
+    "description": "Item codes the commodity query resolved to.",
+    "items": {
+     "type": "number"
+    },
+    "type": "array"
+   },
+   "resolvedItemMatches": {
+    "description": "Total items the commodity query matched in QCL, before the 5-item profile cap.",
+    "type": "number"
+   },
+   "resolved_items": {
+    "description": "Commodities the query resolved to (the profile aggregates across all of them).",
+    "items": {
+     "additionalProperties": false,
+     "description": "One resolved commodity.",
+     "properties": {
+      "code": {
+       "description": "Resolved item code.",
+       "type": "number"
+      },
+      "name": {
+       "description": "Resolved item name.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "code",
+      "name"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "spilled": {
+    "description": "True when the merged observation set was staged on a canvas table.",
+    "type": "boolean"
+   },
+   "staged_row_count": {
+    "description": "Rows actually staged on the merged canvas table (present when spilled). Equals the 50,000-row cap when truncated.",
+    "type": "number"
+   },
+   "table_name": {
+    "description": "Canvas table holding the staged observations \u2014 production plus trade when the trade domain (TCL) is indexed, production only when it is not (present when spilled). The notice names which of the two the table holds.",
+    "type": "string"
+   },
+   "top_exporters": {
+    "description": "Top exporters by summed export quantity (empty when trade is not indexed).",
+    "items": {
+     "additionalProperties": false,
+     "description": "One top-exporting country.",
+     "properties": {
+      "area": {
+       "description": "Country name.",
+       "type": "string"
+      },
+      "area_code": {
+       "description": "Country code.",
+       "type": "number"
+      },
+      "flags": {
+       "description": "Distinct data-quality flags across the summed observations, comma-separated and sorted \u2014 commonly A=Official, B=time-series break, E=Estimated, I=Imputed, M=Missing (value cannot exist), T=Unofficial, X=from an international organization, plus others FAOSTAT defines per domain; treat any unrecognized flag as informational, never assume official. Null when no summed observation carried a flag. More than one flag means the total mixes data qualities.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "observations": {
+       "description": "Observations summed into value \u2014 one per resolved item reporting that year.",
+       "type": "number"
+      },
+      "unit": {
+       "description": "Unit of measure for value; null when unspecified. Rows are grouped by unit, so values in different units are never summed together \u2014 a country can appear once per unit.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "value": {
+       "description": "Export quantity summed across the resolved items for this country, in its latest reporting year.",
+       "type": "number"
+      },
+      "year": {
+       "description": "This country's own latest year with data, computed per country \u2014 a country whose series ends earlier still ranks, at its own last reported year.",
+       "type": "number"
+      }
+     },
+     "required": [
+      "area_code",
+      "area",
+      "value",
+      "observations",
+      "unit",
+      "year",
+      "flags"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "top_importers": {
+    "description": "Top importers by summed import quantity (empty when trade is not indexed).",
+    "items": {
+     "additionalProperties": false,
+     "description": "One top-importing country.",
+     "properties": {
+      "area": {
+       "description": "Country name.",
+       "type": "string"
+      },
+      "area_code": {
+       "description": "Country code.",
+       "type": "number"
+      },
+      "flags": {
+       "description": "Distinct data-quality flags across the summed observations, comma-separated and sorted \u2014 commonly A=Official, B=time-series break, E=Estimated, I=Imputed, M=Missing (value cannot exist), T=Unofficial, X=from an international organization, plus others FAOSTAT defines per domain; treat any unrecognized flag as informational, never assume official. Null when no summed observation carried a flag. More than one flag means the total mixes data qualities.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "observations": {
+       "description": "Observations summed into value \u2014 one per resolved item reporting that year.",
+       "type": "number"
+      },
+      "unit": {
+       "description": "Unit of measure for value; null when unspecified. Rows are grouped by unit, so values in different units are never summed together \u2014 a country can appear once per unit.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "value": {
+       "description": "Import quantity summed across the resolved items for this country, in its latest reporting year.",
+       "type": "number"
+      },
+      "year": {
+       "description": "This country's own latest year with data, computed per country \u2014 a country whose series ends earlier still ranks, at its own last reported year.",
+       "type": "number"
+      }
+     },
+     "required": [
+      "area_code",
+      "area",
+      "value",
+      "observations",
+      "unit",
+      "year",
+      "flags"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "top_producers": {
+    "description": "Top producers by summed production (countries only).",
+    "items": {
+     "additionalProperties": false,
+     "description": "One top-producing country.",
+     "properties": {
+      "area": {
+       "description": "Country name.",
+       "type": "string"
+      },
+      "area_code": {
+       "description": "Country code.",
+       "type": "number"
+      },
+      "flags": {
+       "description": "Distinct data-quality flags across the summed observations, comma-separated and sorted \u2014 commonly A=Official, B=time-series break, E=Estimated, I=Imputed, M=Missing (value cannot exist), T=Unofficial, X=from an international organization, plus others FAOSTAT defines per domain; treat any unrecognized flag as informational, never assume official. Null when no summed observation carried a flag. More than one flag means the total mixes data qualities.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "observations": {
+       "description": "Observations summed into value \u2014 one per resolved item reporting that year.",
+       "type": "number"
+      },
+      "unit": {
+       "description": "Unit of measure for value; null when unspecified. Rows are grouped by unit, so values in different units are never summed together \u2014 a country can appear once per unit.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "value": {
+       "description": "Production summed across the resolved items for this country, in its latest reporting year.",
+       "type": "number"
+      },
+      "year": {
+       "description": "This country's own latest year with data, computed per country \u2014 a country whose series ends earlier still ranks, at its own last reported year.",
+       "type": "number"
+      }
+     },
+     "required": [
+      "area_code",
+      "area",
+      "value",
+      "observations",
+      "unit",
+      "year",
+      "flags"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "trend_points": {
+    "description": "Total production observations aggregated into production_trend. Exact \u2014 the aggregation runs over the complete filtered match, not a capped page.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when the STAGED CANVAS TABLE hit the 50,000-row staging cap and is therefore a PREFIX of the merged observation set \u2014 re-query faostat_query_observations partitioned by year to stage the rest. The rankings and production_trend above are SQL aggregates over the complete match and stay exact either way.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "faostat-mcp-server: commodity profile"
+}

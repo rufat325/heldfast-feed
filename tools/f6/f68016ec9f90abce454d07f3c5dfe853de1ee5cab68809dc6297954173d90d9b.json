@@ -1,0 +1,63 @@
+{
+ "description": "Get recent trade and liquidity activity for a specific Spectra pool.\nReturns individual transactions: buys, sells, and liquidity adds/removes with\nUSD values, timestamps, and tx hashes.\n\nPool activity shows only the Curve pool's perspective (IBT \u2194 PT swaps and LP\nevents). The Spectra Router batches operations atomically, so any single pool\nevent may be one step of a multi-step strategy. There is no BUY_YT or SELL_YT\nevent type \u2014 the pool never touches YT directly. Use get_protocol_context for\nthe full mechanics of how Router batching maps to pool activity types.\n\nProtocol mechanics that affect how activity appears:\n- BUY_PT and SELL_PT are Curve pool swaps between IBT and PT.\n- There is NO \"BUY_YT\" or \"SELL_YT\" type. The pool never touches YT directly.\n- YT selling via the Router's flash-redeem internally buys PT from the pool to\n  pair with YT for redemption \u2014 so YT sells show up as BUY_PT in the activity log.\n- A standalone mint (deposit IBT \u2192 PT+YT) does NOT appear in pool activity.\n  However, the Router can batch a mint + LP add in one atomic execute() call.\n  The minted PT + remaining IBT enter the pool as AMM_ADD_LIQUIDITY while the\n  minted YT goes directly to the user's wallet. So AMM_ADD_LIQUIDITY events\n  may ALSO represent YT acquisition \u2014 the YT minting is invisible in pool data.\n- The Router can also flash-mint atomically: flash-borrow IBT \u2192 mint PT+YT \u2192\n  sell PT on the pool \u2192 user tops up the shortfall \u2192 user receives YT. This\n  shows up as SELL_PT but the user's net action is acquiring YT, not selling PT.\n- AMM_REMOVE_LIQUIDITY returns IBT + PT from the pool. Users often follow up by\n  selling the PT (SELL_PT) to recover capital, completing a mint\u2192LP\u2192remove\u2192sell\n  loop that nets them YT at the cost of the PT discount (~1 - ptPrice).\n\nKey principle: any pool event type can be one step of a multi-step Router operation.\nDo not assume SELL_PT means \"user is bearish on PT\" or AMM_ADD_LIQUIDITY means\n\"user is providing liquidity for yield.\" Always cross-reference with get_portfolio\nto see what the address actually holds (PT, YT, LP balances) \u2014 the holdings reveal\nthe true strategy better than the activity log alone.\n\nAnalysis tips \u2014 IMPORTANT: each observation below has multiple valid interpretations.\nThe tool output now presents these as competing branches. Do not collapse to one\ninterpretation without cross-referencing get_portfolio and other data sources.\n- High SELL_PT count: could be flash-mint YT accumulation (check YT balance >> PT)\n  OR simple PT liquidation OR one leg of cross-protocol arb. Portfolio resolves this.\n- BUY_PT events: could be fixed-rate accumulation OR flash-redeem YT selling\n  (check if YT balance dropped). These predict opposite future behavior.\n- Paired ADD/REMOVE liquidity: could be LP cycling in a mint loop OR fee harvesting\n  OR rebalancing. The intent is not observable from pool activity alone.\n- Large volume vs small holdings: could be capital recycling (looping) OR completed\n  round-trip (entered and exited) OR funds moved to another venue.\n\nOutput includes an Address Concentration section with full addresses and per-address\ntype breakdowns. Use get_portfolio on those addresses to see their PT, YT, and LP\nbalances. Most analysis can be done without a block explorer \u2014 use get_portfolio on\naddresses from Address Concentration, and compare_yield or get_pt_details for rate context.\n\nAddress isolation mode: When you provide an 'address' parameter, the tool filters to that\naddress only, sorts chronologically (oldest first), and adds:\n- Sequence Analysis: detects repeating action cycles (e.g., ADD\u2192REMOVE\u2192SELL repeated 8\u00d7).\n  Presents COMPETING INTERPRETATION BRANCHES (A/B/C) that predict different future behavior.\n  Small repetition counts (\u22645) are flagged as statistically insufficient for extrapolation.\n  CRITICAL: do NOT collapse these branches into a single narrative without external evidence\n  from get_portfolio or other tools. The branches exist as friction against premature\n  pattern-matching \u2014 the tension between them IS the information.\n- Flow Accounting: cross-references portfolio data to show PT/YT flow reconciliation.\n  When position shape is observable (e.g., YT-only, PT-only, fully exited), presents\n  competing hypotheses for WHY the position looks that way. Each hypothesis predicts\n  different future behavior. Do not select one without additional evidence.\n- Capital Efficiency: compares total activity volume against the address's throughput,\n  flagging high ratios that indicate capital recycling (looping) vs accumulation.\n- If the address shows high-frequency activity (>10 txns), consider checking whether it is\n  a contract (programmatic execution via Router execute()) vs an EOA (manual/scripted).\n  Contracts execute atomically; EOAs submit separate transactions. This distinction affects\n  whether apparent \"sequences\" are truly sequential or batched.\n- Contract Detection: checks whether the address is a contract or EOA via on-chain\n  eth_getCode. Contracts execute atomically; EOAs submit sequential transactions.\n- Pool Impact: flags when SELL_PT or BUY_PT volume is significant relative to pool\n  liquidity, indicating potential market impact on implied APY.\n- Gas Estimates: estimates total gas cost from transaction count using chain-specific\n  gas heuristics. Shows gas as percentage of activity volume and position value.\n- Pool Context: fetches pool liquidity and implied APY for baseline context.\n- Observation Coverage: quantifies the blind spots of this analysis. Shows:\n  (1) Value coverage \u2014 what % of the position is explained by observable activity.\n  (2) Temporal coverage \u2014 active days vs dark periods with no observable events.\n  (3) Data source coverage \u2014 which of the available data sources were consulted.\n  CRITICAL: coverage metrics bound the domain of validity for ALL interpretations above.\n  If value coverage is low (<50%), the competing interpretation branches are based on a\n  minority of the address's actual behavior. Position sizing should reflect the coverage\n  level, not the confidence of the best-fitting interpretation.\n\nFor multi-pool activity scanning, use get_address_activity to find all pools an address\nhas interacted with in a single call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "address": {
+    "description": "Filter to a specific wallet address. Enables chronological sort, sequence analysis, and capital efficiency hints.",
+    "pattern": "^0x[a-fA-F0-9]{40}$",
+    "type": "string"
+   },
+   "chain": {
+    "description": "The blockchain network",
+    "enum": [
+     "mainnet",
+     "base",
+     "arbitrum",
+     "optimism",
+     "avalanche",
+     "katana",
+     "sonic",
+     "flare",
+     "bsc",
+     "monad",
+     "ethereum"
+    ],
+    "type": "string"
+   },
+   "limit": {
+    "default": 20,
+    "description": "Number of most recent activities to return (default 20, max 100)",
+    "maximum": 100,
+    "type": "number"
+   },
+   "pool_address": {
+    "description": "The Curve pool address (0x...) OR a PT address. If a PT address is given, it will be resolved to the corresponding pool automatically.",
+    "pattern": "^0x[a-fA-F0-9]{40}$",
+    "type": "string"
+   },
+   "type_filter": {
+    "default": "all",
+    "description": "Filter by activity type. Default: all.",
+    "enum": [
+     "BUY_PT",
+     "SELL_PT",
+     "AMM_ADD_LIQUIDITY",
+     "AMM_REMOVE_LIQUIDITY",
+     "all"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "chain",
+   "pool_address"
+  ],
+  "type": "object"
+ },
+ "name": "get_pool_activity"
+}

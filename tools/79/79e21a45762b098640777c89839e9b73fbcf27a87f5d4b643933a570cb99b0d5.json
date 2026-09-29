@@ -1,0 +1,783 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false,
+  "title": "Measure probability of backtest overfitting"
+ },
+ "description": "Use this when you have the T x N returns of a grid search and want\nthe probability of backtest overfitting (PBO, CSCV) -- did the sweep\nfind an edge or manufacture one? A demote-only audit, not buy/sell advice.\nDid your parameter sweep FIND an edge -- or manufacture one? PBO over\nthe whole trial matrix.\n\nSubmit the full T x N payoff matrix of every configuration you tried\n(rows = time-ordered per-period returns, columns = the candidates from\nyour grid search / parameter sweep / optimisation run) and get the\nProbability of Backtest Overfitting via combinatorial symmetric\ncross-validation (CSCV, Bailey/Borwein/Lopez de Prado/Zhu 2017) with\npurge and embargo against overlapping-label leakage: the fraction of\ntrain/test splits in which your in-sample winner ranks at or below the\nout-of-sample median. The dossier adds the performance-degradation slope\n(does out-of-sample decay as in-sample shines?), the probability of\nout-of-sample loss, and first-order stochastic dominance of your\nselected picks versus the whole pool. Complements the trial ledger: the\nledger counts how many tries your family burned, PBO grades whether the\nSELECTION PROCESS itself is overfit -- PBO >= 0.5 earns the named demote\nPBO_HIGH. Exhaustive enumeration with nothing to seed,\nfail-closed on undersized, oversized or non-numeric input. Demote-only:\nit can kill a selection, never bless one. NOT a buy/sell signal.\nPrice: per check; see https://api.alphaassay.com/v1/meta/pricing\n(api_key required -- account setup at\nhttps://api.alphaassay.com/account).",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "api_key": {
+    "default": "",
+    "description": "API key for a paid MCP check. Hosted Streamable HTTP clients should send it in the Authorization: Bearer transport header so the model never sees the secret; local stdio callers may supply the raw key in this tool argument without a Bearer prefix. Create an account at https://api.alphaassay.com/account; the current free allowance and prices are published at https://api.alphaassay.com/v1/meta/pricing. Paid MCP calls use API-key credits; x402 buys only the separate REST POST /x402/v1/gauntlet and is not MCP billing.",
+    "maxLength": 512,
+    "type": "string"
+   },
+   "embargo": {
+    "default": 0,
+    "description": "Extra embargo bars after each test block.",
+    "maximum": 5000,
+    "minimum": 0,
+    "type": "integer",
+    "x-strictJsonInteger": true
+   },
+   "n_groups": {
+    "default": 8,
+    "description": "Number of CSCV partitions (even; combinatorial in/out-of-sample splits).",
+    "maximum": 16,
+    "minimum": 2,
+    "multipleOf": 2,
+    "type": "integer",
+    "x-strictJsonInteger": true
+   },
+   "periods_per_year": {
+    "anyOf": [
+     {
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     {
+      "type": "number"
+     }
+    ],
+    "default": 365.0,
+    "description": "Annualisation factor for the reported Sharpes.",
+    "gt": 0,
+    "le": 1000000
+   },
+   "purge": {
+    "default": 0,
+    "description": "Bars purged around each split to break serial-correlation leak.",
+    "maximum": 5000,
+    "minimum": 0,
+    "type": "integer",
+    "x-strictJsonInteger": true
+   },
+   "request_id": {
+    "anyOf": [
+     {
+      "maxLength": 256,
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Optional idempotency key for this paid execution. Retry the same request_id with the same payload to replay one stored result without another charge; reuse with a different payload returns idempotency_conflict."
+   },
+   "returns_matrix": {
+    "description": "T x N matrix: per-period returns for each of your N grid/sweep configurations -- the raw material for probability-of-backtest-overfitting (CSCV).",
+    "items": {
+     "items": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "maxItems": 64,
+     "minItems": 2,
+     "type": "array"
+    },
+    "maxItems": 5000,
+    "minItems": 2,
+    "type": "array"
+   }
+  },
+  "required": [
+   "returns_matrix"
+  ],
+  "type": "object",
+  "x-maxBodyBytes": 5242880,
+  "x-relations": [
+   "all returns_matrix rows have equal length"
+  ]
+ },
+ "name": "assay_pbo",
+ "outputSchema": {
+  "$defs": {
+   "PboDegradation": {
+    "additionalProperties": false,
+    "properties": {
+     "intercept": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "interpretation": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "n_pairs": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "prob_oos_loss": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "slope": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "slope",
+     "intercept",
+     "prob_oos_loss",
+     "n_pairs",
+     "interpretation"
+    ],
+    "type": "object"
+   },
+   "PboStochasticDominance": {
+    "additionalProperties": false,
+    "properties": {
+     "first_order": {
+      "enum": [
+       "selected_dominates",
+       "pool_dominates",
+       "none"
+      ],
+      "type": "string"
+     },
+     "interpretation": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "max_cdf_gap_pool_over_selected": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "max_cdf_gap_selected_over_pool": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "n_pool": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "n_selected": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     }
+    },
+    "required": [
+     "first_order",
+     "max_cdf_gap_pool_over_selected",
+     "max_cdf_gap_selected_over_pool",
+     "n_selected",
+     "n_pool",
+     "interpretation"
+    ],
+    "type": "object"
+   },
+   "PublicMeta": {
+    "additionalProperties": false,
+    "properties": {
+     "api_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "as_of": {
+      "format": "date-time",
+      "maxLength": 20,
+      "minLength": 20,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "type": "string"
+     },
+     "disclaimer": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "engine_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "input_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+     },
+     "not_financial_advice": {
+      "const": true,
+      "type": "boolean"
+     },
+     "operation": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "request_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+     },
+     "request_id": {
+      "anyOf": [
+       {
+        "maxLength": 256,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "source_identity_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+     },
+     "statefulness": {
+      "enum": [
+       "pure",
+       "public_read",
+       "tenant_read",
+       "tenant_write"
+      ],
+      "type": "string"
+     },
+     "tenant_scope": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "tenant_scope_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "engine_version",
+     "api_version",
+     "as_of",
+     "input_digest",
+     "request_digest",
+     "tenant_scope",
+     "tenant_scope_version",
+     "request_id",
+     "source_identity_digest",
+     "operation",
+     "statefulness",
+     "not_financial_advice",
+     "disclaimer"
+    ],
+    "type": "object",
+    "x-relations": [
+     "as_of is a real UTC RFC3339 second"
+    ]
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "result": {
+    "additionalProperties": false,
+    "allOf": [
+     {
+      "if": {
+       "properties": {
+        "status": {
+         "const": "computed"
+        }
+       },
+       "required": [
+        "status"
+       ]
+      },
+      "then": {
+       "properties": {
+        "degradation": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "interpretation": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "mean_logit": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "n_blocked_splits": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "n_configs": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "n_evaluated_splits": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "n_rows": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "n_splits": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "overfit_flag": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "reason": {
+         "type": "null"
+        },
+        "stochastic_dominance": {
+         "not": {
+          "type": "null"
+         }
+        }
+       },
+       "required": [
+        "overfit_flag",
+        "mean_logit",
+        "n_rows",
+        "n_configs",
+        "n_splits",
+        "n_evaluated_splits",
+        "n_blocked_splits",
+        "interpretation",
+        "degradation",
+        "stochastic_dominance"
+       ]
+      }
+     },
+     {
+      "if": {
+       "properties": {
+        "status": {
+         "const": "blocked"
+        }
+       },
+       "required": [
+        "status"
+       ]
+      },
+      "then": {
+       "properties": {
+        "degradation": {
+         "type": "null"
+        },
+        "interpretation": {
+         "type": "null"
+        },
+        "mean_logit": {
+         "type": "null"
+        },
+        "n_evaluated_splits": {
+         "type": "null"
+        },
+        "overfit_flag": {
+         "type": "null"
+        },
+        "pbo": {
+         "type": "null"
+        },
+        "reason": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "stochastic_dominance": {
+         "type": "null"
+        }
+       },
+       "required": [
+        "reason"
+       ]
+      }
+     }
+    ],
+    "properties": {
+     "_meta": {
+      "$ref": "#/$defs/PublicMeta"
+     },
+     "degradation": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/PboDegradation"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "died_at": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "died_at_plain": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "embargo": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "failure_codes": {
+      "items": {
+       "maxLength": 2000,
+       "type": "string"
+      },
+      "maxItems": 10000,
+      "type": "array"
+     },
+     "interpretation": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "mean_logit": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "method": {
+      "const": "CSCV_combinatorial_pbo_purged_embargoed",
+      "type": "string"
+     },
+     "n_blocked_splits": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "n_configs": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "n_evaluated_splits": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "n_groups": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "n_rows": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "n_splits": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "overfit_flag": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "pbo": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "pbo_high_threshold": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "periods_per_year": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "purge": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "status": {
+      "enum": [
+       "blocked",
+       "computed"
+      ],
+      "type": "string"
+     },
+     "stochastic_dominance": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/PboStochasticDominance"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "verdict": {
+      "enum": [
+       "pass",
+       "fail",
+       "insufficient_evidence"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "_meta",
+     "method",
+     "status",
+     "verdict",
+     "pbo",
+     "pbo_high_threshold",
+     "n_groups",
+     "purge",
+     "embargo",
+     "periods_per_year",
+     "died_at",
+     "died_at_plain",
+     "failure_codes",
+     "degradation",
+     "stochastic_dominance"
+    ],
+    "type": "object",
+    "x-relations": [
+     "n_evaluated_splits + n_blocked_splits == n_splits when status == computed"
+    ]
+   }
+  },
+  "required": [
+   "result"
+  ],
+  "type": "object"
+ },
+ "title": "Measure probability of backtest overfitting"
+}

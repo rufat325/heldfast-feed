@@ -1,0 +1,361 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Run a deterministic grader spec against one or more candidate answers and get a PASS/REJECT verdict per candidate, plus the resolved comparison value (e.g. the math.js-evaluated numeric target). Use it mid-loop to re-derive or spot-check a gold independently of any saved record. For grader kinds that grade against a reference rather than embedding one (exact_match), supply gold; it is ignored for target-embedding kinds like numeric and mcq. llm_rubric cannot run on this server and requires recorded independent verification before submit.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "candidates": {
+    "description": "Candidate answers to grade \u2014 strings, numbers, objects, or arrays, matching what the grader kind expects.",
+    "items": {},
+    "minItems": 1,
+    "type": "array"
+   },
+   "choices": {
+    "description": "The mcq choice set, used to validate the grader.correct value.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "gold": {
+    "description": "The reference for gold-relative kinds (exact_match). A no-op for target-embedding kinds."
+   },
+   "grader": {
+    "description": "The grader serialized with the record. Deterministic kinds run server-side; llm_rubric relies on recorded independent verification.",
+    "oneOf": [
+     {
+      "description": "Numeric tolerance grader.",
+      "properties": {
+       "abs_tol": {
+        "description": "Absolute tolerance for the comparison (e.g. 1e-3).",
+        "type": "number"
+       },
+       "kind": {
+        "const": "numeric",
+        "description": "Numeric grader \u2014 resolves target through math.js, then compares with tolerance.",
+        "type": "string"
+       },
+       "rel_tol": {
+        "description": "Relative tolerance for the comparison (e.g. 1e-6). Defaults to 1e-9 when both tolerances are omitted.",
+        "type": "number"
+       },
+       "target": {
+        "anyOf": [
+         {
+          "description": "A literal reference number, e.g. 0.3571428571.",
+          "type": "number"
+         },
+         {
+          "description": "A math.js expression string, e.g. \"5/14\" or \"combinations(5,2)/combinations(8,2)\".",
+          "type": "string"
+         }
+        ],
+        "description": "Reference value as a number or a math.js expression string, resolved to a number for comparison."
+       },
+       "units": {
+        "description": "Expected units for documentation, e.g. \"kg\" \u2014 not enforced numerically.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "kind",
+       "target"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "Gold-relative normalized string-equality grader.",
+      "properties": {
+       "kind": {
+        "const": "exact_match",
+        "description": "Gold-relative string match \u2014 grades a candidate against the record gold after normalization.",
+        "type": "string"
+       },
+       "normalize": {
+        "description": "Normalization steps applied to both gold and candidate before exact comparison.",
+        "items": {
+         "description": "A normalization step applied before comparison: trim whitespace, lowercase, strip punctuation, or strip LaTeX wrappers ($, \\(, \\text{}).",
+         "enum": [
+          "trim",
+          "lowercase",
+          "strip_punct",
+          "strip_latex"
+         ],
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "kind"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "Set-membership grader (ordered or unordered).",
+      "properties": {
+       "expected": {
+        "description": "The expected set of string elements the candidate must contain.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "kind": {
+        "const": "set_match",
+        "description": "Set match \u2014 grades a candidate list/CSV against an expected set.",
+        "type": "string"
+       },
+       "order_sensitive": {
+        "description": "When true, element order must match exactly. Defaults to unordered.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "kind",
+       "expected"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "Regular-expression match grader.",
+      "properties": {
+       "flags": {
+        "description": "Regex flags, e.g. \"i\" for case-insensitive or \"m\" for multiline.",
+        "type": "string"
+       },
+       "kind": {
+        "const": "regex",
+        "description": "Regex grader \u2014 a candidate passes when the pattern matches it.",
+        "type": "string"
+       },
+       "pattern": {
+        "description": "The regular expression pattern (JavaScript flavor) tested against the candidate.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "kind",
+       "pattern"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "Multiple-choice grader.",
+      "properties": {
+       "correct": {
+        "description": "The correct answer; must equal one element of the record choices[].",
+        "type": "string"
+       },
+       "kind": {
+        "const": "mcq",
+        "description": "Multiple-choice grader \u2014 a candidate passes when it equals the correct choice.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "kind",
+       "correct"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "JSON deep-equality and/or JSON-Schema grader.",
+      "properties": {
+       "expected": {
+        "description": "A value the candidate must deep-equal (any JSON-serializable shape)."
+       },
+       "kind": {
+        "const": "json_match",
+        "description": "JSON grader \u2014 a candidate must deep-equal expected and/or satisfy a JSON Schema. At least one of expected/schema is required.",
+        "type": "string"
+       },
+       "schema": {
+        "additionalProperties": {},
+        "description": "A JSON Schema object the candidate must structurally satisfy (validated by ajv at runtime).",
+        "propertyNames": {
+         "type": "string"
+        },
+        "type": "object"
+       }
+      },
+      "required": [
+       "kind"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "LLM-rubric grader for free_response.",
+      "properties": {
+       "criteria": {
+        "description": "The weighted criteria the judge evaluates the candidate against.",
+        "items": {
+         "description": "A single weighted rubric criterion.",
+         "properties": {
+          "description": {
+           "description": "What the judge checks for this criterion.",
+           "type": "string"
+          },
+          "weight": {
+           "description": "Relative weight in the weighted pass score (default 1).",
+           "type": "number"
+          }
+         },
+         "required": [
+          "description"
+         ],
+         "type": "object"
+        },
+        "minItems": 1,
+        "type": "array"
+       },
+       "judge_prompt": {
+        "description": "Instructions for the judge model on how to apply the criteria.",
+        "type": "string"
+       },
+       "kind": {
+        "const": "llm_rubric",
+        "description": "LLM-judge grader specification \u2014 submission relies on recorded independent verification because this server cannot execute it.",
+        "type": "string"
+       },
+       "pass_threshold": {
+        "description": "Minimum weighted score (0..1) for the candidate to PASS.",
+        "type": "number"
+       }
+      },
+      "required": [
+       "kind",
+       "criteria",
+       "judge_prompt",
+       "pass_threshold"
+      ],
+      "type": "object"
+     }
+    ]
+   }
+  },
+  "required": [
+   "grader",
+   "candidates"
+  ],
+  "type": "object"
+ },
+ "name": "evals_run_check",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "results",
+     "pass_count"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `grader_unexecutable`: The grader spec cannot run (malformed math.js target, invalid regex, missing json_match reference, or llm_rubric). `mcq_choice_mismatch`: The mcq grader correct answer is not one of the supplied choices. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "grader_unexecutable",
+         "mcq_choice_mismatch"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "pass_count": {
+    "description": "Number of candidates that passed.",
+    "type": "number"
+   },
+   "results": {
+    "description": "Per-candidate grading verdicts, in input order.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One candidate verdict.",
+     "properties": {
+      "candidate": {
+       "description": "The candidate that was graded."
+      },
+      "detail": {
+       "description": "Why the candidate matched or missed.",
+       "type": "string"
+      },
+      "pass": {
+       "description": "True when the candidate passed the grader (PASS), false when rejected (REJECT).",
+       "type": "boolean"
+      },
+      "resolved": {
+       "description": "The resolved comparison reference, e.g. the evaluated numeric target."
+      }
+     },
+     "required": [
+      "candidate",
+      "pass",
+      "detail"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "title": "evals-mcp-server: run check"
+}

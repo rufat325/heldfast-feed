@@ -1,0 +1,40 @@
+{
+ "description": "Surgical update of one agent. **Preferred path for any single-field edit on an existing agent** \u2014 only the fields in `updates` / `replace` / `unset` are touched, every other field is left as-is. Same merge model as `update_step`.\n\n## Merge semantics\n\n`update_agent` accepts three independent operations on the same call. At least one must be non-empty.\n\n- **`updates`** \u2014 partial agent patch. Top-level fields (`name`, `description`, `instructions`, `status`, `goals`, `chatModel`, `enabledApps`, etc.) are shallow-replaced. Nested objects (`configFiles`, `avatar`, `appPermissions`) are deep-merged ONE LEVEL \u2014 keys you don't mention are preserved. Arrays (`enabledApps`, `enabledActions`, `assignedWorkflowIds`, `linkedFileIds`) are replaced wholesale.\n- **`replace: string[]`** \u2014 dot-paths whose values from `updates` are assigned WHOLESALE, skipping deep-merge. Use this when you genuinely want to wipe a dictionary (e.g. `replace: [\"configFiles\"]` swaps the whole configFiles dict instead of merging key-by-key).\n- **`unset: string[]`** \u2014 dot-paths to DELETE (e.g. `[\"goals\"]`, `[\"configFiles.SOUL.md\"]`). Each must currently exist on the agent.\n- **`null` in updates** \u2014 shortcut for unset (e.g. `updates: { goals: null }`).\n\n## Common edit recipes\n\n| Goal | Call |\n|---|---|\n| Update one config file (preserve others) | `updates: { configFiles: { \"SOUL.md\": \"new persona\u2026\" } }` |\n| Replace all instructions | `updates: { instructions: \"new system prompt\" }` |\n| Rename agent slug/email address | `updates: { slug: \"pitchnight\" }` |\n| Assign workflows (full replace) | `updates: { assignedWorkflowIds: [\"wf-1\", \"wf-2\"] }` |\n| Add to assigned workflows | fetch via `get_agent`, modify locally, send full new array (or use `manage_agent_workflows`) |\n| Allow an app to write with approval | `updates: { enabledApps: [\"linkedin\"], appPermissions: { linkedin: { access: \"write\", writeApprovalRequired: true } } }` |\n| Override one action approval | `updates: { enabledApps: [\"linkedin\"], appPermissions: { linkedin: { access: \"write\", writeApprovalRequired: true, actionApprovals: { \"linkedin.create-comment\": false } } } }` |\n| Keep an app read-only | `updates: { enabledApps: [\"linkedin\"], appPermissions: { linkedin: { access: \"read\" } } }` |\n| Change avatar color only | `updates: { avatar: { color: \"#7C3AED\" } }` (iconName preserved) |\n| Activate (fail-fast on missing fields) | `updates: { status: \"active\" }` |\n| Deactivate / pause | `updates: { status: \"paused\" }` or `updates: { status: \"draft\" }` |\n| Unset a scalar field | `updates: { goals: null }` or `unset: [\"goals\"]` |\n| Wipe + reset configFiles wholesale | `updates: { configFiles: { \"SOUL.md\": \"\u2026\", \"TOOLS.md\": \"\u2026\" } }, replace: [\"configFiles\"]` |\n| Remove just one config file | `unset: [\"configFiles.SOUL.md\"]` |\n\n**The trap.** Default deep-merge for `configFiles` and `avatar` is one level \u2014 sending a partial dict preserves siblings. To force a full wipe, use `replace: [\"configFiles\"]`.\n\n## Activation requirements (fail-fast on `status: \"active\"`)\n\nWhen transitioning to `active`, the agent is validated:\n- `instructions` must be non-empty\n- `configFiles[\"SOUL.md\"]` must be present, > 200 chars, and not contain the placeholder marker\n- `configFiles[\"TOOLS.md\"]` must be present, > 200 chars, and not contain the placeholder marker\n\nIf any check fails, the agent is NOT updated. The response is `{ ok: false, errors: [\"\u2026\"] }` (HTTP 400). Fix the missing fields and retry.\n\nFor scheduled / autonomous behaviour, attach routines via `create_routine` AFTER activation. Routines are first-class entities \u2014 they are NOT a field on the agent.\n\n## What update_agent will NOT do\n\n- Cannot change `agent.id` (immutable, 400)\n- Changing `agent.slug` moves the AgentEntity to a new `{slug}@{workspace}` id, rebinds routines/file links/channel sessions/chat sessions where available, and updates the agent email address derived from the slug.\n- Slug convention: `slug` is the short role ID used in URLs/email. Keep \"Agent\" in the display name when useful, but do not append `-agent` to the slug just because the display name includes it; e.g. `Deal Sourcing Agent` should use `deal-sourcing`, not `deal-sourcing-agent`.\n- Cannot create new agents (use `create_agent`)\n- Cannot delete agents (use `delete_agent`)\n- Does not edit routines (use `update_routine` / `create_routine` / `pause_routine`)\n- Does not validate the merged result is internally consistent \u2014 only the activation guard runs. Other invariants are caller's responsibility.\n\n## Diff + warnings\n\nResponse includes `diff: { addedPaths, changedPaths, removedPaths }` and `warnings[]`. \u22656 fields removed without explicit `unset` triggers a warning \u2014 usually a \"you wiped a dictionary\" signal.\n\nRequires write access when connected with OAuth.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "id": {
+    "description": "Agent ID (immutable)",
+    "type": "string"
+   },
+   "replace": {
+    "description": "Dot-paths (e.g. \"configFiles\") whose values in `updates` should be assigned wholesale, skipping deep-merge. Use to wipe + reset dictionary fields.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "unset": {
+    "description": "Dot-paths to delete from the agent (e.g. \"goals\", \"configFiles.SOUL.md\"). Each must currently exist on the agent.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "updates": {
+    "additionalProperties": {},
+    "description": "Partial agent patch. Top-level fields shallow-replace; configFiles & avatar deep-merge one level; arrays full-replace; null = unset. Optional if `replace` or `unset` is provided.",
+    "type": "object"
+   }
+  },
+  "required": [
+   "id"
+  ],
+  "type": "object"
+ },
+ "name": "update_agent"
+}

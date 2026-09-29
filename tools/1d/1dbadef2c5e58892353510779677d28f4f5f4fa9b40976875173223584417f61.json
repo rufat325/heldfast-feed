@@ -1,0 +1,469 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Get recent Pilot Reports (PIREPs) near an airport or within a bounding box. Returns decoded turbulence, icing, and cloud reports with altitude, aircraft type, intensity, outside air temperature, wind aloft, flight weather, and the raw PIREP string. Requires either station_id (ICAO center point for radial search, e.g., KSEA) or bbox (area search) \u2014 not both. distance_nm belongs to the station_id search only, and altitude_min_ft must not exceed altitude_max_ft. min_intensity restricts the result to reports carrying a turbulence or icing layer at that intensity or above. limit bounds how many reports come back without changing what is searched, keeping the most recent. Coverage is US-centric; PIREPs are sparse and absence of reports does not imply smooth conditions.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "altitude_max_ft": {
+    "description": "Filter by maximum altitude in feet MSL (e.g., 35000 for FL350), from 0 to 60000 ft \u2014 AWC searches no band below sea level, and none centred above FL600, which is already above the altitude any pilot report carries. Reports with an unknown altitude (altitude_ft null) cannot be shown to satisfy a bound and are dropped whenever either bound is set. Optional.",
+    "maximum": 60000,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "altitude_min_ft": {
+    "description": "Filter by minimum altitude in feet MSL (e.g., 18000 for FL180), from 0 to 60000 ft \u2014 AWC searches no band below sea level, and none centred above FL600, which is already above the altitude any pilot report carries. Reports with an unknown altitude (altitude_ft null) cannot be shown to satisfy a bound and are dropped whenever either bound is set. Optional.",
+    "maximum": 60000,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "bbox": {
+    "description": "Geographic bounding box for area PIREP search.",
+    "properties": {
+     "maxLat": {
+      "description": "Northern boundary latitude in decimal degrees.",
+      "maximum": 90,
+      "minimum": -90,
+      "type": "number"
+     },
+     "maxLon": {
+      "description": "Eastern boundary longitude in decimal degrees.",
+      "maximum": 180,
+      "minimum": -180,
+      "type": "number"
+     },
+     "minLat": {
+      "description": "Southern boundary latitude in decimal degrees.",
+      "maximum": 90,
+      "minimum": -90,
+      "type": "number"
+     },
+     "minLon": {
+      "description": "Western boundary longitude in decimal degrees.",
+      "maximum": 180,
+      "minimum": -180,
+      "type": "number"
+     }
+    },
+    "required": [
+     "minLat",
+     "minLon",
+     "maxLat",
+     "maxLon"
+    ],
+    "type": "object"
+   },
+   "distance_nm": {
+    "description": "Search radius in nautical miles around station_id, defaulting to 100 when omitted. Belongs to the station_id search only \u2014 supplying it alongside bbox is rejected.",
+    "maximum": 500,
+    "minimum": 10,
+    "type": "integer"
+   },
+   "hours": {
+    "default": 3,
+    "description": "How many hours of history to return. Default 3.",
+    "maximum": 12,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "limit": {
+    "description": "Maximum reports to return, applied last \u2014 after every filter and after ordering by observation time descending, so a limited result is the most recent reports rather than an arbitrary slice. It bounds the response without changing what is searched, which every other parameter does. Distinct from the 400-row upstream cap: a limited result examined every report it counted and withheld some, while a capped one never drew the rest. Selection is by recency alone, so pair it with min_intensity to bound a result by severity. Omit to return every match. Optional.",
+    "maximum": 400,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "min_intensity": {
+    "description": "Return only reports carrying at least one turbulence or icing layer at this intensity or above. The filter selects reports, not layers \u2014 a matching report still carries its lighter layers, so a result may include NEG, TRC, or LGT entries alongside the layer that matched. Optional.",
+    "enum": [
+     "lgt",
+     "mod",
+     "sev"
+    ],
+    "type": "string"
+   },
+   "station_id": {
+    "description": "ICAO station ID as center point for radial search \u2014 4 uppercase letters or digits (e.g., KSEA, K0S9). Use with distance_nm.",
+    "pattern": "^[A-Z0-9]{4}$",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "aviation_get_pireps",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "pireps",
+     "truncated",
+     "shown"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cap": {
+    "description": "The upstream row maximum that was applied to the page. Present only on a truncated result.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `no_pireps_found`: No pilot reports found in the search area and time window. `station_not_recognized`: AWC does not recognize station_id as a PIREP search center \u2014 a closed or retired airport, for example \u2014 and rejects the request. `missing_location`: Neither station_id nor bbox was provided. `conflicting_location`: Both station_id and bbox were provided. `invalid_bbox`: The bounding box is inverted \u2014 minLat > maxLat or minLon > maxLon. `conflicting_distance`: distance_nm was provided together with bbox, where a search radius has no meaning. `invalid_altitude_range`: altitude_min_ft is greater than altitude_max_ft, so no report can match both bounds. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "no_pireps_found",
+         "station_not_recognized",
+         "missing_location",
+         "conflicting_location",
+         "invalid_bbox",
+         "conflicting_distance",
+         "invalid_altitude_range"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "limited": {
+    "description": "True when the requested limit withheld reports that matched \u2014 the caller asked to see fewer of them. False affirms the limit did not bite, so every matching report is here. Present only when the call supplied a limit. It never states anything about the upstream cap: a limited result examined every report it counted, while a truncated one never drew the rest.",
+    "type": "boolean"
+   },
+   "matched": {
+    "description": "Reports that matched this query before the limit selected from them. Present only on a limited result. Where the result is also truncated this counts the capped page and not the search area \u2014 the reports the cap dropped were never examined, so no count can include them.",
+    "type": "number"
+   },
+   "notice": {
+    "description": "Guidance for whichever disclosures fired: the levers that narrow the query before the cap applies, what a requested limit withheld, and \u2014 on a result of more than 50 reports from a call that set no limit \u2014 that limit bounds the response without changing what is searched, keeping the most recent. The cap and either limit statement can fire on one result, and the text keeps them apart.",
+    "type": "string"
+   },
+   "pireps": {
+    "description": "Pilot reports matching the search criteria, ordered by observation time descending.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A single Pilot Report (PIREP) with decoded hazard information.",
+     "properties": {
+      "aircraft_type": {
+       "description": "Aircraft type designator (e.g., B737, C172), or null if not reported.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "altitude_ft": {
+       "description": "Reported altitude in feet MSL, or null when the raw flight-level group carries no usable altitude. That covers /FLUNKN/ and the during-climb and during-descent markers, and equally any other group AWC could not read \u2014 including one made only of digits, such as /FL2130/. A raw /FL000/ is a reported flight level of zero and returns 0.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "clouds": {
+       "anyOf": [
+        {
+         "items": {
+          "additionalProperties": false,
+          "description": "A cloud layer, whose base and top are each present only if reported.",
+          "properties": {
+           "base_ft": {
+            "description": "Cloud base altitude in feet MSL, or null if the pilot reported no base.",
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "cover": {
+            "description": "Cloud cover code: FEW, SCT, BKN, OVC, SKC, or CLR. SKC and CLR state a clear sky and never carry a base or top. The field also carries the flight-condition markers VMC and IMC, which describe the flight environment rather than a cloud layer and arrive with no base or top.",
+            "type": "string"
+           },
+           "top_ft": {
+            "description": "Cloud top altitude in feet MSL, or null if the pilot reported no top.",
+            "type": [
+             "number",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "cover",
+           "base_ft",
+           "top_ft"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Cloud layers, or null if the PIREP carried no sky-condition group."
+      },
+      "icing": {
+       "description": "Icing layers the raw report carried. An explicit negative report is a layer with intensity NEG; an empty array means the PIREP carried no icing group, so the pilot said nothing either way. Layers AWC synthesized for a report that never mentioned ice are omitted rather than published.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A reported icing layer.",
+        "properties": {
+         "base_ft": {
+          "description": "Icing layer base altitude in feet MSL, or null if not specified.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "intensity": {
+          "description": "Icing intensity (e.g., NEG, TRC, LGT, MOD, SEV).",
+          "type": "string"
+         },
+         "top_ft": {
+          "description": "Icing layer top altitude in feet MSL, or null if not specified.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "type": {
+          "description": "Icing type (e.g., RIME, MIXED, CLEAR), or null if not reported.",
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "base_ft",
+         "top_ft",
+         "intensity",
+         "type"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "lat": {
+       "description": "Latitude of the PIREP location in decimal degrees.",
+       "type": "number"
+      },
+      "lon": {
+       "description": "Longitude of the PIREP location in decimal degrees.",
+       "type": "number"
+      },
+      "observed_at": {
+       "description": "Observation time in ISO 8601 format (UTC).",
+       "type": "string"
+      },
+      "pirep_type": {
+       "description": "Report type: PIREP (pilot report) or AIREP (position report with wx).",
+       "type": "string"
+      },
+      "raw_pirep": {
+       "description": "Original encoded PIREP string (e.g., \"SEA UA /OV KSEA/TM 1530/FL080/TP B737/TB LGT\").",
+       "type": "string"
+      },
+      "temp_c": {
+       "description": "Outside air temperature in degrees Celsius at the report altitude, as AWC decoded it \u2014 the /TA group on a PIREP, the MS or PS temperature group on an AIREP. 0 is a real reading; null means the report carried none or gave it as unknown (/TA UNKN).",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "turbulence": {
+       "description": "Turbulence layers reported. An explicit negative report is a layer with intensity NEG; an empty array means the PIREP carried no turbulence group, so the pilot said nothing either way.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A reported turbulence layer.",
+        "properties": {
+         "base_ft": {
+          "description": "Turbulence layer base altitude in feet MSL, or null if not specified.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "frequency": {
+          "description": "Turbulence frequency (e.g., OCNL, CONT), or null if not reported.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "intensity": {
+          "description": "Turbulence intensity (e.g., NEG, LGT, LGT-MOD, MOD, SEV, EXTRM).",
+          "type": "string"
+         },
+         "top_ft": {
+          "description": "Turbulence layer top altitude in feet MSL, or null if not specified.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "type": {
+          "description": "Turbulence type (e.g., CHOP, CAT), or null if not reported.",
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "base_ft",
+         "top_ft",
+         "intensity",
+         "type",
+         "frequency"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "visibility_sm": {
+       "description": "In-flight visibility in statute miles, or null if not reported.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "weather": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "decoded": {
+           "description": "Plain-English reading of each group, joined with \"; \" (e.g., \"heavy rain\", \"fog; light rain\"). A group the decoder does not recognize is carried through as its own raw token, so compare against raw when a reading still looks coded.",
+           "type": "string"
+          },
+          "raw": {
+           "description": "Weather groups exactly as encoded, space-delimited (e.g., \"+RA\", \"FG -RA\").",
+           "type": "string"
+          }
+         },
+         "required": [
+          "raw",
+          "decoded"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Flight weather AWC decoded from the /WX group, or null when it decoded no weather phenomena from it. A flight visibility AWC can read (FV07SM, 10SM) lands in visibility_sm instead. /WX text AWC cannot decode is dropped or trimmed \u2014 CEILING 017 returns null and RA FL300 AOB returns RA alone \u2014 so raw_pirep is the only source for it. This is not the /RM remarks text, which AWC does not decode either \u2014 raw_pirep carries it."
+      },
+      "wind": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "direction_deg": {
+           "description": "Wind direction aloft in degrees, as reported and not converted. A PIREP /WV group is referenced to magnetic north (AIM TBL 7-1-18), unlike the true-north METAR and TAF winds, so apply the local magnetic variation before combining a PIREP's direction with a true track; an AIREP's reference is not stated here.",
+           "type": "number"
+          },
+          "speed_kt": {
+           "description": "Wind speed aloft in knots. 0 is a reported calm.",
+           "type": "number"
+          }
+         },
+         "required": [
+          "direction_deg",
+          "speed_kt"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Wind aloft at the report altitude, as AWC decoded it \u2014 the /WV group on a PIREP, the direction/speed group (e.g., 291/035KT) on an AIREP. Null unless AWC decoded both direction and speed. AWC leaves some forms undecoded \u2014 a gust suffix (/WV 03020G30), a single-digit AIREP speed (252/9 KT), a variation (/WV +/- 5KT) \u2014 and those return null here, with raw_pirep as the only source."
+      }
+     },
+     "required": [
+      "observed_at",
+      "lat",
+      "lon",
+      "altitude_ft",
+      "aircraft_type",
+      "pirep_type",
+      "turbulence",
+      "icing",
+      "clouds",
+      "visibility_sm",
+      "temp_c",
+      "wind",
+      "weather",
+      "raw_pirep"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "shown": {
+    "description": "Reports in this result, counted after any altitude filter and after any limit.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when the upstream page hit the AWC row cap, so reports inside the search area and time window are missing from this result. False affirms the whole window was searched, which a count alone cannot establish.",
+    "type": "boolean"
+   },
+   "upstreamRows": {
+    "description": "Reports AWC returned before the altitude filter ran. Present only on a truncated result the filter then narrowed, where the remaining count sits below the cap and so cannot reveal the truncation on its own.",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Get Pilot Reports (PIREPs)"
+}

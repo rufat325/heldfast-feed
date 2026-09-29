@@ -1,0 +1,265 @@
+{
+ "description": "Record a signed delivery claim after an x402 capacity settlement (gpu-hours, storage, api-credits, or bandwidth). The buyer agent calls this AFTER paying, once it knows whether what was promised actually arrived. The claim's schema and signature (must recover to buyerAddress) are validated before it is written to the append-only ledger. This is a factual receipt, not a reputation score \u2014 see get_delivery_history for how other agents read it back. OPTIONAL priorClaimId: set it to the claimId of your (this buyer's) previous claim about the SAME sellerAddress, so your claims about that seller form a chain. It is optional and omitted on your first claim about a seller. Chaining lets a reader later detect a host that hides one of your middle claims; it is signed into the claim so a host cannot strip it. See DECISIONS.md D-006.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "assetType": {
+    "description": "What kind of capacity this claim is about",
+    "enum": [
+     "gpu-hours",
+     "storage",
+     "api-credits",
+     "bandwidth"
+    ],
+    "type": "string"
+   },
+   "buyerAddress": {
+    "description": "0x address of the paying agent \u2014 must match the address recovered from `signature`",
+    "pattern": "^0x[0-9a-fA-F]{40}$",
+    "type": "string"
+   },
+   "claimId": {
+    "description": "Content-addressed id: sha256 of the canonical JSON of this claim's content fields \u2014 see computeClaimId()",
+    "pattern": "^0x[0-9a-fA-F]{64}$",
+    "type": "string"
+   },
+   "delivered": {
+    "description": "Whether what was promised actually arrived",
+    "enum": [
+     "yes",
+     "no",
+     "partial"
+    ],
+    "type": "string"
+   },
+   "evidenceHash": {
+    "description": "sha256 hex digest of evidence for this claim (logs, response payload, etc.) \u2014 the evidence itself is not stored here",
+    "pattern": "^[0-9a-fA-F]{64}$",
+    "type": "string"
+   },
+   "externalRefs": {
+    "additionalProperties": false,
+    "description": "Optional, unverified pointers into other agent-economy infrastructure (identity, authority, intent, dispute). Tokenizen never resolves or trusts these \u2014 they are citations, not verified facts",
+    "properties": {
+     "buyerAgentRef": {
+      "description": "Unverified pointer to an external agent-identity record for the buyer. Tokenizen does not resolve or verify this",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+     },
+     "disputeContext": {
+      "additionalProperties": false,
+      "description": "Present only if buyer and seller had already agreed to external dispute terms at settlement time. Makes a delivered:no claim usable as evidence in that external protocol instead of Tokenizen adjudicating anything itself",
+      "properties": {
+       "protocol": {
+        "description": "Short label for the external dispute/liability protocol this claim can be evidence for, e.g. \"LCP\"",
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+       },
+       "resolutionRef": {
+        "description": "Optional pointer to a resolution/case record in the external protocol named by `protocol`, once one exists",
+        "maxLength": 512,
+        "minLength": 1,
+        "type": "string"
+       },
+       "termsHash": {
+        "description": "sha256 of the governing terms both parties accepted at settlement time \u2014 the terms themselves are not stored here",
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+       }
+      },
+      "required": [
+       "protocol",
+       "termsHash"
+      ],
+      "type": "object"
+     },
+     "intentRef": {
+      "description": "Unverified pointer to an externally issued, pre-signed intent object (e.g. an AP2 IntentMandate) describing what the buyer's principal originally asked for",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+     },
+     "mandateIssuerDid": {
+      "description": "DID of the principal who is claimed to have issued the mandate referenced by `mandateRef`. Not verified against the mandate itself",
+      "maxLength": 512,
+      "pattern": "^did:[a-z0-9]+:[A-Za-z0-9._:%-]+$",
+      "type": "string"
+     },
+     "mandateRef": {
+      "description": "Unverified pointer to an externally issued authority/mandate object (e.g. an AP2 Payment/Cart Mandate) that the buyer claims covers this delivery. Tokenizen does not check scope, budget, or validity against it",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+     },
+     "sellerAgentRef": {
+      "description": "Unverified pointer to an external agent-identity record for the seller (e.g. an ERC-8004 agent id or a DID). Tokenizen does not resolve or verify this",
+      "maxLength": 512,
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "measured": {
+    "additionalProperties": false,
+    "description": "Optional quantitative record of how much was promised and how much was measured. Presence is the version marker; absence is the only encoding of 'not measured'",
+    "properties": {
+     "basis": {
+      "description": "Does the number count what the seller made available (`supplied`) or what the buyer actually drew (`consumed`)",
+      "enum": [
+       "supplied",
+       "consumed"
+      ],
+      "type": "string"
+     },
+     "deliveredAmount": {
+      "description": "How much was measured, as a canonical decimal string",
+      "pattern": "^(0|[1-9][0-9]{0,29})(\\.[0-9]{0,17}[1-9])?$",
+      "type": "string"
+     },
+     "method": {
+      "additionalProperties": false,
+      "description": "How the number was obtained",
+      "properties": {
+       "attribution": {
+        "description": "WHO produced the number \u2014 provenance only, never a quality or trust signal",
+        "enum": [
+         "buyer",
+         "seller",
+         "third-party",
+         "undisclosed"
+        ],
+        "type": "string"
+       },
+       "instrument": {
+        "description": "Free text about the measuring instrument, e.g. \"nvidia-smi accounting, 10s polling\"",
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+       },
+       "readingsHash": {
+        "description": "sha256 of the raw meter dump \u2014 the dump itself is not stored. Separate from evidenceHash, which is about delivery evidence",
+        "pattern": "^[0-9a-f]{64}$",
+        "type": "string"
+       }
+      },
+      "required": [
+       "attribution",
+       "instrument"
+      ],
+      "type": "object"
+     },
+     "period": {
+      "additionalProperties": false,
+      "description": "The closed window this measurement covers",
+      "properties": {
+       "end": {
+        "description": "End of the closed measurement window, canonical UTC instant",
+        "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$",
+        "type": "string"
+       },
+       "start": {
+        "description": "Start of the closed measurement window, canonical UTC instant",
+        "pattern": "^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])T([01][0-9]|2[0-3]):[0-5][0-9]:[0-5][0-9]Z$",
+        "type": "string"
+       }
+      },
+      "required": [
+       "start",
+       "end"
+      ],
+      "type": "object"
+     },
+     "promisedAmount": {
+      "description": "How much was promised, as a canonical decimal string",
+      "pattern": "^(0|[1-9][0-9]{0,29})(\\.[0-9]{0,17}[1-9])?$",
+      "type": "string"
+     },
+     "unit": {
+      "description": "Unit of the quantities below \u2014 must be in this assetType's row of UNITS_BY_ASSET_TYPE",
+      "enum": [
+       "gpu-second",
+       "byte",
+       "byte-second",
+       "call",
+       "token",
+       "credit"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "unit",
+     "basis",
+     "promisedAmount",
+     "deliveredAmount",
+     "period",
+     "method"
+    ],
+    "type": "object"
+   },
+   "priorClaimId": {
+    "description": "Optional chain link: the claimId of this buyer's immediately previous claim about the SAME sellerAddress. Omitted on a buyer's first claim about a seller. Lets a reader detect a host that hides a middle claim \u2014 see analyzeCompleteness and DECISIONS.md D-006",
+    "pattern": "^0x[0-9a-fA-F]{64}$",
+    "type": "string"
+   },
+   "promisedSpec": {
+    "anyOf": [
+     {
+      "maxLength": 4000,
+      "minLength": 1,
+      "type": "string"
+     },
+     {
+      "additionalProperties": {},
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     }
+    ],
+    "description": "What the seller promised to deliver \u2014 free text or a structured object"
+   },
+   "sellerAddress": {
+    "description": "0x address of the agent/service that was paid and was supposed to deliver",
+    "pattern": "^0x[0-9a-fA-F]{40}$",
+    "type": "string"
+   },
+   "settlementRef": {
+    "description": "x402 payment reference or on-chain tx hash for the settlement this claim is about",
+    "maxLength": 512,
+    "minLength": 1,
+    "type": "string"
+   },
+   "signature": {
+    "description": "Buyer's EIP-191 personal-sign signature over claimId",
+    "pattern": "^0x[0-9a-fA-F]{130}$",
+    "type": "string"
+   },
+   "timestamp": {
+    "description": "ISO-8601 timestamp of when this claim was made",
+    "type": "string"
+   }
+  },
+  "required": [
+   "sellerAddress",
+   "buyerAddress",
+   "assetType",
+   "promisedSpec",
+   "delivered",
+   "evidenceHash",
+   "settlementRef",
+   "timestamp",
+   "claimId",
+   "signature"
+  ],
+  "type": "object"
+ },
+ "name": "record_delivery",
+ "title": "Record a delivery claim"
+}

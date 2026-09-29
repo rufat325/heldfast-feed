@@ -1,0 +1,484 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false,
+  "title": "Audit a trade log for contradictions"
+ },
+ "description": "Use this when you have a raw fill or trade log and want it scanned\nfor internal contradictions -- look-ahead timestamps, pnl that\ndisagrees with the row's own prices, duplicate or out-of-order fills.\nInterrogate a raw fill log for internal contradictions -- no\ncandles needed.\n\nassay_preflight lints shape, assay_reproduce audits arithmetic\nagainst candles; this tool needs nothing but the log itself and asks\nwhether it is internally consistent: exact duplicate fills (double\ncounting inflates every headline number: tradelog_duplicate_fills),\ntime travel (exits before entries, decisions stamped AFTER the entry\nthey supposedly caused: tradelog_time_travel -- the anatomy of a\nlook-ahead), PnL or return_pct contradicting the row's own prices\n(tradelog_pnl_inconsistent), naive/unparseable/future timestamps\n(tradelog_timestamps_invalid -- ambiguous clocks are the top source\nof fake edges), and fills booked outside the declared calendar\n(tradelog_outside_calendar, e.g. weekend fills under\ntrading_calendar='weekdays'). Checks run only where fields exist and\nthe report SAYS which ran (checks_run) -- an absent field is\nuntestable, never innocent. Demote-only: a defect-free log earns\n'conditional', because internal consistency is NOT evidence of an\nedge. Code-computed; no ledger write; structurally invalid input is\nrefunded. NOT financial advice. Price: per check; see\nhttps://api.alphaassay.com/v1/meta/pricing (api_key required -- account\nsetup at https://api.alphaassay.com/account).",
+ "inputSchema": {
+  "$defs": {
+   "JsonValue": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "maximum": 1000000000000000,
+      "minimum": -1000000000000000,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     {
+      "maximum": 1000000000000000,
+      "minimum": -1000000000000000,
+      "type": "number"
+     },
+     {
+      "maxLength": 262144,
+      "type": "string",
+      "x-maxUtf8Bytes": 262144
+     },
+     {
+      "items": {
+       "$ref": "#/$defs/JsonValue"
+      },
+      "maxItems": 10000,
+      "type": "array"
+     },
+     {
+      "additionalProperties": {
+       "$ref": "#/$defs/JsonValue"
+      },
+      "maxProperties": 256,
+      "propertyNames": {
+       "maxLength": 256,
+       "x-maxUtf8Bytes": 256
+      },
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "x-maxDepth": 16,
+    "x-maxNodes": 10000
+   },
+   "TradeLogRow": {
+    "additionalProperties": false,
+    "properties": {
+     "decision_time": {
+      "$ref": "#/$defs/JsonValue",
+      "default": null
+     },
+     "entry_price": {
+      "$ref": "#/$defs/JsonValue",
+      "default": null
+     },
+     "entry_time": {
+      "$ref": "#/$defs/JsonValue",
+      "default": null
+     },
+     "exit_price": {
+      "$ref": "#/$defs/JsonValue",
+      "default": null
+     },
+     "exit_time": {
+      "$ref": "#/$defs/JsonValue",
+      "default": null
+     },
+     "pnl": {
+      "$ref": "#/$defs/JsonValue",
+      "default": null
+     },
+     "return_pct": {
+      "$ref": "#/$defs/JsonValue",
+      "default": null
+     },
+     "side": {
+      "anyOf": [
+       {
+        "enum": [
+         "long",
+         "short"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "symbol": {
+      "anyOf": [
+       {
+        "maxLength": 64,
+        "minLength": 1,
+        "pattern": "^\\S+$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "type": "object"
+   }
+  },
+  "additionalProperties": false,
+  "allOf": [
+   {
+    "properties": {
+     "trades": {
+      "not": {
+       "type": "null"
+      }
+     }
+    },
+    "required": [
+     "trades"
+    ]
+   }
+  ],
+  "properties": {
+   "api_key": {
+    "default": "",
+    "description": "API key for a paid MCP check. Hosted Streamable HTTP clients should send it in the Authorization: Bearer transport header so the model never sees the secret; local stdio callers may supply the raw key in this tool argument without a Bearer prefix. Create an account at https://api.alphaassay.com/account; the current free allowance and prices are published at https://api.alphaassay.com/v1/meta/pricing. Paid MCP calls use API-key credits; x402 buys only the separate REST POST /x402/v1/gauntlet and is not MCP billing.",
+    "maxLength": 512,
+    "type": "string"
+   },
+   "request_id": {
+    "anyOf": [
+     {
+      "maxLength": 256,
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Optional idempotency key for this paid execution. Retry the same request_id with the same payload to replay one stored result without another charge; reuse with a different payload returns idempotency_conflict."
+   },
+   "trades": {
+    "anyOf": [
+     {
+      "items": {
+       "$ref": "#/$defs/TradeLogRow"
+      },
+      "maxItems": 10000,
+      "minItems": 1,
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Raw trade/fill rows to scan for defects: look-ahead timestamps, pnl or return contradicting the row's own prices, duplicate or out-of-order fills."
+   },
+   "trading_calendar": {
+    "default": "24/7",
+    "description": "Supported market-calendar literal: '24/7' for continuous markets or 'weekdays' for a Monday-Friday calendar.",
+    "enum": [
+     "24/7",
+     "weekdays"
+    ],
+    "type": "string"
+   }
+  },
+  "type": "object",
+  "x-maxBodyBytes": 5242880
+ },
+ "name": "assay_tradelog",
+ "outputSchema": {
+  "$defs": {
+   "PublicMeta": {
+    "additionalProperties": false,
+    "properties": {
+     "api_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "as_of": {
+      "format": "date-time",
+      "maxLength": 20,
+      "minLength": 20,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "type": "string"
+     },
+     "disclaimer": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "engine_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "input_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+     },
+     "not_financial_advice": {
+      "const": true,
+      "type": "boolean"
+     },
+     "operation": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "request_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+     },
+     "request_id": {
+      "anyOf": [
+       {
+        "maxLength": 256,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "source_identity_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+     },
+     "statefulness": {
+      "enum": [
+       "pure",
+       "public_read",
+       "tenant_read",
+       "tenant_write"
+      ],
+      "type": "string"
+     },
+     "tenant_scope": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "tenant_scope_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "engine_version",
+     "api_version",
+     "as_of",
+     "input_digest",
+     "request_digest",
+     "tenant_scope",
+     "tenant_scope_version",
+     "request_id",
+     "source_identity_digest",
+     "operation",
+     "statefulness",
+     "not_financial_advice",
+     "disclaimer"
+    ],
+    "type": "object",
+    "x-relations": [
+     "as_of is a real UTC RFC3339 second"
+    ]
+   },
+   "TradelogChecksRun": {
+    "additionalProperties": false,
+    "properties": {
+     "calendar": {
+      "type": "boolean"
+     },
+     "duplicates": {
+      "type": "boolean"
+     },
+     "pnl_consistency": {
+      "type": "boolean"
+     },
+     "time_travel": {
+      "type": "boolean"
+     },
+     "timestamps": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "timestamps",
+     "time_travel",
+     "duplicates",
+     "pnl_consistency",
+     "calendar"
+    ],
+    "type": "object"
+   },
+   "TradelogDefect": {
+    "additionalProperties": false,
+    "properties": {
+     "code": {
+      "enum": [
+       "tradelog_duplicate_fills",
+       "tradelog_time_travel",
+       "tradelog_pnl_inconsistent",
+       "tradelog_timestamps_invalid",
+       "tradelog_outside_calendar"
+      ],
+      "type": "string"
+     },
+     "detail": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "n_rows": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "rows": {
+      "items": {
+       "maximum": 9223372036854775807,
+       "minimum": 0,
+       "type": "integer",
+       "x-strictJsonInteger": true
+      },
+      "maxItems": 10000,
+      "type": "array"
+     },
+     "severity": {
+      "const": "hard_fail",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "severity",
+     "rows",
+     "n_rows",
+     "detail"
+    ],
+    "type": "object"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "result": {
+    "additionalProperties": false,
+    "properties": {
+     "_meta": {
+      "$ref": "#/$defs/PublicMeta"
+     },
+     "checks_run": {
+      "$ref": "#/$defs/TradelogChecksRun"
+     },
+     "defects": {
+      "items": {
+       "$ref": "#/$defs/TradelogDefect"
+      },
+      "maxItems": 10000,
+      "type": "array"
+     },
+     "died_at": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "died_at_plain": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "disclaimer": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "failure_codes": {
+      "items": {
+       "maxLength": 2000,
+       "type": "string"
+      },
+      "maxItems": 10000,
+      "type": "array"
+     },
+     "framing": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "n_trades": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "note": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "schema": {
+      "const": "tradelog.v1",
+      "type": "string"
+     },
+     "trading_calendar": {
+      "enum": [
+       "24/7",
+       "weekdays"
+      ],
+      "type": "string"
+     },
+     "verdict": {
+      "enum": [
+       "conditional",
+       "fail",
+       "insufficient_evidence"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "_meta",
+     "schema",
+     "verdict",
+     "checks_run",
+     "defects",
+     "failure_codes",
+     "framing",
+     "n_trades",
+     "trading_calendar",
+     "disclaimer",
+     "died_at",
+     "died_at_plain"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "result"
+  ],
+  "type": "object"
+ },
+ "title": "Audit a trade log for contradictions"
+}

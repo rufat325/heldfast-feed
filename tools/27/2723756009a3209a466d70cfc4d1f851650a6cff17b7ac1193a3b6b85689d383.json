@@ -1,0 +1,192 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Run a single-statement SELECT against the df_<id> dataframes staged by ilostat_query_indicator and ilostat_compare_geographies or stored by an earlier register_as. Inspect a dataframe with ilostat_dataframe_describe first; its column schema is what the SQL has to match. Read-only: writes, DDL, DROP, COPY, PRAGMA, ATTACH, and file-reading table functions are rejected, and system catalogs (information_schema, pg_catalog, sqlite_master, duckdb_*) are denied. Breakdown versions overlap (AGE_YTHADULT_*, AGE_AGGREGATE_*, AGE_10YRBANDS_*), so filter to one version before summing. Optional register_as stores the result as a new dataframe with a fresh TTL.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "preview": {
+    "description": "Rows returned inline; defaults to row_limit. Set lower when register_as keeps the full result.",
+    "maximum": 10000,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "register_as": {
+    "description": "Store the result as a new dataframe under this name (df_XXXXX_XXXXX: letters and digits, five in each part; stored uppercased after df_) with a fresh TTL, to chain analyses. A result over 1,000,000 rows is refused, and storing one can evict the oldest dataframes, which evicted names.",
+    "pattern": "^df_[A-Z0-9]{5}_[A-Z0-9]{5}$",
+    "type": "string"
+   },
+   "row_limit": {
+    "default": 1000,
+    "description": "Hard cap on rows materialized (1\u201310,000). A query matching more stops at the cap and row_count_capped is true; register_as keeps the full result.",
+    "maximum": 10000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "sql": {
+    "description": "One SELECT over df_<id> tables (DuckDB SQL: joins, aggregates, window functions, CTEs), at most 20,000 characters. BIGINT results such as COUNT or SUM of integers serialize as strings; CAST to DOUBLE for inline arithmetic.",
+    "maxLength": 20000,
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "sql"
+  ],
+  "type": "object"
+ },
+ "name": "ilostat_dataframe_query",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "columns",
+     "row_count",
+     "row_count_capped",
+     "rows",
+     "truncated",
+     "shown",
+     "cap"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cap": {
+    "description": "The row cap that bound: preview when lower than row_limit, else row_limit.",
+    "type": "number"
+   },
+   "columns": {
+    "description": "Column names in projection order.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `canvas_unavailable`: The DataCanvas DuckDB engine cannot load in this deployment. `system_catalog_access`: The SQL references a system catalog. `missing_table`: A referenced df_<id> does not exist or has expired. `invalid_sql`: The SELECT fails to prepare: an unknown column or an invalid expression. `sql_execution_error`: The SELECT prepared but failed on the data. `register_as_clash`: register_as names an existing dataframe. `register_as_too_large`: The register_as result holds more than 1,000,000 rows. `non_select_statement`: The SQL is not a SELECT. `multi_statement`: The SQL holds more than one statement, or a PIVOT with no IN list, which DuckDB expands into several. `denied_function`: The SQL calls a file-reading or external table function. `plan_operator_not_allowed`: The plan uses an operator outside the read-only allowlist, such as range(). Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "canvas_unavailable",
+         "system_catalog_access",
+         "missing_table",
+         "invalid_sql",
+         "sql_execution_error",
+         "register_as_clash",
+         "register_as_too_large",
+         "non_select_statement",
+         "multi_statement",
+         "denied_function",
+         "plan_operator_not_allowed"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "evicted": {
+    "description": "Dataframes dropped, oldest first, to keep this tenant within 1,000,000 staged rows and 100 dataframes; present only when storing the result evicted any.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "expires_at": {
+    "description": "ISO 8601 expiry of the new dataframe.",
+    "type": "string"
+   },
+   "notice": {
+    "description": "Guidance when the query returned no rows or a cap withheld some.",
+    "type": "string"
+   },
+   "registered_as": {
+    "description": "The new dataframe name, when register_as stored the result.",
+    "type": "string"
+   },
+   "row_count": {
+    "description": "Rows the query produced. With register_as this is the exact count of the stored dataframe, which row_limit does not bound; otherwise at most row_limit, and when row_count_capped is true it is the cap, not a total.",
+    "type": "number"
+   },
+   "row_count_capped": {
+    "description": "True when the query matched more rows than row_limit; never true with register_as, which stores every row.",
+    "type": "boolean"
+   },
+   "rows": {
+    "description": "Result rows keyed by the names in columns, bounded by preview and row_limit; BIGINT values arrive as strings.",
+    "items": {
+     "additionalProperties": {},
+     "propertyNames": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "shown": {
+    "description": "Rows returned inline.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when a cap withheld rows from this response.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Query staged ILOSTAT dataframes"
+}

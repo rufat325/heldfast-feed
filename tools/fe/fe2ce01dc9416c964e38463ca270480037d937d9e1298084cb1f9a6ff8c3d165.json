@@ -1,0 +1,159 @@
+{
+ "description": "Manage Datadog monitors. Actions: list, get, search, create, update, delete, mute, unmute, top, history, preview, test_notification.\nFilters: name, tags, groupStates (alert/warn/ok/no data).\nget/create/update return the full options object so callers can safely read-then-patch.\n\ncreate/update accept a config object validated against a typed schema covering the documented Datadog Monitor fields:\n  - Top-level: name, type, query, message, tags, priority (1-5, nullable), restrictedRoles, multi, options.\n  - options.* validated keys grouped by category:\n    - notification:    notifyNoData, noDataTimeframe, notifyAudit, notificationPresetName.\n    - evaluation/delay: newHostDelay, newGroupDelay, evaluationDelay, requireFullWindow, onMissingData.\n    - renotification:  renotifyInterval (nullable), renotifyOccurrences, renotifyStatuses, escalationMessage.\n    - lifecycle:       timeoutH (nullable), includeTags, locked, silenced (record of timestamps/null), groupRetentionDuration.\n    - thresholds:      thresholds (critical/warning/ok/criticalRecovery/warningRecovery/unknown), thresholdWindows.\n    - scheduling:      schedulingOptions.\nUnknown keys (top-level or under options) are forwarded to Datadog as-is and surfaced via an optional warnings array on the response, so the schema does not lag the API.\nsnake_case aliases are accepted on input and normalized to camelCase before validation.\nValidation errors short-circuit before any HTTP call and surface as 'EINVALID_MONITOR_CONFIG: <path>: <expected>'.\nReference: https://docs.datadoghq.com/api/latest/monitors/\n\ntop: Ranked monitors by alert frequency with real monitor names and context breakdown.\n  - Returns: {rank, monitor_id, name (with {{template.vars}}), message (template), total_count, by_context}\n  - Perfect for weekly/daily alert reports\n  - Gets real monitor names from monitors API (not event titles)\n  - WARNING: total_count is the raw alert-event count and INCLUDES renotifies/re-evaluations.\n    For monitors stuck in Alert state, Datadog emits a renotify event every renotify_interval\n    minutes, which inflates this count well beyond the number of real fires. When the question\n    is \"how many times did this monitor actually fire\", use action=history instead.\n\nhistory: Count and list real state transitions for one monitor over a time window.\n  - Inputs: id (required, monitor ID), from/to (optional time range), transitionType (optional\n    filter, defaults to [\"alert\",\"alert recovery\"]), group (optional multi-alert group filter).\n  - Returns: {transitions: [{timestamp, monitorId, monitorName, group, fromState, toState,\n    transitionType, eventId}], count, meta}\n  - count = transitions.length \u2014 the number of REAL state changes (fires + recoveries by\n    default), NOT the renotify-inflated count returned by action=top or events action=search.\n  - Backed by Datadog v2 events search with a hardcoded source:alert + @monitor.transition.\n    transition_type filter that excludes renotifies by default. To include renotifies, pass\n    transitionType including \"renotify\".\n\npreview: Render a Datadog monitor message template against a context (read-only safe).\n  - Inputs: either inline 'message' OR 'monitor_id' (or existing 'id'); plus optional 'context' { variables, conditionals }.\n  - Supported syntax: {{variable.name}} substitution and conditional blocks {{#name}}...{{/name}} / {{^name}}...{{/name}}\n    where name is one of: is_alert, is_warning, is_no_data, is_recovery, is_alert_to_warning, is_warning_to_alert.\n  - Also supports Datadog tag conditionals {{#is_match \"tag\" \"val\" ...}} (substring) and\n    {{#is_exact_match \"tag\" \"val\" ...}} (exact), plus their {{^...}} negations. The tag is resolved\n    against context.variables; multiple comparison values are OR'd; comparison is case-sensitive.\n    Evaluated tag conditionals are reported in 'tagConditionalsResolved'.\n  - Missing variables render as {{undefined:name}} markers and are reported in 'variablesMissing'.\n  - Loops ({{#each ...}}) and partials ({{> ...}}) return EUNSUPPORTED_TEMPLATE_SYNTAX.\n  - Allowed under --read-only (no mutation; at most a getMonitor load).\n\ntest_notification: KNOWN LIMITATION \u2014 always returns ENOT_SUPPORTED.\n  - Datadog's public REST API exposes no monitor test-notification endpoint at v1 or v2\n    (audited against the official OpenAPI specs). The v1 SDK has no notifyMonitor / testMonitor method.\n  - Allowed under --read-only because no Datadog HTTP call is attempted.\n  - If Datadog publishes such an endpoint in future, this action will be reimplemented to invoke it.\n  - Workaround: use the 'Test Notifications' button in the Datadog monitor UI.\n\nFor generic event grouping (deployments, configs), use events tool instead. Note that the\nevents tool's action=search with source:alert ALSO includes renotifies; use its\ntransitionType filter (or this action=history) for fires-only counts.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "action": {
+    "description": "Action to perform",
+    "enum": [
+     "list",
+     "get",
+     "search",
+     "create",
+     "update",
+     "delete",
+     "mute",
+     "unmute",
+     "top",
+     "history",
+     "preview",
+     "test_notification"
+    ],
+    "type": "string"
+   },
+   "config": {
+    "additionalProperties": {},
+    "description": "Monitor configuration (for create/update)",
+    "type": "object"
+   },
+   "context": {
+    "additionalProperties": false,
+    "description": "Substitution context for monitors.preview (variables + conditionals).",
+    "properties": {
+     "conditionals": {
+      "additionalProperties": {
+       "type": "boolean"
+      },
+      "propertyNames": {
+       "enum": [
+        "is_alert",
+        "is_warning",
+        "is_no_data",
+        "is_recovery",
+        "is_alert_to_warning",
+        "is_warning_to_alert"
+       ]
+      },
+      "type": "object"
+     },
+     "variables": {
+      "additionalProperties": {},
+      "type": "object"
+     }
+    },
+    "type": "object"
+   },
+   "contextTags": {
+    "description": "Tag prefixes for context breakdown in top action (default: queue, service, ingress, pod_name, kube_namespace, kube_container_name)",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "dry_run": {
+    "description": "When create + dry_run=true, validate the monitor body via POST /api/v1/monitor/validate without creating it. Allowed under --read-only because no monitor is created. Returns { valid, dryRun, monitor }. 400 responses surface verbatim like a failed create.",
+    "type": "boolean"
+   },
+   "end": {
+    "description": "Mute end timestamp (for mute action)",
+    "type": "number"
+   },
+   "from": {
+    "description": "Start time (ISO 8601, relative like \"1h\", or Unix timestamp)",
+    "type": "string"
+   },
+   "group": {
+    "description": "For history action: filter transitions to a specific multi-alert monitor group (e.g., \"pod_name:foo,kube_namespace:bar\"). Optional; omit for all groups.",
+    "type": "string"
+   },
+   "groupStates": {
+    "description": "Filter multi-alert monitors by group states (e.g., alert by host). Does NOT filter by overall monitor status. Values: alert, warn, no data, ok",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "id": {
+    "description": "Monitor ID (required for get/update/delete/mute/unmute)",
+    "type": "string"
+   },
+   "limit": {
+    "description": "Maximum number of monitors to return (default: 50)",
+    "minimum": 1,
+    "type": "number"
+   },
+   "maxEvents": {
+    "description": "Maximum events to fetch for top action (default: 5000, max: 5000)",
+    "maximum": 5000,
+    "minimum": 1,
+    "type": "number"
+   },
+   "message": {
+    "description": "Mute message (for mute action) OR inline template source for the preview action. For preview, supply either this inline string or `monitor_id` (or the existing `id` field) so the action can load the monitor message via getMonitor.",
+    "type": "string"
+   },
+   "monitor_id": {
+    "description": "Numeric monitor ID used by the preview action when no inline `message` is supplied. Equivalent to passing the existing `id` field as a numeric string.",
+    "type": "number"
+   },
+   "name": {
+    "description": "Filter by name (for list action)",
+    "type": "string"
+   },
+   "query": {
+    "description": "Search query (for search action)",
+    "type": "string"
+   },
+   "tags": {
+    "description": "Filter by tags",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "timezone": {
+    "description": "Optional IANA timezone (e.g. \"UTC\", \"Europe/Paris\"). When supplied on get/list, the response adds sibling createdLocal/modifiedLocal ISO 8601 strings next to created/modified. Omit for byte-identical legacy shape. Invalid zones return EINVALID_TIMEZONE.",
+    "type": "string"
+   },
+   "to": {
+    "description": "End time (ISO 8601, relative like \"1h\", or Unix timestamp)",
+    "type": "string"
+   },
+   "transitionType": {
+    "description": "For history action: filter by monitor state transition types. Default: [\"alert\",\"alert recovery\"] (real fires + recoveries, excludes renotifies). Pass [\"alert\"] for fires only, or include \"renotify\" for full chronological audit.",
+    "items": {
+     "enum": [
+      "alert",
+      "alert recovery",
+      "warning",
+      "warning recovery",
+      "no data",
+      "no data recovery",
+      "renotify"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "action"
+  ],
+  "type": "object"
+ },
+ "name": "monitors"
+}

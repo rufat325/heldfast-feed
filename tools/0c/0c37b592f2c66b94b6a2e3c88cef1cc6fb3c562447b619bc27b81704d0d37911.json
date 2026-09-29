@@ -1,0 +1,212 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Resolve human terms to the opaque integer codes faostat_query_observations needs, within a dimension: areas (countries/regions), items (commodities), or elements (metrics like production, yield, import quantity). Pass `query` for fuzzy full-text matching (\"maize\" \u2192 item 56), `name_contains` for a substring filter, or `code` for an exact-code lookup; omit all three to list the whole dimension. Item and element results are scoped to the requested domain \u2014 only codes present in that domain's cube are returned, so a resolved code is always queryable there (areas are shared across domains). Page large listings with `offset` + `limit`: when the response reports `truncated`, pass the returned `nextOffset` to fetch the next page. Every area match is flagged `country` or `aggregate` \u2014 aggregates (World, continents, economic groupings \u2014 codes \u2265 5000 plus a few curated sub-threshold roll-ups such as China=351, which sums mainland + Taiwan + Hong Kong + Macao) double-count if summed with their member countries, so resolve before querying and exclude aggregates unless you want the regional roll-up.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "code": {
+    "description": "Exact code lookup. Takes precedence over `query`/`name_contains` when provided.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "dimension": {
+    "description": "Which dimension to resolve: \"area\" (countries/regions), \"item\" (commodities), or \"element\" (metrics).",
+    "enum": [
+     "area",
+     "item",
+     "element"
+    ],
+    "type": "string"
+   },
+   "domain": {
+    "description": "FAOSTAT domain code (e.g. \"QCL\"). Item and element resolution is scoped to the codes present in this domain's data; area code lists are shared across all indexed domains.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "limit": {
+    "default": 50,
+    "description": "Maximum matches to return (max 200).",
+    "maximum": 200,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "name_contains": {
+    "description": "Case-insensitive substring filter over the label. Used only when `query` is omitted.",
+    "type": "string"
+   },
+   "offset": {
+    "default": 0,
+    "description": "Zero-based pagination offset into the match set. When the response reports truncated, pass the returned nextOffset here to fetch the next page. Ignored for exact-code lookups (always single-page).",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "query": {
+    "description": "Full-text search term, FTS5-matched against the dimension labels with prefix matching (e.g. \"wheat\", \"import quantity\"). Relevance-ranked.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "domain",
+   "dimension"
+  ],
+  "type": "object"
+ },
+ "name": "faostat_resolve_codes",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "domain",
+     "dimension",
+     "matches",
+     "totalMatches",
+     "truncated"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "dimension": {
+    "description": "The dimension resolved.",
+    "type": "string"
+   },
+   "domain": {
+    "description": "The domain code echoed back.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `unknown_domain`: The domain code is not a selected (indexed) FAOSTAT domain. `index_not_ready`: The dimension tables are not yet populated (mirror has never completed a sync). Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "unknown_domain",
+         "index_not_ready"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "matches": {
+    "description": "Matching codes, relevance-ranked for query mode, else by code.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One resolved code match.",
+     "properties": {
+      "code": {
+       "description": "The opaque integer code to pass into faostat_query_observations.",
+       "type": "number"
+      },
+      "cpc_code": {
+       "description": "CPC crosswalk code for items (apostrophe stripped), when available.",
+       "type": "string"
+      },
+      "kind": {
+       "anyOf": [
+        {
+         "enum": [
+          "country",
+          "aggregate"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "For areas: \"country\" (individual nation) or \"aggregate\" (region/grouping; excluded from sums by default). Null for items/elements."
+      },
+      "name": {
+       "description": "Human-readable label.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "code",
+      "name",
+      "kind"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "nextOffset": {
+    "description": "Offset to pass on the next call to fetch the following page. Present only when truncated is true; absent on the last page and for exact-code lookups.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "notice": {
+    "description": "Guidance when nothing matched, more pages remain, or the dimension is not yet indexed.",
+    "type": "string"
+   },
+   "totalMatches": {
+    "description": "Total matches in this domain before the result cap.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when more matches remain beyond the returned page \u2014 fetch them with nextOffset.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "faostat-mcp-server: resolve codes"
+}

@@ -1,0 +1,186 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Fetch observations from an OECD dataflow filtered by a dimension key and optional time range. Returns decoded rows (one per observation) with dimension and attribute labels, and values already scaled by the observation unit multiplier. Large multi-country time-series spill to a DataCanvas table \u2014 follow up with oecd_dataframe_query; without DataCanvas every row still comes back, but the rendered table stops at a preview slice. Call oecd_get_dataset_info first to learn the dimension order for constructing the key.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "canvas_id": {
+    "description": "Canvas ID from a prior oecd_query_dataset call \u2014 exactly 10 characters of letters, digits, hyphens, and underscores \u2014 to stage this result alongside that one. Omit to let the server mint a canvas if this result needs one; a canvas_id comes back only when the result was large enough to spill, never on a result that fits inline.",
+    "pattern": "^[A-Za-z0-9_-]{10}$",
+    "type": "string"
+   },
+   "end_period": {
+    "description": "End of the time range \u2014 ISO period code such as \"2023\" or \"2023-Q4\". Omit to include up to the latest available period.",
+    "type": "string"
+   },
+   "flow_ref": {
+    "description": "Full flow reference \u2014 e.g. \"OECD.SDD.NAD,DSD_NAAG@DF_NAAG_I\", or the bare \"OECD.TAD.ARP,DF_AEI2024_DASHBOARD\" form for a dataflow published without a datastructure prefix. Obtain from oecd_search_datasets and pass it through unchanged.",
+    "type": "string"
+   },
+   "key": {
+    "description": "Dot-delimited dimension key matching the dimension order from oecd_get_dataset_info. Empty segments are wildcards; \"+\" separates multiple values per segment. Example: \"A.USA+DEU.B1GQ..\" \u2014 Annual, USA or Germany, GDP, all remaining dimensions.",
+    "type": "string"
+   },
+   "start_period": {
+    "description": "Start of the time range \u2014 ISO period code such as \"2010\", \"2010-Q1\", or \"2010-01\". Omit to include all history (may produce very large results).",
+    "type": "string"
+   }
+  },
+  "required": [
+   "flow_ref",
+   "key"
+  ],
+  "type": "object"
+ },
+ "name": "oecd_query_dataset",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "rows",
+     "row_count",
+     "query_flow_ref",
+     "query_key",
+     "source"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "canvas_id": {
+    "description": "Canvas handle for the staged result. Present only when DataCanvas is configured and the result exceeded the inline budget; absent when DataCanvas is off, and absent when it is on but the result fit inline. Pass to oecd_dataframe_query or oecd_dataframe_describe.",
+    "type": "string"
+   },
+   "content_table_capped": {
+    "description": "True when the rendered table shows only the leading rows of the result. Distinct from truncated: nothing was staged anywhere, and structuredContent.rows still holds every row. To shrink the result itself, name fewer values per key segment or set a narrower start_period / end_period; to reach the full set as a queryable table instead, run with CANVAS_PROVIDER_TYPE=duckdb and follow up with oecd_dataframe_query.",
+    "type": "boolean"
+   },
+   "content_table_rows": {
+    "description": "Rows the rendered table shows when content_table_capped is true.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_flow_ref`: The flow_ref parameter matches neither the {agencyID},{dsd_id}@{df_id} nor the {agencyID},{df_id} format. `dataflow_not_found`: The flow_ref does not correspond to a known OECD dataflow. `no_results`: The dataflow exists but no observations matched the key and time range. `invalid_key`: OECD rejected the dimension key \u2014 wrong number of segments, or an unsupported format. `invalid_period`: OECD could not parse start_period or end_period. `rate_limited`: OECD throttled the request rate and was still refusing after the retries. `download_limit`: OECD refused the query for exceeding its data-download or data-range limit. `upstream_timeout`: OECD did not finish responding before OECD_TIMEOUT_MS elapsed. `upstream_unavailable`: OECD returned a server fault or was unreachable once the retries ran out. `upstream_redirect`: The configured OECD host answered with a redirect, which this server never follows. `upstream_error`: OECD refused the request with a status this server does not model \u2014 an authorization challenge, a rejection from something sitting in front of the API, or a request read as malformed. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_flow_ref",
+         "dataflow_not_found",
+         "no_results",
+         "invalid_key",
+         "invalid_period",
+         "rate_limited",
+         "download_limit",
+         "upstream_timeout",
+         "upstream_unavailable",
+         "upstream_redirect",
+         "upstream_error"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "query_end_period": {
+    "description": "End period filter applied in this query, if any.",
+    "type": "string"
+   },
+   "query_flow_ref": {
+    "description": "Flow reference used in this query.",
+    "type": "string"
+   },
+   "query_key": {
+    "description": "Dimension key used in this query.",
+    "type": "string"
+   },
+   "query_start_period": {
+    "description": "Start period filter applied in this query, if any.",
+    "type": "string"
+   },
+   "row_count": {
+    "description": "Total rows in the result (or on the canvas when truncated).",
+    "type": "number"
+   },
+   "rows": {
+    "description": "Observation rows. Every row of the result when truncated is absent; the leading preview slice when truncated is true \u2014 query the canvas table for the rest.",
+    "items": {
+     "additionalProperties": {},
+     "description": "Decoded observation row. One key per dataflow dimension (e.g. REF_AREA, TIME_PERIOD) and per observation attribute (e.g. UNIT_MULT, OBS_STATUS, PRICE_BASE), each holding a human-readable label; attributes absent from this slice are omitted. Plus \"value\" \u2014 the observation already multiplied by \"value_scale\", the power of ten from UNIT_MULT (1 when the dataflow declares no multiplier; divide value by it for the figure as OECD published it) \u2014 and \"source\" (\"OECD\").",
+     "properties": {},
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "source": {
+    "const": "OECD",
+    "description": "Data source attribution \u2014 always \"OECD\".",
+    "type": "string"
+   },
+   "table_name": {
+    "description": "Canvas table name holding the full result \u2014 present when canvas_id is set.",
+    "type": "string"
+   },
+   "truncated": {
+    "description": "True when rows is a preview slice and the full result was staged on DataCanvas; omitted entirely (never false) when rows holds the complete result. Use oecd_dataframe_query with the canvas_id for analytics over the full set. A complete rows never means a complete rendered table \u2014 content_table_capped reports that separately.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Oecd Query Dataset"
+}

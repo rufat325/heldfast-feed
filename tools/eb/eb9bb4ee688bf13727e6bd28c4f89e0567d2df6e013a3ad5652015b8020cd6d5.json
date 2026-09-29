@@ -1,0 +1,188 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Resolve a single Austrian legal citation to its canonical RIS document deterministically \u2014 no keyword search. Four routes are auto-detected from the citation shape (or forced with kind): a norm citation \u2014 section-first (\"\u00a7 6 DSG\", \"Art 10 B-VG\"), abbreviation-first (\"DSG \u00a71\", \"DSGVO Art32\", the shape ris_search_case_law returns in norms_cited), or a bare abbreviation like \"ABGB\" \u2014 resolves through consolidated federal law, or a Bundesland with a state hint, as in force today or on in_force_as_of; a gazette citation (\"BGBl. I Nr. 165/1999\", pre-2004 \"BGBl. Nr. 194/1961\", imperial \"RGBl. Nr. 189/1902\", or \"LGBl. Nr. 61/2026\" with a state hint) routes to the right federal era tier by year, or to a state Landesgesetzblatt \u2014 falling back to that Bundesland\u2019s pre-e-Recht series when the citation predates its switch; a case number (\"Ro 2026/03/0016\", \"G 287/2022\", \"14Os49/26a\", \"2025-0.934.677\", \"W256 \u2026\") is matched to its court \u2014 pass court to skip detection, and ambiguous formats probe up to two courts; a collection number (\"VfSlg 19.632/2012\", \"VwSlg 18.000 A/2010\") resolves through the VfGH/VwGH collection \u2014 a VwSlg cite given without its part letter can name one decision in each of the two VwGH series, and comes back as ambiguous with both cites named rather than resolved to one of them. Returns the single best-matching document in the same shape as the corresponding search tool, with alternatives_count when more than one matched. A citation that cannot be classified or resolved returns found: false with next-step guidance \u2014 it never throws for a miss; only an upstream RIS outage is an error. For keyword rather than citation lookup, use ris_search_legislation or ris_search_case_law.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "citation": {
+    "description": "The legal citation to resolve, e.g. \"\u00a7 6 DSG\" or \"DSG \u00a71\", \"Art 10 B-VG\", \"BGBl. I Nr. 165/1999\", \"Ro 2026/03/0016\", or \"VfSlg 19.632/2012\".",
+    "type": "string"
+   },
+   "court": {
+    "description": "Court hint for a case number \u2014 short-circuits court detection to this court. Codes: ris_list_reference topic courts, minus normenliste (a norm index, which carries no case numbers).",
+    "enum": [
+     "vfgh",
+     "vwgh",
+     "justiz",
+     "bvwg",
+     "lvwg",
+     "dsk",
+     "dok",
+     "pvak",
+     "gbk",
+     "uvs",
+     "asylgh",
+     "ubas",
+     "umse",
+     "bks",
+     "verg",
+     "upts"
+    ],
+    "type": "string"
+   },
+   "in_force_as_of": {
+    "description": "For a norm, resolve the version in force on this date (YYYY-MM-DD). Defaults to today in Austria.",
+    "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])$",
+    "type": "string"
+   },
+   "kind": {
+    "default": "auto",
+    "description": "Force a route, or auto (default) to classify by shape. Set explicitly when the citation shape is ambiguous.",
+    "enum": [
+     "auto",
+     "norm",
+     "gazette",
+     "case_number",
+     "collection_number"
+    ],
+    "type": "string"
+   },
+   "state": {
+    "description": "Bundesland hint \u2014 routes a norm to that state\u2019s consolidated law (LrKons) and an LGBl. gazette to that state\u2019s Landesgesetzblatt (LgblAuth, then the legacy Lgbl series for a citation predating the state\u2019s e-Recht switch).",
+    "enum": [
+     "burgenland",
+     "kaernten",
+     "niederoesterreich",
+     "oberoesterreich",
+     "salzburg",
+     "steiermark",
+     "tirol",
+     "vorarlberg",
+     "wien"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "citation"
+  ],
+  "type": "object"
+ },
+ "name": "ris_lookup_citation",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "found",
+     "kind"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "alternatives_count": {
+    "description": "Documents that also matched beyond the one returned \u2014 present only when more than one matched. List them all with the search tool named in resolution_note.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `upstream_error`: A routed RIS search was unreachable, returned a server error, or served an HTML error page. An unparseable or unresolvable citation is NOT this error \u2014 it returns found: false. `upstream_timeout`: A routed RIS search did not answer within the request deadline. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "upstream_error",
+         "upstream_timeout"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "found": {
+    "description": "True when the citation resolved to a single best-matching document.",
+    "type": "boolean"
+   },
+   "guidance": {
+    "description": "Next-step guidance naming a concrete tool. Present when found is false.",
+    "type": "string"
+   },
+   "kind": {
+    "description": "What the citation parsed as \u2014 \"unknown\" when it did not classify into any route.",
+    "enum": [
+     "unknown",
+     "norm",
+     "gazette",
+     "case_number",
+     "collection_number"
+    ],
+    "type": "string"
+   },
+   "record": {
+    "additionalProperties": {},
+    "description": "The resolved document, in the same normalized shape the corresponding search tool returns \u2014 ris_search_legislation for a norm, ris_search_case_law for a case or collection number, ris_search_gazette for a gazette. Present when found is true.",
+    "properties": {},
+    "type": "object"
+   },
+   "resolution_note": {
+    "description": "Which application and filter resolved the citation. Present when found is true.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Resolve Austrian Legal Citation"
+}

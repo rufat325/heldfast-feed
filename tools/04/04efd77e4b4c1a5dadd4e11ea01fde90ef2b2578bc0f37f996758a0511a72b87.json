@@ -1,0 +1,1330 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false,
+  "title": "Diagnose signal timing leakage"
+ },
+ "description": "Use this when a signal looks good but you suspect leakage or\nlook-ahead and want to know WHY it fails, not just that it fails --\na diagnostic audit, it does not give buy/sell advice.\nLeakage forensics: WHY your signal fails, not just that it fails.\n\nUpload your own decision timestamps (symbol, decision_time with explicit\ntimezone, long/short) plus OHLCV candles and get a forensic diagnosis:\ndoes the edge collapse with a realistic one-bar execution delay\n(look-ahead leak)? Does the move happen BEFORE your decision\n(front-loading / anticipation)? Does it beat matched random timing? Do\nyour trades collapse onto few independent events? Code-computed,\ndemote-only, plain-language explanations per finding. Naive timestamps\nare rejected -- timezone ambiguity is the top source of fake edges.\nPrice: per check; see https://api.alphaassay.com/v1/meta/pricing\n(api_key required -- account setup at\nhttps://api.alphaassay.com/account).",
+ "inputSchema": {
+  "$defs": {
+   "OHLCVSeries": {
+    "additionalProperties": false,
+    "properties": {
+     "close": {
+      "items": {
+       "anyOf": [
+        {
+         "exclusiveMinimum": 0,
+         "maximum": 1000000000000000.0,
+         "type": "integer",
+         "x-strictJsonInteger": true
+        },
+        {
+         "exclusiveMinimum": 0,
+         "maximum": 1000000000000000.0,
+         "type": "number"
+        }
+       ]
+      },
+      "maxItems": 5000,
+      "minItems": 1,
+      "type": "array"
+     },
+     "high": {
+      "anyOf": [
+       {
+        "items": {
+         "anyOf": [
+          {
+           "exclusiveMinimum": 0,
+           "maximum": 1000000000000000.0,
+           "type": "integer",
+           "x-strictJsonInteger": true
+          },
+          {
+           "exclusiveMinimum": 0,
+           "maximum": 1000000000000000.0,
+           "type": "number"
+          }
+         ]
+        },
+        "maxItems": 5000,
+        "minItems": 1,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "low": {
+      "anyOf": [
+       {
+        "items": {
+         "anyOf": [
+          {
+           "exclusiveMinimum": 0,
+           "maximum": 1000000000000000.0,
+           "type": "integer",
+           "x-strictJsonInteger": true
+          },
+          {
+           "exclusiveMinimum": 0,
+           "maximum": 1000000000000000.0,
+           "type": "number"
+          }
+         ]
+        },
+        "maxItems": 5000,
+        "minItems": 1,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "open": {
+      "anyOf": [
+       {
+        "items": {
+         "anyOf": [
+          {
+           "exclusiveMinimum": 0,
+           "maximum": 1000000000000000.0,
+           "type": "integer",
+           "x-strictJsonInteger": true
+          },
+          {
+           "exclusiveMinimum": 0,
+           "maximum": 1000000000000000.0,
+           "type": "number"
+          }
+         ]
+        },
+        "maxItems": 5000,
+        "minItems": 1,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "time": {
+      "anyOf": [
+       {
+        "items": {
+         "maxLength": 64,
+         "minLength": 1,
+         "type": "string"
+        },
+        "maxItems": 5000,
+        "minItems": 1,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "volume": {
+      "anyOf": [
+       {
+        "items": {
+         "anyOf": [
+          {
+           "maximum": 1000000000000000.0,
+           "minimum": 0,
+           "type": "integer",
+           "x-strictJsonInteger": true
+          },
+          {
+           "maximum": 1000000000000000.0,
+           "minimum": 0,
+           "type": "number"
+          }
+         ]
+        },
+        "maxItems": 5000,
+        "minItems": 1,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "required": [
+     "close"
+    ],
+    "type": "object",
+    "x-relations": [
+     "len(time|open|high|low|volume) == len(close) when present"
+    ]
+   },
+   "SignalEvent": {
+    "additionalProperties": false,
+    "properties": {
+     "confidence": {
+      "anyOf": [
+       {
+        "anyOf": [
+         {
+          "type": "integer",
+          "x-strictJsonInteger": true
+         },
+         {
+          "type": "number"
+         }
+        ],
+        "ge": 0,
+        "le": 1
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "decision_time": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+     },
+     "direction": {
+      "enum": [
+       "long",
+       "short"
+      ],
+      "type": "string"
+     },
+     "symbol": {
+      "maxLength": 64,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "decision_time",
+     "symbol",
+     "direction"
+    ],
+    "type": "object"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "api_key": {
+    "default": "",
+    "description": "API key for a paid MCP check. Hosted Streamable HTTP clients should send it in the Authorization: Bearer transport header so the model never sees the secret; local stdio callers may supply the raw key in this tool argument without a Bearer prefix. Create an account at https://api.alphaassay.com/account; the current free allowance and prices are published at https://api.alphaassay.com/v1/meta/pricing. Paid MCP calls use API-key credits; x402 buys only the separate REST POST /x402/v1/gauntlet and is not MCP billing.",
+    "maxLength": 512,
+    "type": "string"
+   },
+   "ohlcv_by_symbol": {
+    "additionalProperties": false,
+    "description": "Candles per symbol the events are scored against for the look-ahead / front-loading forensics.",
+    "maxProperties": 50,
+    "patternProperties": {
+     "^\\S+$": {
+      "$ref": "#/$defs/OHLCVSeries"
+     }
+    },
+    "propertyNames": {
+     "maxLength": 64,
+     "minLength": 1
+    },
+    "type": "object"
+   },
+   "primary_horizon": {
+    "default": 3,
+    "description": "Forward horizon in bars the signal claims to predict, for the leakage attribution.",
+    "maximum": 5000,
+    "minimum": 1,
+    "type": "integer",
+    "x-strictJsonInteger": true
+   },
+   "request_id": {
+    "anyOf": [
+     {
+      "maxLength": 256,
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Optional idempotency key for this paid execution. Retry the same request_id with the same payload to replay one stored result without another charge; reuse with a different payload returns idempotency_conflict."
+   },
+   "signal_events": {
+    "description": "Signal decisions with the schema-accepted fields {decision_time, symbol, direction, confidence?} to test for timing leakage.",
+    "items": {
+     "$ref": "#/$defs/SignalEvent"
+    },
+    "maxItems": 10000,
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "required": [
+   "signal_events",
+   "ohlcv_by_symbol"
+  ],
+  "type": "object",
+  "x-maxBodyBytes": 5242880
+ },
+ "name": "assay_forensics",
+ "outputSchema": {
+  "$defs": {
+   "BurstConcentrationDiagnosis": {
+    "additionalProperties": false,
+    "properties": {
+     "evidence": {
+      "$ref": "#/$defs/BurstConcentrationEvidence"
+     },
+     "finding": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "id": {
+      "const": "burst_concentration",
+      "type": "string"
+     },
+     "plain_language_explanation": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "severity": {
+      "enum": [
+       "high",
+       "ok",
+       "insufficient_power"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "finding",
+     "severity",
+     "evidence",
+     "plain_language_explanation"
+    ],
+    "type": "object"
+   },
+   "BurstConcentrationEvidence": {
+    "additionalProperties": false,
+    "properties": {
+     "bars": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "burst_events": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "burst_mean_pct": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "calm_events": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "min_bars": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "n_burst_bars": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "non_burst_mean_pct": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "type": "object"
+   },
+   "ClusterCollapseDiagnosis": {
+    "additionalProperties": false,
+    "properties": {
+     "evidence": {
+      "$ref": "#/$defs/ClusterCollapseEvidence"
+     },
+     "finding": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "id": {
+      "const": "cluster_collapse",
+      "type": "string"
+     },
+     "plain_language_explanation": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "severity": {
+      "enum": [
+       "high",
+       "medium",
+       "ok",
+       "insufficient_power"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "finding",
+     "severity",
+     "evidence",
+     "plain_language_explanation"
+    ],
+    "type": "object"
+   },
+   "ClusterCollapseEvidence": {
+    "additionalProperties": false,
+    "properties": {
+     "cluster_key": {
+      "anyOf": [
+       {
+        "const": "utc_calendar_day",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "independent_clusters": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "reported_trades": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     }
+    },
+    "required": [
+     "reported_trades",
+     "independent_clusters"
+    ],
+    "type": "object"
+   },
+   "EntryLagDiagnosis": {
+    "additionalProperties": false,
+    "properties": {
+     "evidence": {
+      "$ref": "#/$defs/EntryLagEvidence"
+     },
+     "finding": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "id": {
+      "const": "entry_lag_sweep",
+      "type": "string"
+     },
+     "plain_language_explanation": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "severity": {
+      "enum": [
+       "critical",
+       "ok",
+       "insufficient_power"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "finding",
+     "severity",
+     "evidence",
+     "plain_language_explanation"
+    ],
+    "type": "object"
+   },
+   "EntryLagEvidence": {
+    "additionalProperties": false,
+    "properties": {
+     "events_per_lag": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/IntegerMap"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "events_with_window": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/IntegerMap"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "lag_curve_mean_pct": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/NumberMap"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "type": "object"
+   },
+   "ForensicsInputSummary": {
+    "additionalProperties": false,
+    "properties": {
+     "distinct_clusters": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "events_rejected": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "events_submitted": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "events_valid": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "primary_horizon_bars": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "rejected": {
+      "items": {
+       "$ref": "#/$defs/ForensicsRejectedEvent"
+      },
+      "maxItems": 10,
+      "type": "array"
+     }
+    },
+    "required": [
+     "events_submitted",
+     "events_valid",
+     "events_rejected",
+     "rejected",
+     "distinct_clusters",
+     "primary_horizon_bars"
+    ],
+    "type": "object"
+   },
+   "ForensicsRejectedEvent": {
+    "additionalProperties": false,
+    "properties": {
+     "event": {
+      "$ref": "#/$defs/RejectedSignalEvent"
+     },
+     "index": {
+      "exclusiveMaximum": 10000,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "reason": {
+      "maxLength": 2000,
+      "type": "string"
+     }
+    },
+    "required": [
+     "index",
+     "reason",
+     "event"
+    ],
+    "type": "object"
+   },
+   "FrontLoadingDiagnosis": {
+    "additionalProperties": false,
+    "properties": {
+     "evidence": {
+      "$ref": "#/$defs/FrontLoadingEvidence"
+     },
+     "finding": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "id": {
+      "const": "front_loading",
+      "type": "string"
+     },
+     "plain_language_explanation": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "severity": {
+      "enum": [
+       "high",
+       "ok",
+       "insufficient_power"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "finding",
+     "severity",
+     "evidence",
+     "plain_language_explanation"
+    ],
+    "type": "object"
+   },
+   "FrontLoadingEvidence": {
+    "additionalProperties": false,
+    "properties": {
+     "clusters": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "front_loading_share": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "front_loading_share_max": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "pooled_post_pct": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "pooled_pre_pct": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "required": [
+     "clusters"
+    ],
+    "type": "object"
+   },
+   "IntegerMap": {
+    "additionalProperties": false,
+    "description": "Bounded runtime-keyed map of integer counts.",
+    "maxProperties": 256,
+    "patternProperties": {
+     "^\\S+$": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     }
+    },
+    "propertyNames": {
+     "maxLength": 128,
+     "minLength": 1
+    },
+    "type": "object"
+   },
+   "NumberMap": {
+    "additionalProperties": false,
+    "description": "Bounded runtime-keyed map of finite numbers.",
+    "maxProperties": 256,
+    "patternProperties": {
+     "^\\S+$": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     }
+    },
+    "propertyNames": {
+     "maxLength": 128,
+     "minLength": 1
+    },
+    "type": "object"
+   },
+   "PublicMeta": {
+    "additionalProperties": false,
+    "properties": {
+     "api_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "as_of": {
+      "format": "date-time",
+      "maxLength": 20,
+      "minLength": 20,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "type": "string"
+     },
+     "disclaimer": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "engine_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "input_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+     },
+     "not_financial_advice": {
+      "const": true,
+      "type": "boolean"
+     },
+     "operation": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "request_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+     },
+     "request_id": {
+      "anyOf": [
+       {
+        "maxLength": 256,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "source_identity_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+     },
+     "statefulness": {
+      "enum": [
+       "pure",
+       "public_read",
+       "tenant_read",
+       "tenant_write"
+      ],
+      "type": "string"
+     },
+     "tenant_scope": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "tenant_scope_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "engine_version",
+     "api_version",
+     "as_of",
+     "input_digest",
+     "request_digest",
+     "tenant_scope",
+     "tenant_scope_version",
+     "request_id",
+     "source_identity_digest",
+     "operation",
+     "statefulness",
+     "not_financial_advice",
+     "disclaimer"
+    ],
+    "type": "object",
+    "x-relations": [
+     "as_of is a real UTC RFC3339 second"
+    ]
+   },
+   "RandomTimingDiagnosis": {
+    "additionalProperties": false,
+    "properties": {
+     "evidence": {
+      "$ref": "#/$defs/RandomTimingEvidence"
+     },
+     "finding": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "id": {
+      "const": "same_symbol_random_timing_placebo",
+      "type": "string"
+     },
+     "plain_language_explanation": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "severity": {
+      "enum": [
+       "high",
+       "ok",
+       "insufficient_power"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "finding",
+     "severity",
+     "evidence",
+     "plain_language_explanation"
+    ],
+    "type": "object"
+   },
+   "RandomTimingEvidence": {
+    "additionalProperties": false,
+    "properties": {
+     "empirical_p_value": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "n_null_windows": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "null_window_candidates": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "observed_mean_pct": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "percentile": {
+      "anyOf": [
+       {
+        "maximum": 100,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 100,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "seed": {
+      "anyOf": [
+       {
+        "maximum": 18446744073709551615,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "type": "object"
+   },
+   "RejectedSignalEvent": {
+    "additionalProperties": false,
+    "properties": {
+     "confidence": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "decision_time": {
+      "anyOf": [
+       {
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "direction": {
+      "anyOf": [
+       {
+        "enum": [
+         "long",
+         "short"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "symbol": {
+      "anyOf": [
+       {
+        "maxLength": 256,
+        "minLength": 1,
+        "pattern": "^\\S+$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "type": "object"
+   },
+   "SignRandomizationDiagnosis": {
+    "additionalProperties": false,
+    "properties": {
+     "evidence": {
+      "$ref": "#/$defs/SignRandomizationEvidence"
+     },
+     "finding": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "id": {
+      "const": "sign_randomization",
+      "type": "string"
+     },
+     "plain_language_explanation": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "severity": {
+      "enum": [
+       "medium",
+       "ok",
+       "insufficient_power"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "finding",
+     "severity",
+     "evidence",
+     "plain_language_explanation"
+    ],
+    "type": "object"
+   },
+   "SignRandomizationEvidence": {
+    "additionalProperties": false,
+    "properties": {
+     "empirical_p_value": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "n_clusters": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "observed_cluster_mean_pct": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "survives": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "required": [
+     "n_clusters"
+    ],
+    "type": "object"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "result": {
+    "additionalProperties": false,
+    "properties": {
+     "_meta": {
+      "$ref": "#/$defs/PublicMeta"
+     },
+     "diagnoses": {
+      "items": {
+       "discriminator": {
+        "mapping": {
+         "burst_concentration": "#/$defs/BurstConcentrationDiagnosis",
+         "cluster_collapse": "#/$defs/ClusterCollapseDiagnosis",
+         "entry_lag_sweep": "#/$defs/EntryLagDiagnosis",
+         "front_loading": "#/$defs/FrontLoadingDiagnosis",
+         "same_symbol_random_timing_placebo": "#/$defs/RandomTimingDiagnosis",
+         "sign_randomization": "#/$defs/SignRandomizationDiagnosis"
+        },
+        "propertyName": "id"
+       },
+       "oneOf": [
+        {
+         "$ref": "#/$defs/EntryLagDiagnosis"
+        },
+        {
+         "$ref": "#/$defs/FrontLoadingDiagnosis"
+        },
+        {
+         "$ref": "#/$defs/RandomTimingDiagnosis"
+        },
+        {
+         "$ref": "#/$defs/SignRandomizationDiagnosis"
+        },
+        {
+         "$ref": "#/$defs/ClusterCollapseDiagnosis"
+        },
+        {
+         "$ref": "#/$defs/BurstConcentrationDiagnosis"
+        }
+       ]
+      },
+      "maxItems": 6,
+      "type": "array"
+     },
+     "disclaimer": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "headline": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "input_summary": {
+      "$ref": "#/$defs/ForensicsInputSummary"
+     },
+     "schema": {
+      "const": "signal_forensics.v1",
+      "type": "string"
+     },
+     "verdict": {
+      "enum": [
+       "leakage_suspected",
+       "weak_evidence",
+       "insufficient_evidence",
+       "no_leakage_detected"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "_meta",
+     "schema",
+     "verdict",
+     "diagnoses",
+     "headline",
+     "input_summary",
+     "disclaimer"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "result"
+  ],
+  "type": "object"
+ },
+ "title": "Diagnose signal timing leakage"
+}

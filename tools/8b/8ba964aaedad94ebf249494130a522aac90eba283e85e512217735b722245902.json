@@ -1,0 +1,294 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Resolve an airport or weather reporting station by its identifier, or discover stations within a bounding box or US state. Returns all identifier variants (ICAO/IATA/FAA), coordinates, elevation, and available data types (METAR, TAF, SYNOP, etc.). A lookup matches the registry's own identifier, which for an airport is its 4-character ICAO ID (e.g., KSEA, KJFK, K0S9); buoys and mesonet sites carry identifiers of other shapes and resolve by those. At least one of station_ids, bbox, or state is required. limit bounds how many stations an area search returns without changing the area searched, and belongs to the bbox and state modes only.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "bbox": {
+    "description": "Geographic bounding box for spatial queries.",
+    "properties": {
+     "maxLat": {
+      "description": "Northern boundary latitude in decimal degrees.",
+      "maximum": 90,
+      "minimum": -90,
+      "type": "number"
+     },
+     "maxLon": {
+      "description": "Eastern boundary longitude in decimal degrees.",
+      "maximum": 180,
+      "minimum": -180,
+      "type": "number"
+     },
+     "minLat": {
+      "description": "Southern boundary latitude in decimal degrees.",
+      "maximum": 90,
+      "minimum": -90,
+      "type": "number"
+     },
+     "minLon": {
+      "description": "Western boundary longitude in decimal degrees.",
+      "maximum": 180,
+      "minimum": -180,
+      "type": "number"
+     }
+    },
+    "required": [
+     "minLat",
+     "minLon",
+     "maxLat",
+     "maxLon"
+    ],
+    "type": "object"
+   },
+   "limit": {
+    "description": "Maximum stations to return, applied after ordering by ICAO identifier ascending with identifier-less stations last \u2014 so the same query with the same limit returns the same stations, and airports rather than unidentified sites lead the first page. It bounds the response without changing the area searched, which a smaller bbox or a different state would. Distinct from the 400-row upstream cap: a limited result examined every station it counted and withheld some, while a capped one never drew the rest. Belongs to the bbox and state modes; supplying it alongside station_ids is rejected, since that mode already names the set. Omit to return every match. Optional.",
+    "maximum": 400,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "state": {
+    "description": "Two-letter USPS code for one of the 50 US states or DC (e.g., \"WA\") to list all stations in that jurisdiction. US territories are not supported \u2014 use bbox for those.",
+    "maxLength": 2,
+    "minLength": 2,
+    "type": "string"
+   },
+   "station_ids": {
+    "description": "One or more station identifiers (e.g., KSEA, KJFK). A lookup matches the registry's own identifier: a 4-character ICAO ID for an airport (e.g., KSEA, K0S9), and other shapes for the buoys and mesonet sites the registry also carries, which resolve by those. A 3-letter IATA code (e.g., SEA) never resolves, even for a station whose entry carries one. Whitespace around an entry is trimmed, so a padded identifier resolves the same as the bare one; an empty or whitespace-only entry is rejected. Use bbox or state to discover identifiers by location.",
+    "items": {
+     "description": "One station identifier (e.g., KSEA).",
+     "pattern": "\\S",
+     "type": "string"
+    },
+    "maxItems": 20,
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "name": "aviation_find_stations",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "stations",
+     "truncated",
+     "shown"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cap": {
+    "description": "The upstream row maximum that was applied to the draw. Present only on a truncated result.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `station_not_found`: None of the requested IDs match any known station, or the bbox or state search found none. `missing_search_criteria`: None of station_ids, bbox, or state was provided. `conflicting_location`: More than one of station_ids, bbox, or state was provided. `invalid_bbox`: The bounding box is inverted \u2014 minLat > maxLat or minLon > maxLon. `invalid_state`: The state code is not one of the 50 US states or DC. `conflicting_limit`: limit was provided together with station_ids, where the caller has already named the set. `upstream_rejected`: The AWC station registry rejected the request as malformed rather than answering it. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "station_not_found",
+         "missing_search_criteria",
+         "conflicting_location",
+         "invalid_bbox",
+         "invalid_state",
+         "conflicting_limit",
+         "upstream_rejected"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "limited": {
+    "description": "True when the requested limit withheld stations that matched \u2014 the caller asked to see fewer of them. False affirms the limit did not bite, so every matching station is here. Present only when the call supplied a limit. It never states anything about the upstream cap: a limited result examined every station it counted, while a truncated one never drew the rest.",
+    "type": "boolean"
+   },
+   "matched": {
+    "description": "Stations that matched this query before the limit selected from them. Present only on a limited result. Where the result is also truncated this counts the capped draw and not the search area \u2014 the stations the cap dropped were never examined, so no count can include them.",
+    "type": "number"
+   },
+   "missing": {
+    "description": "Requested identifiers absent from the result. Deduplicated the way returned is: a repeated or differently-cased identifier appears once, under its first spelling. Absent when none are missing.",
+    "items": {
+     "description": "A requested identifier that resolved to no station.",
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "notice": {
+    "description": "Guidance for whichever disclosures fired: the lever that narrows a truncated draw, what a requested limit withheld, that limit bounds the response without changing the area searched (on a bbox or state result of more than 130 stations from a call that set no limit), or the cause and fix for identifiers that resolved to nothing. The cap and either limit statement can fire on one result, and the text keeps them apart; the reconciliation cannot join them, since only bbox and state reach the row cap or take a limit, and only station_ids reconciles a request.",
+    "type": "string"
+   },
+   "partial": {
+    "description": "True when a requested identifier resolved to nothing. False affirms every requested identifier resolved, which a count cannot establish \u2014 upstream case-folds and deduplicates, so a shorter list is not itself a gap. Present only on a station_ids lookup.",
+    "type": "boolean"
+   },
+   "requested": {
+    "description": "Station identifiers this call asked for, spelled as the caller wrote them and in the order given. Present only on a station_ids lookup \u2014 the bbox and state modes ask for an area, not a list.",
+    "items": {
+     "description": "A station identifier as requested.",
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "returned": {
+    "description": "Requested identifiers that resolved, spelled as the caller wrote them rather than as upstream returned them. Deduplicated the way upstream deduplicates: a repeated or differently-cased identifier appears once, under its first spelling. Present only on a station_ids lookup.",
+    "items": {
+     "description": "A requested identifier that resolved to a station.",
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "shown": {
+    "description": "Stations in this result, counted after any client-side state filter and after any limit.",
+    "type": "number"
+   },
+   "stations": {
+    "description": "Matching stations.",
+    "items": {
+     "additionalProperties": false,
+     "description": "An aviation weather reporting station.",
+     "properties": {
+      "country": {
+       "description": "Country code or name.",
+       "type": "string"
+      },
+      "data_types": {
+       "description": "List of data products available at this station.",
+       "items": {
+        "description": "An available data type (e.g., \"METAR\", \"TAF\", \"SYNOP\").",
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "elevation_ft": {
+       "description": "Station elevation in feet MSL. 0 is a sea-level site; null means no elevation is on file upstream, so it is unknown.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "faa_id": {
+       "description": "FAA identifier, or null if not assigned.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "iata_id": {
+       "description": "IATA 3-letter code, or null if not assigned.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "icao_id": {
+       "description": "ICAO station ID, 4 uppercase letters or digits (e.g., KSEA, K0S9), or null if not assigned.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "lat": {
+       "description": "Latitude in decimal degrees.",
+       "type": "number"
+      },
+      "lon": {
+       "description": "Longitude in decimal degrees.",
+       "type": "number"
+      },
+      "name": {
+       "description": "Human-readable site name.",
+       "type": "string"
+      },
+      "state": {
+       "description": "US state abbreviation, or empty string for non-US stations.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "icao_id",
+      "iata_id",
+      "faa_id",
+      "name",
+      "lat",
+      "lon",
+      "elevation_ft",
+      "state",
+      "country",
+      "data_types"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "truncated": {
+    "description": "True when the upstream draw hit the AWC row cap, so stations inside the search area are missing from this result. False affirms the area was drawn in full, which a count alone cannot establish.",
+    "type": "boolean"
+   },
+   "upstreamRows": {
+    "description": "Rows AWC returned before the client-side state filter ran. Present only on a truncated state query the filter then narrowed, where the post-filter count sits below the cap and so cannot reveal the truncation on its own.",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Find Aviation Weather Stations"
+}

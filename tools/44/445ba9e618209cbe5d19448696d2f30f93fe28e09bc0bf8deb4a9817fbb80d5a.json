@@ -1,0 +1,336 @@
+{
+ "_meta": {
+  "category": "poc",
+  "mutates_state": true,
+  "tier": "none"
+ },
+ "annotations": {
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "POC from SIEM (submit)"
+ },
+ "description": "Kick off a full log-cost-optimization POC against the user's SIEM. Pulls a representative event sample, templatizes into stable pattern identities, and renders a 9-section markdown report covering top cost drivers, Receiver recommendations, ready-to-paste native SIEM exclusion configs, Compact mode potential, risk/dependency checks, and deployment paths. Supported SIEMs: cloudwatch (AWS CloudWatch Logs via IAM credential chain), datadog (DD_API_KEY + DD_APP_KEY), sumo (Sumo Logic), gcp-logging (GCP Cloud Logging), elasticsearch (Elastic Cloud / self-hosted), azure-monitor (Azure Monitor / Log Analytics), splunk (SPLUNK_HOST + SPLUNK_TOKEN), clickhouse (OpenObserve / SigNoz / custom schemas). Auto-detects the SIEM from env vars when `siem` omitted \u2014 explicitly pass `siem` if multiple credential sets exist. `scope` and `query` are SIEM-specific: CloudWatch (log group + filter pattern), Datadog (index + query), Sumo (_sourceCategory + query), GCP (project id + filter), Elasticsearch (index pattern + KQL), Azure (workspace id + KQL), Splunk (index + SPL), ClickHouse (database + SQL WHERE). For ClickHouse, also pass `clickhouse_table` (required) and column-mapping args for custom schemas (OpenObserve/SigNoz auto-detected). Returns a `snapshot_id` \u2014 poll via log10x_poc_from_siem_status to retrieve progress and the final report. Report is also written to `${LOG10X_REPORT_DIR:-/tmp/log10x-reports}/poc_from_siem-<timestamp>.md`. Default window is 7d, default target event count is 250k, default max pull time is 5 min \u2014 the pull stops at whichever of the two ceilings hits first. **Tier prerequisites**: none. No log10x API key required. **Templating defaults to privacy_mode=true**: events are templated by a local Log10x engine, either a native `tenx` CLI (install for macOS/Linux/Windows: https://doc.log10x.com/install/) or a local Docker container (set `LOG10X_TENX_MODE=docker`, auto-detected and preferred when the mode is unset), and never leave the machine. Set `privacy_mode: false` to route through the public Log10x paste endpoint \u2014 demo use only, not production log content. **Two modes, and the agent should name whichever the user's phrasing invites.** This tool is the NETWORKED one: it reads the analyzer directly over the network with the caller's credentials, and the MCP mints one licence. The FENCED mode runs the same POC with no network at all \u2014 `log10x_emit_sample_plan` renders a read-only export script the user runs themselves, and the analysis happens in a container started with `--network none`, so 'cannot exfiltrate' is a kernel fact the user checks with one `docker inspect` rather than a claim we make. Offer it; do not ask which one first.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "ai_prettify": {
+    "default": true,
+    "description": "Default true: use MCP sampling to ask the host LLM (the same model the user is already chatting with \u2014 Claude Desktop, Claude Code, Cursor, etc.) to batch-generate 3-5-word human-readable names for the top patterns. No Log10x-side endpoint, no extra API key \u2014 the host uses whatever model + credentials the user already has. Sends only templated pattern identities (no variable values, no raw log content). Skipped automatically when the host does not advertise the `sampling` capability; the report falls back to raw snake_case identities plus a note. Set false to skip unconditionally.",
+    "type": "boolean"
+   },
+   "analyzer_cost_per_gb": {
+    "description": "Override the $/GB rate for cost calculations. Default is read from vendors.json per detected SIEM.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "auto_detect_volume": {
+    "default": true,
+    "description": "Default true: when no total_*_gb arg is provided, probe the SIEM's usage/metrics API to auto-detect daily ingest volume. Per-SIEM best-effort: CloudWatch (describeLogGroups \u00f7 retention), Datadog (Usage API), Elasticsearch (_stats), Azure (Usage KQL table), GCP (Cloud Monitoring byte_count), ClickHouse (system.parts), Splunk (license API), Sumo (Account Usage API). Fails silently and falls back to scenario brackets if the current creds lack the required scope. Set false to skip the probe and go straight to manual args or scenarios.",
+    "type": "boolean"
+   },
+   "clickhouse_message_column": {
+    "description": "[ClickHouse] Column holding the message body. Default auto-detected.",
+    "type": "string"
+   },
+   "clickhouse_service_column": {
+    "description": "[ClickHouse] Optional column for service name.",
+    "type": "string"
+   },
+   "clickhouse_severity_column": {
+    "description": "[ClickHouse] Optional column for severity.",
+    "type": "string"
+   },
+   "clickhouse_table": {
+    "description": "[ClickHouse] Required \u2014 table name holding log events.",
+    "type": "string"
+   },
+   "clickhouse_timestamp_column": {
+    "description": "[ClickHouse] Column holding the timestamp. Default auto-detected.",
+    "type": "string"
+   },
+   "enrich_max_tokens": {
+    "default": 8000,
+    "description": "Output token cap for the host-agent enrichment call. Default 8000.",
+    "maximum": 32000,
+    "minimum": 1000,
+    "type": "integer"
+   },
+   "enrich_with_host_agent": {
+    "default": true,
+    "description": "Default true: after the engine produces measured findings (per-pattern $/mo, growth, incident clusters), ask the MCP host LLM via sampling to contribute operational context the engine cannot see: kubectl events / deploys correlating with GROWING patterns, alert / dashboard dependencies before recommending mute, code-level root-cause refinement on code_fix patterns, and prioritization based on customer context. Single round-trip, capped at 8000 output tokens. Skipped automatically when the host does not advertise sampling; the v2 envelope still ships without enrichment. Contributions land in output.agent_enrichment.contributions with an audit trail (tools_inspected) so the customer sees what the agent says it looked at.",
+    "type": "boolean"
+   },
+   "environment": {
+    "description": "Optional environment nickname \u2014 cosmetic only, for the report header.",
+    "type": "string"
+   },
+   "exception_services": {
+    "description": "Services flagged by the customer to stay in the SIEM with full retention (action=pass). Typically 1-3 services for audit, compliance, or executive dashboards. Patterns whose service is in this list are pinned to pass on the envelope outputs and their bytes are subtracted from the achievable reduction pool used for the feasibility verdict.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "max_pull_minutes": {
+    "default": 30,
+    "description": "Hard cap on pull wall-time. Default 30. The pull stops at whichever of target_event_count, max_pull_minutes, or saturation-detected hits first. Long pulls run in the background; poll status while the user does other things.",
+    "maximum": 60,
+    "minimum": 1,
+    "type": "number"
+   },
+   "pin_patterns": {
+    "additionalProperties": {
+     "enum": [
+      "pass",
+      "sample",
+      "compact",
+      "tier_down",
+      "offload",
+      "drop"
+     ],
+     "type": "string"
+    },
+    "description": "Advanced \u2014 most customers will not need this. Map of pattern_hash to action for rare per-pattern overrides within a service. Applied AFTER pin_services. Use only when a single pattern inside an otherwise-reducible service must be excepted (e.g., audit-trail log line inside a chatty service).",
+    "type": "object"
+   },
+   "pin_services": {
+    "additionalProperties": {
+     "enum": [
+      "pass",
+      "sample",
+      "compact",
+      "tier_down",
+      "offload",
+      "drop"
+     ],
+     "type": "string"
+    },
+    "description": "Primary per-service override surface. Map of service name to action. \"Pin payment-svc to pass\" \u2192 {\"payment-svc\":\"pass\"}. Pins are applied AFTER the destination default and AFTER exception_services. Feasibility math reruns with the pins; max_achievable_percent may shift and reason cites the pins.",
+    "type": "object"
+   },
+   "query": {
+    "description": "SIEM-native filter expression layered on top of `scope`. Syntax per SIEM (CloudWatch filter pattern; Datadog query; KQL for ES/Azure; SPL for Splunk; SQL WHERE for ClickHouse; Sumo query).",
+    "type": "string"
+   },
+   "scope": {
+    "description": "SIEM-specific resource scope. CloudWatch: log group name or wildcard (`/aws/ecs/*`). Datadog: index name. Sumo: `_sourceCategory`. GCP: project id. Elasticsearch: index pattern. Azure Monitor: workspace id. Splunk: index name. ClickHouse: database name.",
+    "type": "string"
+   },
+   "siem": {
+    "description": "Which SIEM to pull from. Omit to auto-detect from ambient credentials. Valid values: cloudwatch, datadog, sumo, gcp-logging, elasticsearch, azure-monitor, splunk, clickhouse.",
+    "enum": [
+     "cloudwatch",
+     "datadog",
+     "sumo",
+     "gcp-logging",
+     "elasticsearch",
+     "azure-monitor",
+     "splunk",
+     "clickhouse"
+    ],
+    "type": "string"
+   },
+   "target_event_count": {
+    "default": 1000000,
+    "description": "Target event count for the pull. Default 1,000,000 (~500 MB at 500B avg, tokenizes in 5-10 min). The pull self-terminates earlier on saturation \u2014 when new patterns per 100k events drops below 2%, the long tail has been covered and the report is generated. This default is intentionally two orders of magnitude beyond what an unaided agent can fit in context.",
+    "maximum": 5000000,
+    "minimum": 1000,
+    "type": "number"
+   },
+   "target_percent_reduction": {
+    "description": "Customer-specified target reduction percent. If absent, POC produces a recommendation-only output. If present, POC produces a feasibility verdict (`output.feasibility`) plus a pre-deploy commitment artifact stub (`output.commitment_artifact`) the agent can surface alongside the per-pattern actions. The cap CSV ready to commit is attached by a later change.",
+    "maximum": 100,
+    "minimum": 0,
+    "type": "number"
+   },
+   "total_annual_gb": {
+    "description": "Customer's total annual log volume in GB/year. See total_daily_gb for semantics.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "total_daily_gb": {
+    "description": "Customer's total daily log volume in GB/day. Pick any one of total_daily_gb / total_monthly_gb / total_annual_gb \u2014 whichever unit the user naturally thinks in. The tool normalizes to daily internally. When any is provided (or auto_detect_volume succeeds), per-pattern costs are extrapolated from the pulled sample to the full volume, producing meaningful annual-savings figures instead of sub-cent numbers. Priority: daily > monthly > annual. If the pull was narrowed via `query` to one service, this overstates cost \u2014 only a fraction of daily volume matches the filter.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "total_monthly_gb": {
+    "description": "Customer's total monthly log volume in GB/month. See total_daily_gb for semantics.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "window": {
+    "default": "14d",
+    "description": "Window to pull over. Accepts \"1h\", \"24h\", \"7d\", \"14d\", \"30d\". Default \"14d\" \u2014 wide windows unlock the differentiated longitudinal signals (first-seen, growth, stable-vs-new) that the agent cannot compute from a small sample. Pull pacing is automatic; long windows take minutes but the snapshot continues in the background.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "log10x_poc_from_siem_submit",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": true,
+  "properties": {
+   "actions": {
+    "default": [],
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "args": {
+       "additionalProperties": {},
+       "default": {},
+       "type": "object"
+      },
+      "reason": {
+       "type": "string"
+      },
+      "role": {
+       "enum": [
+        "required-next",
+        "recommended-next",
+        "optional-followup",
+        "alternative"
+       ],
+       "type": "string"
+      },
+      "tool": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "tool",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "data": {},
+   "generated_at": {
+    "type": "string"
+   },
+   "images": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "alt": {
+       "type": "string"
+      },
+      "data": {
+       "type": "string"
+      },
+      "mimeType": {
+       "default": "image/png",
+       "enum": [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "data"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "next_cursor": {
+    "type": "string"
+   },
+   "render_hint": {
+    "additionalProperties": false,
+    "properties": {
+     "callouts": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "chart": {
+      "enum": [
+       "sparkline",
+       "timeseries",
+       "bar",
+       "none"
+      ],
+      "type": "string"
+     },
+     "units": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "schema_epoch": {
+    "type": "string"
+   },
+   "schema_version": {
+    "const": "1.0",
+    "type": "string"
+   },
+   "summary": {
+    "additionalProperties": false,
+    "properties": {
+     "bullets": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 5,
+      "type": "array"
+     },
+     "callout": {
+      "type": "string"
+     },
+     "headline": {
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "headline"
+    ],
+    "type": "object"
+   },
+   "tool": {
+    "type": "string"
+   },
+   "truncated": {
+    "default": false,
+    "type": "boolean"
+   },
+   "view": {
+    "default": "summary",
+    "enum": [
+     "summary",
+     "markdown"
+    ],
+    "type": "string"
+   },
+   "warnings": {
+    "default": [],
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "schema_version",
+   "schema_epoch",
+   "tool",
+   "generated_at",
+   "summary"
+  ],
+  "type": "object"
+ },
+ "title": "POC from SIEM (submit)"
+}

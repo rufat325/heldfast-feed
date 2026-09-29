@@ -1,0 +1,236 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Ask the SAT whether an invoice actually exists and is still live. This queries the public `ConsultaCFDIService` SOAP endpoint \u2014 the same service the QR code printed on every Mexican invoice points at \u2014 so it needs **no credentials, no CSD and no PAC contract**.\n\nPass either the four values the SAT keys on (issuer RFC, receiver RFC, total, UUID) or the whole `xml`, in which case they are derived from it with the same reader `parse_cfdi` uses. Deriving them from the XML is the more reliable route: the total must be formatted exactly the way the printed-representation spec demands (six decimals, trailing zeros trimmed), and a total written in another format can come back as a spurious 'No Encontrado'.\n\nWhat comes back, each with its meaning spelled out:\n\n  - **Estado** \u2014 Vigente / Cancelado / No Encontrado.\n  - **EsCancelable** \u2014 whether the issuer can cancel it unilaterally, needs the receiver's approval, or cannot cancel it at all.\n  - **EstatusCancelacion** \u2014 whether a cancellation is in progress, was accepted, was rejected, or lapsed.\n  - **ValidacionEFOS** \u2014 whether the issuer, and any third-party RFC the invoice was issued on behalf of (*a cuenta de terceros*), appears on the SAT's definitive 69-B list of companies that invoice simulated operations. Read with the code table the SAT documents (service documentation v1.4, section 3): 100, 101 and 104 put the issuer on the list; 102 and 103 mean the issuer is NOT on it but a third-party RFC is; 200 and 201 mean the issuer is not on it (201: nor any third party). `efos_state` speaks of the issuer only and `efos_third_party_state` of the third parties; an empty field or an undocumented code is `unknown`, with the raw code kept in `validacion_efos`.\n  - **CodigoEstatus** \u2014 the service's own result code.\n\n**Fail-soft by design.** The SAT publishes no SLA and no status page, and the endpoint does go down; its documentation states capacity for up to 2 million queries per hour and asks callers not to raise their query volume, so query once per invoice and cache the answer. On timeout, refusal or a malformed answer this returns `available: false` with the reason instead of raising \u2014 a failed lookup is a statement about the SAT, never about the invoice. Never report a document as invalid on the strength of an unreachable service. One retry, 10-second timeout.\n\nArgs (either shape):\n  - xml (string), OR rfc_emisor + rfc_receptor + total + uuid (all strings).\n  - response_format ('markdown' | 'json'): output format (default 'markdown').\n\nReturns: { available, unavailable_reason, endpoint, expression, attempts, elapsed_ms, source, status{codigo_estatus, query_outcome, estado, document_state, document_meaning, es_cancelable, cancellable_state, cancellable_meaning, estatus_cancelacion, cancellation_state, cancellation_meaning, validacion_efos, efos_state, efos_third_party_state, efos_meaning, raw} | null, findings[] }.\n\nExample: \"Is this invoice still valid?\" -> cfdi_status(xml=\"<cfdi:Comprobante \u2026>\").",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "response_format": {
+    "default": "markdown",
+    "description": "Output format: 'markdown' for a human-readable summary (default) or 'json' for the full structured payload.",
+    "enum": [
+     "markdown",
+     "json"
+    ],
+    "type": "string"
+   },
+   "rfc_emisor": {
+    "description": "Issuer's RFC. Required unless `xml` is given.",
+    "type": "string"
+   },
+   "rfc_receptor": {
+    "description": "Receiver's RFC. Required unless `xml` is given.",
+    "type": "string"
+   },
+   "total": {
+    "description": "Invoice total exactly as written in the XML, e.g. '1160.00'. Required unless `xml` is given.",
+    "type": "string"
+   },
+   "uuid": {
+    "description": "The fiscal folio (UUID) from the Timbre Fiscal Digital. Required unless `xml` is given.",
+    "type": "string"
+   },
+   "xml": {
+    "description": "The complete CFDI XML. When given, the four query fields are derived from it and any values passed alongside are ignored.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "cfdi_status",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "attempts": {
+    "type": "number"
+   },
+   "available": {
+    "type": "boolean"
+   },
+   "elapsed_ms": {
+    "type": "number"
+   },
+   "endpoint": {
+    "type": "string"
+   },
+   "expression": {
+    "type": "string"
+   },
+   "findings": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "message": {
+       "type": "string"
+      },
+      "severity": {
+       "enum": [
+        "pass",
+        "warn",
+        "fail",
+        "info"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "severity",
+      "message"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "source": {
+    "enum": [
+     "fields",
+     "xml"
+    ],
+    "type": "string"
+   },
+   "status": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "cancellable_meaning": {
+        "type": "string"
+       },
+       "cancellable_state": {
+        "enum": [
+         "sin_aceptacion",
+         "con_aceptacion",
+         "no_cancelable",
+         "unknown"
+        ],
+        "type": "string"
+       },
+       "cancellation_meaning": {
+        "type": "string"
+       },
+       "cancellation_state": {
+        "enum": [
+         "cancelado_sin_aceptacion",
+         "cancelado_con_aceptacion",
+         "plazo_vencido",
+         "en_proceso",
+         "solicitud_rechazada",
+         "ninguno"
+        ],
+        "type": "string"
+       },
+       "codigo_estatus": {
+        "type": "string"
+       },
+       "document_meaning": {
+        "type": "string"
+       },
+       "document_state": {
+        "enum": [
+         "vigente",
+         "cancelado",
+         "no_encontrado"
+        ],
+        "type": "string"
+       },
+       "efos_meaning": {
+        "type": "string"
+       },
+       "efos_state": {
+        "enum": [
+         "not_listed",
+         "listed",
+         "unknown"
+        ],
+        "type": "string"
+       },
+       "efos_third_party_state": {
+        "enum": [
+         "listed",
+         "not_listed",
+         "not_reported",
+         "unknown"
+        ],
+        "type": "string"
+       },
+       "es_cancelable": {
+        "type": "string"
+       },
+       "estado": {
+        "type": "string"
+       },
+       "estatus_cancelacion": {
+        "type": "string"
+       },
+       "query_outcome": {
+        "enum": [
+         "found",
+         "not_found"
+        ],
+        "type": "string"
+       },
+       "raw": {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "propertyNames": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       "validacion_efos": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "codigo_estatus",
+       "query_outcome",
+       "estado",
+       "document_state",
+       "document_meaning",
+       "es_cancelable",
+       "cancellable_state",
+       "cancellable_meaning",
+       "estatus_cancelacion",
+       "cancellation_state",
+       "cancellation_meaning",
+       "validacion_efos",
+       "efos_state",
+       "efos_third_party_state",
+       "efos_meaning",
+       "raw"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "unavailable_reason": {
+    "type": [
+     "string",
+     "null"
+    ]
+   }
+  },
+  "required": [
+   "available",
+   "unavailable_reason",
+   "endpoint",
+   "expression",
+   "attempts",
+   "elapsed_ms",
+   "source",
+   "status",
+   "findings"
+  ],
+  "type": "object"
+ },
+ "title": "CFDI Status at the SAT"
+}

@@ -1,0 +1,272 @@
+{
+ "_meta": {
+  "category": "identify",
+  "tier": "reporter"
+ },
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Pattern examples"
+ },
+ "description": "Pull recent live events for a pattern from the customer's log analyzer (Splunk, Datadog, Elasticsearch, CloudWatch) and return them grouped by templateHash with template-extracted slot values per match. **Bounded to a 24-hour window** (live log analyzer retention); for older history use `log10x_retriever_query`. Input is either a Symbol Message (pattern name like `Payment_Gateway_Timeout`) or a pasted raw log line; pasted lines resolve via the same templater path as `log10x_resolve_batch`. The tool runs a SIEM phrase-search probe, runs returned events through the local templater, groups by templateHash (one bucket per template variant of the pattern; the stable pattern identity is the tenx_hash carried on each bucket), applies a content-token Jaccard similarity threshold (\u22650.85) to discriminate the matching pattern's events from look-alikes, and returns the top buckets by event count. Output is honest about partial extractions: per-bucket templateHash labels, recall counts, and explicit `parseFailed` markers when slot extraction fails. Multi-line group templates report head-line-only with an explicit warning. **Designed as an orchestration primitive** called by `log10x_investigate` when the chain needs concrete event evidence after a metric-tier identification. Direct user-facing use is fine but rare; prefer `log10x_event_lookup` + `log10x_pattern_trend` for single-line inspection.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "bucket_id": {
+    "description": "Bucket identifier to fully hydrate. Accepts either the `template_hash` or the `tenx_hash` returned in a prior `view=summary` call. When supplied, the response carries one bucket with full sample_event, full slot_distribution (un-cropped sample_values), bucket_interpretation.rationale, and human_summary. Other buckets are omitted.",
+    "type": "string"
+   },
+   "environment": {
+    "description": "Environment nickname.",
+    "type": "string"
+   },
+   "limit": {
+    "default": 10,
+    "description": "Maximum number of sample events per templateHash bucket. 1-50, default 10.",
+    "maximum": 50,
+    "minimum": 1,
+    "type": "number"
+   },
+   "pattern": {
+    "description": "Pattern name (e.g. `Payment_Gateway_Timeout`) or a pasted raw log line. Pasted lines resolve to the matching pattern via the same pattern-extraction path as log10x_resolve_batch. Either pattern or pattern_hash must be provided; pattern_hash is preferred when available.",
+    "type": "string"
+   },
+   "pattern_hash": {
+    "description": "Canonical 11-char hash. Either pattern (Symbol Message name) or pattern_hash must be provided; pattern_hash is preferred when available. Resolved to the pattern name via the 10x metrics (same path pattern_detail uses).",
+    "type": "string"
+   },
+   "scope": {
+    "description": "Vendor-specific scope (Splunk index, Datadog index, ES index pattern, CloudWatch log group). Defaults to a sensible per-vendor value when omitted.",
+    "type": "string"
+   },
+   "service": {
+    "description": "Optional service-name scope. Translated to the vendor-specific service filter.",
+    "type": "string"
+   },
+   "severity": {
+    "description": "Optional severity scope (e.g., `ERROR`, `WARN`).",
+    "type": "string"
+   },
+   "slot_filter": {
+    "additionalProperties": false,
+    "description": "Optional slot-value filter. When provided, only buckets whose slot_distribution carries the given slot value pass through. Useful for drilling into a single dominant value from a previous pattern_examples call.",
+    "properties": {
+     "name": {
+      "description": "Slot name as it appears in the slot_distribution (e.g. `userId`, `slot_4`).",
+      "type": "string"
+     },
+     "value": {
+      "description": "Slot value to filter for. Buckets are kept only when their slot_distribution[<name>].sample_values includes <value>.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "value"
+    ],
+    "type": "object"
+   },
+   "timeRange": {
+    "default": "1h",
+    "description": "Window for the live SIEM probe. Capped at 24h. To sample a pattern's offloaded cohort (events the Receiver routed to the overflow bucket, which the SIEM never received), use log10x_retriever_query. '1d' is a legacy alias for '24h'.",
+    "enum": [
+     "15m",
+     "1h",
+     "6h",
+     "24h",
+     "1d",
+     "7d",
+     "30d"
+    ],
+    "type": "string"
+   },
+   "vendor": {
+    "description": "Log analyzer to search. Auto-detected when exactly one of the supported vendors has credentials in the env; pass explicitly when multiple are configured.",
+    "enum": [
+     "splunk",
+     "datadog",
+     "elasticsearch",
+     "cloudwatch"
+    ],
+    "type": "string"
+   },
+   "view": {
+    "default": "summary",
+    "description": "Response shape. `summary` (default) returns slim top-3 buckets (rank, template_hash, tenx_hash, event_count, jaccard, severity, service, recommended_action, headline, ~200-char sample_event preview) plus pattern-level counts. No raw_events, no full sample_event, no slot_distribution, no rationale prose. Target: under 8K tokens. `detail` returns one fully-hydrated bucket (requires bucket_id); pair with retriever_query for raw events.",
+    "enum": [
+     "summary",
+     "detail"
+    ],
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "log10x_pattern_examples",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": true,
+  "properties": {
+   "actions": {
+    "default": [],
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "args": {
+       "additionalProperties": {},
+       "default": {},
+       "type": "object"
+      },
+      "reason": {
+       "type": "string"
+      },
+      "role": {
+       "enum": [
+        "required-next",
+        "recommended-next",
+        "optional-followup",
+        "alternative"
+       ],
+       "type": "string"
+      },
+      "tool": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "tool",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "data": {},
+   "generated_at": {
+    "type": "string"
+   },
+   "images": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "alt": {
+       "type": "string"
+      },
+      "data": {
+       "type": "string"
+      },
+      "mimeType": {
+       "default": "image/png",
+       "enum": [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "data"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "next_cursor": {
+    "type": "string"
+   },
+   "render_hint": {
+    "additionalProperties": false,
+    "properties": {
+     "callouts": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "chart": {
+      "enum": [
+       "sparkline",
+       "timeseries",
+       "bar",
+       "none"
+      ],
+      "type": "string"
+     },
+     "units": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "schema_epoch": {
+    "type": "string"
+   },
+   "schema_version": {
+    "const": "1.0",
+    "type": "string"
+   },
+   "summary": {
+    "additionalProperties": false,
+    "properties": {
+     "bullets": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 5,
+      "type": "array"
+     },
+     "callout": {
+      "type": "string"
+     },
+     "headline": {
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "headline"
+    ],
+    "type": "object"
+   },
+   "tool": {
+    "type": "string"
+   },
+   "truncated": {
+    "default": false,
+    "type": "boolean"
+   },
+   "view": {
+    "default": "summary",
+    "enum": [
+     "summary",
+     "markdown"
+    ],
+    "type": "string"
+   },
+   "warnings": {
+    "default": [],
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "schema_version",
+   "schema_epoch",
+   "tool",
+   "generated_at",
+   "summary"
+  ],
+  "type": "object"
+ },
+ "title": "Pattern examples"
+}

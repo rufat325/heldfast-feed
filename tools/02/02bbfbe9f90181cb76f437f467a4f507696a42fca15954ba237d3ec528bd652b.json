@@ -1,0 +1,706 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Fetch observations for up to 3 ILOSTAT datasets, filtered by reference area or area group, sex, breakdown codes (classif1, classif2), source, and period. Rows keep their source, observation status, decoded notes, and a basis \u2014 reported, modelled_estimate, or projection \u2014 and the response echoes every filter applied, including the best-source default. Codes are checked against ILOSTAT's dictionaries before the request is sent: ilostat_list_reference lists valid codes and ilostat_describe_indicator lists the codes a dataset actually uses. A result larger than the inline preview is staged in full as a df_<id> dataframe for SQL through ilostat_dataframe_describe and ilostat_dataframe_query when this deployment enables dataframes. A request with no filters at all is refused when the dataset exceeds the row ceiling, and a filtered request that still exceeds it is refused with guidance to narrow it.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "area_group": {
+    "description": "X01 for every country, an ILO region or subregion, or a World Bank income group (X06, X56, X02, \u2026); expands to its member countries, unioned with ref_areas. ilostat_list_reference topic area_groups lists the codes.",
+    "pattern": "^[A-Z0-9]{3}$",
+    "type": "string"
+   },
+   "classif1": {
+    "description": "Codes of the first breakdown (e.g. AGE_YTHADULT_YGE15); case-insensitive. ilostat_describe_indicator lists the codes a dataset uses.",
+    "items": {
+     "maxLength": 64,
+     "type": "string"
+    },
+    "maxItems": 100,
+    "type": "array"
+   },
+   "classif2": {
+    "description": "Codes of the second breakdown, for datasets that have one; case-insensitive. ilostat_describe_indicator lists them.",
+    "items": {
+     "maxLength": 64,
+     "type": "string"
+    },
+    "maxItems": 100,
+    "type": "array"
+   },
+   "dataset_ids": {
+    "description": "One to three dataset IDs \u2014 an indicator code plus _A, _Q, or _M (UNE_DEAP_SEX_AGE_RT_A), as ilostat_search_indicators returns them. Case-insensitive; a DF_ prefix (the SDMX dataflow form) is stripped, a bare indicator code resolves when it has one frequency, and an element holding + or , joined IDs is split.",
+    "items": {
+     "maxLength": 64,
+     "pattern": "^[A-Z0-9_]+$",
+     "type": "string"
+    },
+    "maxItems": 3,
+    "minItems": 1,
+    "type": "array"
+   },
+   "latest_only": {
+    "default": false,
+    "description": "Only the latest period per reference area and dataset (the latest quarter or month on sub-annual datasets); combines with time_from/time_to.",
+    "type": "boolean"
+   },
+   "ref_areas": {
+    "description": "Reference areas (up to 300): ISO3 country codes (USA) or X-coded aggregates (X01 World); case-insensitive, ILO_GEO_ forms accepted. Aggregates need a dataset with has_aggregates true. Omit for every area.",
+    "items": {
+     "pattern": "^[A-Z0-9]{3}$",
+     "type": "string"
+    },
+    "maxItems": 300,
+    "type": "array"
+   },
+   "sex": {
+    "description": "Sex codes SEX_T, SEX_M, SEX_F, SEX_O; T/M/F/O and total/both/male/female/other are accepted.",
+    "items": {
+     "enum": [
+      "SEX_T",
+      "SEX_M",
+      "SEX_F",
+      "SEX_O"
+     ],
+     "type": "string"
+    },
+    "maxItems": 4,
+    "type": "array"
+   },
+   "source_selection": {
+    "description": "best (default): the preferred source per area and period; all: secondary sources too, each row flagged best_source; secondary: secondary sources only. Defaults to all when sources is set.",
+    "enum": [
+     "best",
+     "all",
+     "secondary"
+    ],
+    "type": "string"
+   },
+   "sources": {
+    "description": "Source codes (e.g. BA:453); ilostat_list_reference topic sources with ref_area lists an area's sources. Without source_selection, setting sources switches it to all, since a secondary source matches nothing under best.",
+    "items": {
+     "maxLength": 64,
+     "type": "string"
+    },
+    "maxItems": 100,
+    "type": "array"
+   },
+   "time": {
+    "description": "One exact period: YYYY (on a quarterly or monthly dataset, every period of that year), YYYYQn, or YYYYMmm; 2024-Q2, 2024 Q2, and 2025-03 are normalized. Not combinable with time_from, time_to, or latest_only.",
+    "pattern": "^\\d{4}(Q[1-4]|M(0[1-9]|1[0-2]))?$",
+    "type": "string"
+   },
+   "time_from": {
+    "description": "First year (YYYY); upstream filters by year only.",
+    "pattern": "^\\d{4}$",
+    "type": "string"
+   },
+   "time_to": {
+    "description": "Last year (YYYY), not before time_from.",
+    "pattern": "^\\d{4}$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "dataset_ids"
+  ],
+  "type": "object"
+ },
+ "name": "ilostat_query_indicator",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "datasets",
+     "row_count",
+     "rows",
+     "legend",
+     "summary",
+     "attribution",
+     "applied_filters",
+     "truncated",
+     "shown",
+     "cap"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "applied_filters": {
+    "additionalProperties": false,
+    "description": "Every parameter sent upstream, defaults included.",
+    "properties": {
+     "area_group": {
+      "additionalProperties": false,
+      "description": "The area group and how many countries it expanded to.",
+      "properties": {
+       "code": {
+        "description": "Area group code.",
+        "type": "string"
+       },
+       "label": {
+        "description": "Area group label.",
+        "type": "string"
+       },
+       "member_count": {
+        "description": "Member countries it expanded to.",
+        "type": "number"
+       }
+      },
+      "required": [
+       "code",
+       "label",
+       "member_count"
+      ],
+      "type": "object"
+     },
+     "best_source": {
+      "description": "The upstream best_source value sent.",
+      "enum": [
+       "yes",
+       "all",
+       "no"
+      ],
+      "type": "string"
+     },
+     "classif1": {
+      "description": "classif1 codes sent.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "classif2": {
+      "description": "classif2 codes sent.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "dataset_ids": {
+      "description": "Datasets requested.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "latest_only": {
+      "description": "Whether only the latest period per area was requested.",
+      "type": "boolean"
+     },
+     "ref_area_count": {
+      "description": "Areas sent upstream: ref_areas plus the area_group members.",
+      "type": "number"
+     },
+     "ref_areas": {
+      "description": "Reference areas given, normalized.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "sex": {
+      "description": "Sex codes sent.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "source_selection": {
+      "description": "Source selection applied (all when sources were given without one).",
+      "enum": [
+       "best",
+       "all",
+       "secondary"
+      ],
+      "type": "string"
+     },
+     "sources": {
+      "description": "Source codes sent.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "time": {
+      "description": "Exact period sent.",
+      "type": "string"
+     },
+     "time_from": {
+      "description": "First year sent.",
+      "type": "string"
+     },
+     "time_to": {
+      "description": "Last year sent.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "dataset_ids",
+     "latest_only",
+     "source_selection",
+     "best_source"
+    ],
+    "type": "object"
+   },
+   "attribution": {
+    "description": "Citation to keep with any use of the data.",
+    "type": "string"
+   },
+   "cap": {
+    "description": "Inline preview budget, in serialized characters.",
+    "type": "number"
+   },
+   "dataframe": {
+    "additionalProperties": false,
+    "description": "The staged dataframe holding the full result; present only when staged.",
+    "properties": {
+     "evicted": {
+      "description": "Dataframes dropped, oldest first, to keep this tenant within 1,000,000 staged rows and 100 dataframes; present only when staging this one evicted any.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "expires_at": {
+      "description": "ISO 8601 expiry of the staged dataframe.",
+      "type": "string"
+     },
+     "name": {
+      "description": "Staged dataframe name (df_XXXXX_XXXXX) for ilostat_dataframe_query SQL.",
+      "type": "string"
+     },
+     "row_count": {
+      "description": "Rows staged.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "name",
+     "row_count",
+     "expires_at"
+    ],
+    "type": "object"
+   },
+   "datasets": {
+    "description": "The requested datasets, in request order.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One requested dataset and how its values are classed.",
+     "properties": {
+      "database": {
+       "additionalProperties": false,
+       "description": "Source database.",
+       "properties": {
+        "code": {
+         "description": "Database code.",
+         "type": "string"
+        },
+        "label": {
+         "description": "Database label.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "label"
+       ],
+       "type": "object"
+      },
+      "dataset_id": {
+       "description": "Dataset ID.",
+       "type": "string"
+      },
+      "edition": {
+       "description": "The edition the cutoff derives from, e.g. Nov. 2025.",
+       "type": "string"
+      },
+      "frequency": {
+       "description": "A (annual), Q (quarterly), or M (monthly).",
+       "type": "string"
+      },
+      "has_aggregates": {
+       "description": "Whether the dataset carries World, regional, or income-group rows.",
+       "type": "boolean"
+      },
+      "label": {
+       "description": "Dataset label as ILOSTAT publishes it.",
+       "type": "string"
+      },
+      "last_update": {
+       "description": "Last upstream update, ISO 8601 without zone offset.",
+       "type": "string"
+      },
+      "projection_after_year": {
+       "description": "Last year counted as an estimate; modelled rows after it are classed projection.",
+       "type": "number"
+      },
+      "projection_rule": {
+       "description": "How the cutoff was set: the label's edition, the catalog's latest ILO modelled estimates edition, or the year before the current year.",
+       "enum": [
+        "edition",
+        "catalog_edition",
+        "current_year"
+       ],
+       "type": "string"
+      },
+      "unit": {
+       "additionalProperties": false,
+       "description": "Unit of the values, already in the multiplier scale; absent when unresolved.",
+       "properties": {
+        "measure": {
+         "description": "Unit code (PT percent, PS persons, LC local currency, \u2026).",
+         "type": "string"
+        },
+        "measure_label": {
+         "description": "Unit label.",
+         "type": "string"
+        },
+        "multiplier": {
+         "description": "Power of ten values are expressed in: 0 units, 3 thousands, 6 millions.",
+         "type": "number"
+        },
+        "multiplier_label": {
+         "description": "Multiplier label.",
+         "type": "string"
+        },
+        "type": {
+         "description": "Unit type code (RT rate, NB number, \u2026).",
+         "type": "string"
+        },
+        "type_label": {
+         "description": "Unit type label.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "measure",
+        "type",
+        "multiplier"
+       ],
+       "type": "object"
+      }
+     },
+     "required": [
+      "dataset_id",
+      "label",
+      "frequency",
+      "database",
+      "last_update",
+      "has_aggregates",
+      "projection_after_year",
+      "projection_rule"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `unknown_dataset`: A dataset ID is not in the catalog, or a bare indicator code has several frequencies. `unknown_code`: A ref_areas, sex, classif1, classif2, or sources value is not in the ILOSTAT dictionaries. `unknown_area_group`: area_group is not X01, an ILO region or subregion, or a World Bank income group. `aggregates_unavailable`: An X-coded aggregate was requested from a dataset that has no aggregate rows. `invalid_period`: A sub-annual time on a dataset of another frequency, time combined with a range or latest_only, or time_from after time_to. `request_too_broad`: No filters at all and the unfiltered size exceeds the row ceiling. `result_too_large`: The filtered result passed the row ceiling while streaming. `dataset_retired`: Upstream reports a catalog dataset ID as deprecated or invalid. `upstream_busy`: The server-side pacer shed the call, or the ILOSTAT API answered 429 or a challenge page. `catalog_unavailable`: No catalog snapshot has loaded and the load failed, or the first load has not finished within 30 s. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "unknown_dataset",
+         "unknown_code",
+         "unknown_area_group",
+         "aggregates_unavailable",
+         "invalid_period",
+         "request_too_broad",
+         "result_too_large",
+         "dataset_retired",
+         "upstream_busy",
+         "catalog_unavailable"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "legend": {
+    "additionalProperties": false,
+    "description": "Labels for every code in rows.",
+    "properties": {
+     "classif1": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "classif1 code \u2192 label, for every code in rows.",
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "classif2": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "classif2 code \u2192 label, for every code in rows.",
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "notes": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Note code \u2192 label, for every code in rows.",
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "obs_status": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Observation status code \u2192 label, for every code in rows.",
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "ref_area": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Reference area code \u2192 label, for every code in rows.",
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "sex": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Sex code \u2192 label, for every code in rows.",
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "source": {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "description": "Source code \u2192 label, for every code in rows.",
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     }
+    },
+    "required": [
+     "ref_area",
+     "source",
+     "sex",
+     "classif1",
+     "classif2",
+     "obs_status",
+     "notes"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Filters that could not narrow a dataset, a unit the structure service could not supply, why nothing matched, where the full result is staged, or why reading stopped early.",
+    "type": "string"
+   },
+   "row_count": {
+    "description": "Rows the request returned \u2014 exact when the result is inline or staged; when reading stopped early (truncated), the rows read.",
+    "type": "number"
+   },
+   "rows": {
+    "description": "Inline preview rows; the staged dataframe holds every row when the result is larger.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One observation.",
+     "properties": {
+      "basis": {
+       "description": "reported (national or institutional source), modelled_estimate (ILO modelled, up to the cutoff), or projection (ILO modelled, after it).",
+       "enum": [
+        "reported",
+        "modelled_estimate",
+        "projection"
+       ],
+       "type": "string"
+      },
+      "best_source": {
+       "description": "Whether this is the preferred source; set only when secondary sources were requested.",
+       "type": "boolean"
+      },
+      "classif1": {
+       "description": "First breakdown code, when the dataset has one.",
+       "type": "string"
+      },
+      "classif2": {
+       "description": "Second breakdown code, when the dataset has one.",
+       "type": "string"
+      },
+      "dataset_id": {
+       "description": "Dataset ID.",
+       "type": "string"
+      },
+      "notes": {
+       "description": "Note codes (legend.notes decodes them).",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "obs_status": {
+       "description": "Observation status flag (legend.obs_status decodes it).",
+       "type": "string"
+      },
+      "period": {
+       "description": "Period: YYYY, YYYYQn, or YYYYMmm.",
+       "type": "string"
+      },
+      "ref_area": {
+       "description": "Reference area code (legend.ref_area decodes it).",
+       "type": "string"
+      },
+      "sex": {
+       "description": "Sex code; absent when the dataset has no sex breakdown.",
+       "type": "string"
+      },
+      "source": {
+       "description": "Source code (legend.source decodes it).",
+       "type": "string"
+      },
+      "value": {
+       "description": "Value in the dataset unit; absent when upstream sent none.",
+       "type": "number"
+      }
+     },
+     "required": [
+      "dataset_id",
+      "ref_area",
+      "source",
+      "period",
+      "notes",
+      "basis"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "shown": {
+    "description": "Rows returned inline.",
+    "type": "number"
+   },
+   "summary": {
+    "additionalProperties": false,
+    "description": "Summary over every row read, not just the preview.",
+    "properties": {
+     "basis_counts": {
+      "additionalProperties": false,
+      "description": "Values per basis.",
+      "properties": {
+       "modelled_estimate": {
+        "description": "ILO modelled estimates up to the cutoff.",
+        "type": "number"
+       },
+       "projection": {
+        "description": "ILO modelled values after the cutoff.",
+        "type": "number"
+       },
+       "reported": {
+        "description": "Values from a national or institutional source.",
+        "type": "number"
+       }
+      },
+      "required": [
+       "reported",
+       "modelled_estimate",
+       "projection"
+      ],
+      "type": "object"
+     },
+     "complete": {
+      "description": "False when reading stopped early, so the counts cover only the rows read.",
+      "type": "boolean"
+     },
+     "period_max": {
+      "description": "Latest period; absent on zero rows.",
+      "type": "string"
+     },
+     "period_min": {
+      "description": "Earliest period; absent on zero rows.",
+      "type": "string"
+     },
+     "ref_areas": {
+      "description": "Distinct reference areas in the rows read.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "ref_areas",
+     "basis_counts",
+     "complete"
+    ],
+    "type": "object"
+   },
+   "truncated": {
+    "description": "True when reading stopped at the inline preview and more rows exist.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Query ILOSTAT observations"
+}

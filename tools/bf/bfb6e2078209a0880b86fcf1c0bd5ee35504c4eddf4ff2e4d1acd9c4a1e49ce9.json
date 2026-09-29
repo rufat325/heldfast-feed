@@ -1,0 +1,45 @@
+{
+ "description": "Update a single step by ID. Low-level merge primitive \u2014 prefer surgical tools for common single-path edits:\n\n- `replace_step_dictionary` \u2014 merge keys into `fieldUpdates` / `responseStructure` / `fieldMapping` without dropping siblings\n- `replace_step_path` \u2014 set one nested path while preserving siblings (e.g. `renderer.config.layout`)\n- `unset_step_path` \u2014 delete one path\n- `append_step_array_item` / `remove_step_array_item` \u2014 mutate `tools` / `integrations` safely\n\nKeep `update_step` for complex multi-path edits, shape conversions, and batch changes. Prefer it over `update_workflow` for any one-step change; full `steps` arrays are for imports/round-trips only.\n\n## KG-First \u2014 when editing a prompt template\n\nIf this edit introduces or changes workspace-specific content in a prompt template (thesis, ICP, rubric, sector list, geo focus, brand voice), check the KG first: call `list_memories` / `list_knowledge_lists` / `get_knowledge_text`. Seed the content there if it isn't already present, then reference it at runtime (`{{steps.read-kg.content}}`) instead of pasting text inline.\n\n**Boundary: strategy \u2192 KG; execution wiring \u2192 workflow context; workflow structure \u2192 workflow.**\n\n## Merge semantics\n\n`update_step` accepts three independent operations on the same call. At least one must be non-empty.\n\n- **`updates`** \u2014 partial step patch. Top-level fields are replaced; nested objects (`pipelineStepPrompt`, `stepInputData`, `entryConditions`, `renderer`, etc.) are deep-merged ONE LEVEL deep \u2014 keys nested two levels deep are overwritten as a unit, not merged. Arrays are replaced wholesale.\n- **`replace: string[]`** \u2014 dot-paths (e.g. `\"stepInputData.fieldUpdates\"`) whose values from `updates` are assigned WHOLESALE onto the step, skipping the deep-merge. Use for dictionary-shaped fields where keys are user data.\n- **`unset: string[]`** \u2014 dot-paths to DELETE. Each must exist on the original step.\n\n## When to use which\n\n| Situation | Verb | Example |\n|---|---|---|\n| Change one config key, keep siblings | `updates` | `updates: { pipelineStepPrompt: { template: \"new...\" } }` |\n| Add a stepInputData entry | `updates` | `updates: { stepInputData: { profileUrls: \"{{input.url}}\" } }` |\n| Dictionary key merge | surgical | `replace_step_dictionary({ path: \"stepInputData.fieldUpdates\", value: {...} })` |\n| Remove a step input | `unset` / surgical | `unset_step_path` or `unset: [\"stepInputData.oldKey\"]` |\n| Swap full arrays | `updates` / surgical | `append_step_array_item` or `updates: { tools: [...] }` |\n\n**The trap.** Patching `stepInputData.fieldUpdates` with a partial dict via raw `updates` silently wipes siblings. Prefer `replace_step_dictionary`.\n\n## Diff + warnings\n\nResponse includes `diff: { addedPaths, changedPaths, removedPaths }` and `warnings[]`. \u22656 fields removed without explicit `unset` triggers a warning.\n\n## Shape conversions\n\nFetch the canonical example before changing shape:\n- email: `get_step_schema({ stepType: \"aiAction\", shape: \"email\" })`\n- report: `get_step_schema({ stepType: \"aiAction\", shape: \"report\" })`\nSend under `updates`, `replace[]` for dictionary children, `unset[]` for stale type-specific fields.\n\n## Won't do\n\n- **Cannot change `step.id`** \u2014 root id is immutable; API returns 400. Nested `*.id` is fine.\n- **Does not enforce `step.type` immutability.** Stale type-specific fields (`pipelineStepPrompt`, `app`, `tools`) persist unless `unset`. For clean conversions, prefer `remove_step` + `add_step`.\n- **Does not validate the merged result against shape rules** \u2014 call `validate_workflow` after edits.\n\n## Draft routing (live workflows)\n\nEdits are routed to a draft snapshot (`editingDraft: true` in response). Inspect via `get_draft`, ship via `promote_draft`, discard via `discard_draft`.\n\nWhen a draft exists, the response carries a `draft` summary: `{ exists, draftCreatedAt, liveUpdatedAt, stale, modifiedStepIds, modifiedFields }`. **If `draft.stale === true`, the live workflow advanced past the draft** \u2014 promoting will land older values for fields you didn't touch. A staleness warning is pushed into `warnings[]`. Recovery: `discard_draft` + retry, or inspect via `get_draft` first.\n\nRequires write access when connected with OAuth.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "replace": {
+    "description": "Dot-paths (e.g. \"stepInputData.fieldUpdates\") whose values in `updates` should be assigned wholesale, skipping deep-merge. Use for dictionary-shaped fields where keys are user data (responseStructure, fieldUpdates, fieldMapping). Each listed path must have a corresponding value in `updates`.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "stepId": {
+    "description": "The step ID to update (e.g., \"analyze\", \"scrape-company\")",
+    "type": "string"
+   },
+   "unset": {
+    "description": "Dot-paths to delete from the step. Each must currently exist on the step (validated against the original, not the post-merge state).",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "updates": {
+    "additionalProperties": {},
+    "description": "Partial step patch, one-level deep-merged into the existing step. Top-level fields are shallow-replaced; nested objects (pipelineStepPrompt, stepInputData, entryConditions, etc.) are deep-merged ONE LEVEL only \u2014 keys two levels deep are overwritten as a unit. Arrays are replaced wholesale. Optional if `replace` or `unset` is provided.",
+    "type": "object"
+   },
+   "workflowId": {
+    "description": "The workflow ID",
+    "type": "string"
+   }
+  },
+  "required": [
+   "workflowId",
+   "stepId"
+  ],
+  "type": "object"
+ },
+ "name": "update_step"
+}

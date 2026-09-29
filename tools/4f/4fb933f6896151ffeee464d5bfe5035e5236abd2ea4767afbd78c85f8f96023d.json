@@ -1,0 +1,686 @@
+{
+ "annotations": {
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false
+ },
+ "description": "Create a draft eval record carrying its own executable grader. Persists it as a draft, then returns the parsed record parroted back behind a divider, a per-field review protocol, a ready-to-paste verification subagent prompt, and the self-consistency result. It stays draft \u2014 self-consistency passing proves the grader discriminates, not that the gold is right; record an independent verification (a subagent report or your own decorrelated check) before evals_submit_draft.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "author_model": {
+    "description": "The authoring model id; stored under provenance.author_model (falls back to \"unknown\").",
+    "type": "string"
+   },
+   "captures": {
+    "description": "EvalsIDs linking the fleet tool calls behind the answer; resolved from EVALS_CAPTURE_DIR at submit.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "choices": {
+    "description": "The answer choices; required for mcq (grader.correct must equal one element).",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "context": {
+    "description": "An optional grounding passage for the task.",
+    "type": "string"
+   },
+   "discrimination": {
+    "description": "The discrimination cases that prove the grader accepts right answers and rejects wrong ones.",
+    "properties": {
+     "negative": {
+      "description": "Known-wrong answers that MUST fail; at least one is required to submit.",
+      "items": {},
+      "type": "array"
+     },
+     "positive": {
+      "description": "Answers that MUST pass the grader (gold is implicitly one).",
+      "items": {},
+      "type": "array"
+     }
+    },
+    "required": [
+     "positive",
+     "negative"
+    ],
+    "type": "object"
+   },
+   "gold": {
+    "description": "The reference answer; its shape depends on task_type (a number/expression for numeric, a string for exact_answer, etc.)."
+   },
+   "grader": {
+    "description": "The grader serialized with the record. Deterministic kinds run server-side; llm_rubric relies on recorded independent verification.",
+    "oneOf": [
+     {
+      "description": "Numeric tolerance grader.",
+      "properties": {
+       "abs_tol": {
+        "description": "Absolute tolerance for the comparison (e.g. 1e-3).",
+        "type": "number"
+       },
+       "kind": {
+        "const": "numeric",
+        "description": "Numeric grader \u2014 resolves target through math.js, then compares with tolerance.",
+        "type": "string"
+       },
+       "rel_tol": {
+        "description": "Relative tolerance for the comparison (e.g. 1e-6). Defaults to 1e-9 when both tolerances are omitted.",
+        "type": "number"
+       },
+       "target": {
+        "anyOf": [
+         {
+          "description": "A literal reference number, e.g. 0.3571428571.",
+          "type": "number"
+         },
+         {
+          "description": "A math.js expression string, e.g. \"5/14\" or \"combinations(5,2)/combinations(8,2)\".",
+          "type": "string"
+         }
+        ],
+        "description": "Reference value as a number or a math.js expression string, resolved to a number for comparison."
+       },
+       "units": {
+        "description": "Expected units for documentation, e.g. \"kg\" \u2014 not enforced numerically.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "kind",
+       "target"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "Gold-relative normalized string-equality grader.",
+      "properties": {
+       "kind": {
+        "const": "exact_match",
+        "description": "Gold-relative string match \u2014 grades a candidate against the record gold after normalization.",
+        "type": "string"
+       },
+       "normalize": {
+        "description": "Normalization steps applied to both gold and candidate before exact comparison.",
+        "items": {
+         "description": "A normalization step applied before comparison: trim whitespace, lowercase, strip punctuation, or strip LaTeX wrappers ($, \\(, \\text{}).",
+         "enum": [
+          "trim",
+          "lowercase",
+          "strip_punct",
+          "strip_latex"
+         ],
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "kind"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "Set-membership grader (ordered or unordered).",
+      "properties": {
+       "expected": {
+        "description": "The expected set of string elements the candidate must contain.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "kind": {
+        "const": "set_match",
+        "description": "Set match \u2014 grades a candidate list/CSV against an expected set.",
+        "type": "string"
+       },
+       "order_sensitive": {
+        "description": "When true, element order must match exactly. Defaults to unordered.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "kind",
+       "expected"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "Regular-expression match grader.",
+      "properties": {
+       "flags": {
+        "description": "Regex flags, e.g. \"i\" for case-insensitive or \"m\" for multiline.",
+        "type": "string"
+       },
+       "kind": {
+        "const": "regex",
+        "description": "Regex grader \u2014 a candidate passes when the pattern matches it.",
+        "type": "string"
+       },
+       "pattern": {
+        "description": "The regular expression pattern (JavaScript flavor) tested against the candidate.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "kind",
+       "pattern"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "Multiple-choice grader.",
+      "properties": {
+       "correct": {
+        "description": "The correct answer; must equal one element of the record choices[].",
+        "type": "string"
+       },
+       "kind": {
+        "const": "mcq",
+        "description": "Multiple-choice grader \u2014 a candidate passes when it equals the correct choice.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "kind",
+       "correct"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "JSON deep-equality and/or JSON-Schema grader.",
+      "properties": {
+       "expected": {
+        "description": "A value the candidate must deep-equal (any JSON-serializable shape)."
+       },
+       "kind": {
+        "const": "json_match",
+        "description": "JSON grader \u2014 a candidate must deep-equal expected and/or satisfy a JSON Schema. At least one of expected/schema is required.",
+        "type": "string"
+       },
+       "schema": {
+        "additionalProperties": {},
+        "description": "A JSON Schema object the candidate must structurally satisfy (validated by ajv at runtime).",
+        "propertyNames": {
+         "type": "string"
+        },
+        "type": "object"
+       }
+      },
+      "required": [
+       "kind"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "LLM-rubric grader for free_response.",
+      "properties": {
+       "criteria": {
+        "description": "The weighted criteria the judge evaluates the candidate against.",
+        "items": {
+         "description": "A single weighted rubric criterion.",
+         "properties": {
+          "description": {
+           "description": "What the judge checks for this criterion.",
+           "type": "string"
+          },
+          "weight": {
+           "description": "Relative weight in the weighted pass score (default 1).",
+           "type": "number"
+          }
+         },
+         "required": [
+          "description"
+         ],
+         "type": "object"
+        },
+        "minItems": 1,
+        "type": "array"
+       },
+       "judge_prompt": {
+        "description": "Instructions for the judge model on how to apply the criteria.",
+        "type": "string"
+       },
+       "kind": {
+        "const": "llm_rubric",
+        "description": "LLM-judge grader specification \u2014 submission relies on recorded independent verification because this server cannot execute it.",
+        "type": "string"
+       },
+       "pass_threshold": {
+        "description": "Minimum weighted score (0..1) for the candidate to PASS.",
+        "type": "number"
+       }
+      },
+      "required": [
+       "kind",
+       "criteria",
+       "judge_prompt",
+       "pass_threshold"
+      ],
+      "type": "object"
+     }
+    ]
+   },
+   "metadata": {
+    "description": "Record metadata: domain (required), tags (required), and optional license/provenance/contamination notes.",
+    "properties": {
+     "contamination_notes": {
+      "description": "Notes on memorization/contamination risk for this item.",
+      "type": "string"
+     },
+     "domain": {
+      "description": "The eval domain, e.g. \"math.probability\" or \"finance.filings\".",
+      "type": "string"
+     },
+     "license": {
+      "description": "SPDX-style license; defaults to EVALS_DEFAULT_LICENSE when omitted.",
+      "type": "string"
+     },
+     "source_provenance": {
+      "description": "Citations grounding the gold; live-source verification lands here.",
+      "items": {
+       "description": "A ground-truth source citation grounding the gold answer.",
+       "properties": {
+        "query": {
+         "description": "The call or query made against that server.",
+         "type": "string"
+        },
+        "retrieved_at": {
+         "description": "ISO 8601 timestamp of when the value was retrieved.",
+         "type": "string"
+        },
+        "server": {
+         "description": "Fleet server that supplied the value, e.g. \"secedgar\".",
+         "type": "string"
+        },
+        "uri": {
+         "description": "Citation or permalink for the value.",
+         "type": "string"
+        },
+        "value": {
+         "description": "The retrieved ground-truth value.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "server",
+        "query",
+        "value",
+        "retrieved_at"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "tags": {
+      "description": "Free-form tags for filtering and grouping.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "domain",
+     "tags"
+    ],
+    "type": "object"
+   },
+   "prompt": {
+    "description": "The task shown to the model under test.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "task_type": {
+    "description": "The eval task type. numeric: a number/expression answer; exact_answer: a normalized string; set_answer: an unordered/ordered set; mcq: a multiple-choice selection (requires choices); regex_answer: a pattern match; json_answer: a structured value; free_response: rubric-graded prose (requires an llm_rubric grader).",
+    "enum": [
+     "numeric",
+     "exact_answer",
+     "set_answer",
+     "mcq",
+     "regex_answer",
+     "json_answer",
+     "free_response"
+    ],
+    "type": "string"
+   },
+   "verification": {
+    "description": "Optional draft-time verification provenance, if you already have evidence (method + generation_method + evidence[]).",
+    "properties": {
+     "evidence": {
+      "description": "Pre-recorded verification evidence available at draft time.",
+      "items": {
+       "description": "A single verification evidence entry, discriminated by type.",
+       "oneOf": [
+        {
+         "description": "Deterministic re-derivation evidence.",
+         "properties": {
+          "claim": {
+           "description": "The claim that was checked.",
+           "type": "string"
+          },
+          "computed": {
+           "description": "The value the check computed, when applicable."
+          },
+          "passed": {
+           "description": "Whether the deterministic check passed.",
+           "type": "boolean"
+          },
+          "tool": {
+           "description": "The tool or method used to compute the claim, e.g. \"evals_run_check\".",
+           "type": "string"
+          },
+          "type": {
+           "const": "deterministic_check",
+           "description": "A deterministic re-computation or verifier run.",
+           "type": "string"
+          }
+         },
+         "required": [
+          "type",
+          "tool",
+          "claim",
+          "passed"
+         ],
+         "type": "object"
+        },
+        {
+         "description": "Fresh-context subagent review evidence.",
+         "properties": {
+          "findings": {
+           "description": "The subagent report, one concise summary of issues or confirmation.",
+           "type": "string"
+          },
+          "method": {
+           "description": "How the subagent verified the gold (for decorrelation), e.g. \"independent_derivation\".",
+           "type": "string"
+          },
+          "model": {
+           "description": "The reviewing model, e.g. \"claude-sonnet-4-6\".",
+           "type": "string"
+          },
+          "type": {
+           "const": "subagent_review",
+           "description": "A fresh-context subagent review of the draft.",
+           "type": "string"
+          }
+         },
+         "required": [
+          "type",
+          "model",
+          "findings"
+         ],
+         "type": "object"
+        },
+        {
+         "description": "Live source-lookup evidence.",
+         "properties": {
+          "source": {
+           "description": "The source entry that grounds the gold.",
+           "properties": {
+            "query": {
+             "description": "The call or query made against that server.",
+             "type": "string"
+            },
+            "retrieved_at": {
+             "description": "ISO 8601 timestamp of when the value was retrieved.",
+             "type": "string"
+            },
+            "server": {
+             "description": "Fleet server that supplied the value, e.g. \"secedgar\".",
+             "type": "string"
+            },
+            "uri": {
+             "description": "Citation or permalink for the value.",
+             "type": "string"
+            },
+            "value": {
+             "description": "The retrieved ground-truth value.",
+             "type": "string"
+            }
+           },
+           "required": [
+            "server",
+            "query",
+            "value",
+            "retrieved_at"
+           ],
+           "type": "object"
+          },
+          "type": {
+           "const": "source_lookup",
+           "description": "A live lookup against an authoritative fleet source.",
+           "type": "string"
+          }
+         },
+         "required": [
+          "type",
+          "source"
+         ],
+         "type": "object"
+        },
+        {
+         "description": "Free-form verification note.",
+         "properties": {
+          "text": {
+           "description": "The note text.",
+           "type": "string"
+          },
+          "type": {
+           "const": "note",
+           "description": "A free-form verification note.",
+           "type": "string"
+          }
+         },
+         "required": [
+          "type",
+          "text"
+         ],
+         "type": "object"
+        }
+       ]
+      },
+      "type": "array"
+     },
+     "generation_method": {
+      "description": "How the answer was produced, for decorrelation against the verification path.",
+      "type": "string"
+     },
+     "method": {
+      "description": "How the gold was checked, e.g. \"independent_derivation\".",
+      "type": "string"
+     }
+    },
+    "required": [
+     "method"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "task_type",
+   "prompt",
+   "gold",
+   "grader",
+   "discrimination",
+   "metadata"
+  ],
+  "type": "object"
+ },
+ "name": "evals_create_draft",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "draft_id",
+     "status",
+     "normalized_record",
+     "server_checks",
+     "review_protocol",
+     "suggested_subagent_prompt",
+     "required_before_submit"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "draft_id": {
+    "description": "The assigned record id, stable across the lifecycle.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `grader_unexecutable`: The grader spec cannot run against the gold (malformed math.js target, invalid regex, missing json_match reference). `task_type_constraint`: A per-task-type rule is violated (mcq without choices; free_response without an llm_rubric grader). `mcq_choice_mismatch`: The mcq grader correct answer is not one of the choices. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "grader_unexecutable",
+         "task_type_constraint",
+         "mcq_choice_mismatch"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "normalized_record": {
+    "additionalProperties": {},
+    "description": "The record as the server parsed and stored it, with server-stamped id/created_at/content_hash.",
+    "properties": {},
+    "type": "object"
+   },
+   "required_before_submit": {
+    "description": "What still must be true before evals_submit_draft will accept the record.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "review_protocol": {
+    "description": "The per-field review protocol to work through before submit.",
+    "type": "string"
+   },
+   "server_checks": {
+    "additionalProperties": false,
+    "description": "The cheap self-consistency result (not the submit gate).",
+    "properties": {
+     "self_consistency": {
+      "additionalProperties": false,
+      "description": "The cheap self-consistency verdict.",
+      "properties": {
+       "gold_passes_grader": {
+        "description": "True when the gold passes its own grader.",
+        "type": "boolean"
+       },
+       "grader_ok": {
+        "description": "True when gold + all positives pass and all negatives (\u22651) are rejected.",
+        "type": "boolean"
+       },
+       "negatives_rejected": {
+        "description": "Per-negative rejection verdict (true = correctly rejected), in declaration order.",
+        "items": {
+         "type": "boolean"
+        },
+        "type": "array"
+       },
+       "positives_pass": {
+        "description": "Per-positive pass verdict, in declaration order.",
+        "items": {
+         "type": "boolean"
+        },
+        "type": "array"
+       },
+       "ready_to_submit": {
+        "description": "True only when both grader_ok and verification_present are true.",
+        "type": "boolean"
+       },
+       "verification_present": {
+        "description": "True when at least one verification.evidence entry exists.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "gold_passes_grader",
+       "positives_pass",
+       "negatives_rejected",
+       "grader_ok",
+       "verification_present",
+       "ready_to_submit"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "self_consistency"
+    ],
+    "type": "object"
+   },
+   "status": {
+    "const": "draft",
+    "description": "Always \"draft\" \u2014 creation never finalizes.",
+    "type": "string"
+   },
+   "suggested_subagent_prompt": {
+    "description": "A ready-to-paste prompt for a fresh verification subagent.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "title": "evals-mcp-server: create draft"
+}

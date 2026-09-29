@@ -1,0 +1,79 @@
+{
+ "description": "Surgically edit a timeline's eventSummary, pending approval eventContent, or metadata fields without rerunning the upstream step. Terminal eventSummary-only relabels do not require confirmTimelineId; other terminal repairs require exact-ID confirmation.\n\nEXCEPTION-ONLY tool. Use cases:\n  - Repair a malformed legacy/non-preview pending timeline that the regular approval editor cannot handle\n  - Relabel a terminal timeline's eventSummary so the timeline row matches confirmed outcome, similar to metadata.executionName relabels on executions\n  - Update metadata.pendingReasonTag for UI annotation\n  - Recover a failed timeline back to pending (status transition: failed \u2192 pending)\n  - Repair corrupted eventContent on a completed/approved/rejected terminal timeline after an incident, only when rerun/retry would duplicate side effects or lose canonical output\n\nDO NOT use for normal pending approval changes. Edit a healthy _previewApproval draft in place through the approval card or run-side agent; do not rerun it merely to change copy, recipients, dates, links, or media. This admin tool exists for incident response outside that regular contract.\n\nRequired:\n  - API key with admin:patch scope (Stage 2 \u2014 without it returns 403 FORBIDDEN_SCOPE)\n  - reason: non-empty string (\u2264500 chars), persisted in the audit row\n  - expectedUpdatedAt: timeline.updatedAt from a fresh read \u2014 guards against lost-update races\n  - confirmTimelineId: required for terminal records except eventSummary-only relabels; must be the exact timeline ID being patched\n\nAllowed paths (any non-terminal status):\n  - eventSummary\n  - metadata.pendingReasonTag\n\nAllowed paths (status === 'pending'):\n  - eventSummary\n  - eventContent  (wholesale replace; reserved keys _* rejected)\n  - eventContent.email.subject | body | bodyType | to | cc | bcc\n  - eventContent.<any>  (any AI-output field, except _*-prefixed reserved keys)\n  - metadata.pendingReasonTag\n  - status  (pending \u2192 completed)\n\nAllowed paths (failed status):\n  - status  (failed \u2192 pending)\n\nAllowed paths (terminal without confirmTimelineId):\n  - eventSummary only\n\nAllowed paths (terminal + confirmTimelineId exact timeline id):\n  - eventSummary\n  - eventContent and eventContent.<any>, except reserved keys and provider send-result fields\n  - eventContent.email.subject | body | bodyType | to | cc | bcc\n  - metadata.pendingReasonTag\n\nForbidden:\n  - Any path containing an underscore-prefixed segment (_timelineId, _metadata, _pointer, _continuation, etc. \u2014 runtime-internal markers)\n  - Terminal timeline writes except eventSummary-only relabels, unless confirmTimelineId exactly matches the target timeline id\n  - Identity fields, provider send results (sendResult/messageId/threadId/sentAt/postId/postUrl/commentId/mediaId/permalink), audit fields\n\nReturns: { patched, dryRun, auditId, diff: [{path, before, after}], record }\nOn error: { error, code, path? }  \u2014 codes: FORBIDDEN_SCOPE | FORBIDDEN_PATH | FORBIDDEN_TRANSITION | INVALID_VALUE | NOT_FOUND | CONCURRENCY_CONFLICT | STATUS_MISMATCH | PRECONDITION_FAILED\n\nRequires write access when connected with OAuth.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "confirmTimelineId": {
+    "description": "Required for terminal timeline records except eventSummary-only relabels; must exactly match timelineId. Omit for normal pending/non-terminal patches.",
+    "type": "string"
+   },
+   "dryRun": {
+    "description": "Compute diff without writing or auditing. Default false.",
+    "type": "boolean"
+   },
+   "executionId": {
+    "description": "The execution ID",
+    "type": "string"
+   },
+   "expectedUpdatedAt": {
+    "description": "The timeline's current updatedAt (ISO). Required for optimistic concurrency.",
+    "type": "string"
+   },
+   "patches": {
+    "description": "Array of replace operations (at most 12)",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "expectedCurrentValue": {
+       "description": "Optional: reject if current value differs (defensive precondition)"
+      },
+      "op": {
+       "const": "replace",
+       "type": "string"
+      },
+      "path": {
+       "description": "Dot-path: e.g. \"eventSummary\" or \"eventContent.email.subject\"",
+       "type": "string"
+      },
+      "value": {}
+     },
+     "required": [
+      "op",
+      "path"
+     ],
+     "type": "object"
+    },
+    "minItems": 1,
+    "type": "array"
+   },
+   "reason": {
+    "description": "Why this patch is needed; persisted in the audit record",
+    "maxLength": 500,
+    "minLength": 1,
+    "type": "string"
+   },
+   "timelineId": {
+    "description": "The timeline ID being patched",
+    "type": "string"
+   },
+   "workflowId": {
+    "description": "The workflow ID",
+    "type": "string"
+   }
+  },
+  "required": [
+   "workflowId",
+   "executionId",
+   "timelineId",
+   "reason",
+   "expectedUpdatedAt",
+   "patches"
+  ],
+  "type": "object"
+ },
+ "name": "patch_timeline_fields"
+}

@@ -1,0 +1,226 @@
+{
+ "annotations": {
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false
+ },
+ "description": "Apply a surgical, field-level patch to a draft using explicit set / append / unset operations by dotted path (e.g. set \"grader.rel_tol\", append \"verification.evidence\"), not a full rewrite, so the change stays legible. Returns the updated record, an itemized list of what changed, and a re-run of the self-consistency check since the grader may have moved. Draft-only \u2014 submitted records are frozen.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "append": {
+    "additionalProperties": {
+     "items": {},
+     "type": "array"
+    },
+    "description": "Dotted-path \u2192 items appended to an array field, e.g. {\"discrimination.positive\": [\"0.357\"]}.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "draft_id": {
+    "description": "The draft record id to patch.",
+    "type": "string"
+   },
+   "set": {
+    "additionalProperties": {},
+    "description": "Dotted-path \u2192 value replacements, e.g. {\"grader.rel_tol\": 0.001}. Cannot target task_type or server-owned fields.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "unset": {
+    "description": "Dotted paths to remove from the record, e.g. [\"metadata.contamination_notes\"].",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "draft_id"
+  ],
+  "type": "object"
+ },
+ "name": "evals_revise_draft",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "record",
+     "changed",
+     "server_checks"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "changed": {
+    "description": "The itemized changes applied, in order \u2014 the legibility record.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One applied patch operation with its before/after values.",
+     "properties": {
+      "after": {
+       "description": "The value after the change (absent for unset)."
+      },
+      "before": {
+       "description": "The value before the change (absent for created paths)."
+      },
+      "op": {
+       "description": "The operation applied.",
+       "enum": [
+        "set",
+        "append",
+        "unset"
+       ],
+       "type": "string"
+      },
+      "path": {
+       "description": "The dotted path that was changed.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "op",
+      "path"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `not_found`: No record exists with the given draft id. `record_frozen`: The target id refers to a submitted (frozen) record. `invalid_patch_path`: A set/unset path does not resolve, an append targets a non-array, or a protected field (task_type, id, checksum) was targeted. `task_type_constraint`: The patch left the record violating a per-task-type rule (mcq without choices; free_response without llm_rubric grader). `mcq_choice_mismatch`: After the patch, the mcq grader correct answer is not one of the choices. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "not_found",
+         "record_frozen",
+         "invalid_patch_path",
+         "task_type_constraint",
+         "mcq_choice_mismatch"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "record": {
+    "additionalProperties": {},
+    "description": "The updated draft record after the patch.",
+    "properties": {},
+    "type": "object"
+   },
+   "server_checks": {
+    "additionalProperties": false,
+    "description": "The re-run self-consistency result after the patch.",
+    "properties": {
+     "self_consistency": {
+      "additionalProperties": false,
+      "description": "The re-run self-consistency verdict.",
+      "properties": {
+       "gold_passes_grader": {
+        "description": "True when the gold passes its own grader.",
+        "type": "boolean"
+       },
+       "grader_ok": {
+        "description": "True when gold + all positives pass and all negatives (\u22651) are rejected.",
+        "type": "boolean"
+       },
+       "negatives_rejected": {
+        "description": "Per-negative rejection verdict (true = correctly rejected), in declaration order.",
+        "items": {
+         "type": "boolean"
+        },
+        "type": "array"
+       },
+       "positives_pass": {
+        "description": "Per-positive pass verdict, in declaration order.",
+        "items": {
+         "type": "boolean"
+        },
+        "type": "array"
+       },
+       "ready_to_submit": {
+        "description": "True only when both grader_ok and verification_present are true.",
+        "type": "boolean"
+       },
+       "verification_present": {
+        "description": "True when at least one verification.evidence entry exists.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "gold_passes_grader",
+       "positives_pass",
+       "negatives_rejected",
+       "grader_ok",
+       "verification_present",
+       "ready_to_submit"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "self_consistency"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "object"
+ },
+ "title": "evals-mcp-server: revise draft"
+}

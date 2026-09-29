@@ -1,0 +1,31 @@
+{
+ "description": "Update an existing workflow.\n\n## Recommended flow for agent-driven edits\n\nFor editing an existing workflow step-by-step, prefer the per-step tools \u2014 they catch errors incrementally and avoid the bulk-JSON vocabulary traps (`ai` / `integration` / `knowledge_graph_query`, silently-stripped root fields like `prompt` / `listKey` / `appId`):\n\n- `update_step({ workflowId, stepId, updates })` \u2014 change one step (prompt, inputs, next, etc.). Safest and most common.\n- `add_step({ workflowId, step, insertAfter? })` \u2014 append or insert a new step.\n- `remove_step({ workflowId, stepId })` \u2014 delete a step and re-wire its neighbors.\n- After a series of edits: `validate_workflow` \u2192 (if live) `promote_draft` / `discard_draft`.\n\nThe bulk `updates` param below is supported for **imports, templated rewrites, and programmatic round-trips** (export \u2192 edit JSON \u2192 re-import). Agents editing interactively should not use it for step changes \u2014 use `update_step` instead.\n\n## Trigger type guidance\n\nPrefer `schedule` (polling) for email intake, document processing, and any workflow where exact-millisecond latency is not required \u2014 it is idempotent, supports backfill, and needs no webhook infrastructure. Use `app_event` or `webhook` only when the user explicitly says \"as soon as\", \"within X seconds\", or \"real-time\". When in doubt, schedule wins.\n\n## Draft routing (live workflows)\n\nIf the workflow is live, config edits (steps, context, name, etc.) are automatically routed to a draft snapshot instead of modifying the live pipeline. The response will include `editingDraft: true`. Use `get_draft` to view the draft, `promote_draft` to make it live, or `discard_draft` to throw away the changes. Non-live workflows are updated directly with an automatic pre-edit snapshot for rollback.\n\n## Bulk updates param (imports / round-trips only)\n\n\u26a0\ufe0f Avoid sending a full `steps` array for large workflows \u2014 use `update_step` instead.\nSending more than ~20 steps risks silent truncation at the MCP transport layer.\nFull steps array replacement is only safe when doing a complete pipeline replacement from a known-good JSON source (import, template, export round-trip). For editing individual steps, always use `update_step`.\n\n## `context` merge semantics (read before patching)\n\n**Root level:** `updates.context` is **shallow-merged** with the stored workflow\u2019s `context` (`{ ...existingContext, ...patchContext }`). Sibling keys at the root (`inputPages`, `outputPages`, `executionInputConfig`, etc.) do not clobber each other: **omitting a key preserves the stored value**; only keys present in the patch are overwritten. To clear a collection explicitly, send an empty value (e.g. `inputPages: []`). Silent deletion-by-omission no longer applies at the root \u2014 same spirit as `update_step`\u2019s deep-merge for nested step fields.\n\n**One level down:** Each **value** under `context` is still replaced **wholesale** when the patch includes that key. For example, `context: { executionInputConfig: { someKey: \"x\" } }` replaces the entire `executionInputConfig` object \u2014 any sibling fields under it (e.g. `defaults`, `fields`, `internal`) that are not in the payload are dropped. To partial-patch a nested object, **`get_workflow` first**, merge the current value with your changes client-side, then send the **full merged** object for that key in `update_workflow`.\n\n**Surgical alternative (preferred for context/metadata):** `update_workflow_context` is the workflow-level analog of `update_step` \u2014 it accepts the same three explicit verbs (`updates` / `replace` / `unset`) on workflow-relative paths under `context.<anything>` (both page schemas like `context.inputPages` AND user-saved page values like `context.outreachProfile`) and `metadata`. Returns `diff` + `warnings`. Use it instead of bulk `update_workflow` for any context or metadata edit, including pre-filling configuration input pages programmatically (e.g. `updates: { context: { outreachProfile: { name: \"Alberto\", signature: \"...\" } } }`). To flip a single nested key like `executionInputConfig.internal`, fetch with `get_workflow` first, merge locally, then `updates: { context: { executionInputConfig: {...full merged...} } }, replace: [\"context.executionInputConfig\"]` \u2014 the same merge-order trap as `update_step` applies (deep-merge runs before replace[], so replace at the parent level).\n\n## Internal-only workflows\n\nSet `context.executionInputConfig.internal: true` to mark a workflow as a child / sub-workflow that runs only via `agentled.call-workflow`. The UI hides the Run button and replaces the manual run form with a banner; orchestrators still pass inputs via `executionInputData` (UI guard, not runtime restriction). Use for child workflows that end in a `return` step. To toggle on an existing workflow, fetch the current value with `get_workflow`, then call `update_workflow_context` with the explicit ops shape replacing at the parent level: `updates: { context: { executionInputConfig: {...merged...} } }, replace: [\"context.executionInputConfig\"]`.\n\nRequires write access when connected with OAuth.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "locale": {
+    "description": "Locale (default: en)",
+    "type": "string"
+   },
+   "updates": {
+    "additionalProperties": {},
+    "description": "Partial pipeline updates (name, steps, context, etc.)",
+    "type": "object"
+   },
+   "workflowId": {
+    "description": "The workflow ID to update",
+    "type": "string"
+   }
+  },
+  "required": [
+   "workflowId",
+   "updates"
+  ],
+  "type": "object"
+ },
+ "name": "update_workflow"
+}

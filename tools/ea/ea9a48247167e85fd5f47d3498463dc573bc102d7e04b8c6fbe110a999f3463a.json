@@ -1,0 +1,206 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Retrieve the change history for a single CVE \u2014 CVSS score revisions, reference additions, status transitions (e.g., \"Received\" \u2192 \"Analyzed\"), and CPE configuration updates. Use when tracking a CVE's escalation or investigating when a score changed. Events are returned newest-first by default; pass order=\"oldest\" for the CVE's earliest events. For the current record, call nvd_get_cve instead. The NVD history endpoint is significantly slower than other NVD endpoints, especially without an API key \u2014 set NVD_API_KEY for reliable operation.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "cveId": {
+    "description": "CVE identifier to retrieve history for (e.g., \"CVE-2021-44228\").",
+    "type": "string"
+   },
+   "limit": {
+    "default": 20,
+    "description": "Maximum number of change events to return (default 20, max 2000).",
+    "maximum": 2000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "offset": {
+    "default": 0,
+    "description": "Zero-based offset for paginating through change events, counted from whichever end order anchors to: offset 0 is the newest event under the default order=\"newest\", and the oldest event under order=\"oldest\".",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "order": {
+    "default": "newest",
+    "description": "Which end of the history to page from. Default \"newest\" returns the most recent events first, which is what escalation and re-score questions need. \"oldest\" returns NVD's native order (the CVE's first events first) and costs one upstream request, or two when the offset overruns the history; \"newest\" costs up to two on any history longer than limit.",
+    "enum": [
+     "oldest",
+     "newest"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "cveId"
+  ],
+  "type": "object"
+ },
+ "name": "nvd_get_cve_history",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "cveId",
+     "changes",
+     "totalCount",
+     "returned",
+     "offset",
+     "order"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "changes": {
+    "description": "CVE change events ordered to match the requested order \u2014 newest first by default, oldest first when order=\"oldest\".",
+    "items": {
+     "additionalProperties": false,
+     "description": "One CVE change event with its field-level details.",
+     "properties": {
+      "changeDate": {
+       "description": "ISO 8601 datetime when this change occurred.",
+       "type": "string"
+      },
+      "details": {
+       "description": "Individual change detail entries within this event.",
+       "items": {
+        "additionalProperties": false,
+        "description": "One field-level change within this event.",
+        "properties": {
+         "action": {
+          "description": "The action taken (e.g., \"Added\", \"Changed\", \"Removed\").",
+          "type": "string"
+         },
+         "newValue": {
+          "description": "The value after the change. Structured upstream values (e.g. \"Affected\", \"SSVC\" details) arrive as a JSON string \u2014 parse it to read the fields.",
+          "type": "string"
+         },
+         "oldValue": {
+          "description": "The value before the change. Structured upstream values (e.g. \"Affected\", \"SSVC\" details) arrive as a JSON string \u2014 parse it to read the fields.",
+          "type": "string"
+         },
+         "type": {
+          "description": "The type of data changed (e.g., \"CVSS V3.1\", \"CWE\", \"Reference\").",
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "eventName": {
+       "description": "Name of the change event (e.g., \"CVE Modified\", \"Initial Analysis\").",
+       "type": "string"
+      }
+     },
+     "required": [
+      "changeDate",
+      "details"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "cveId": {
+    "description": "The CVE ID for which history was retrieved.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_cve_id_format`: The CVE ID fails format validation (NVD returns HTTP 404 for malformed IDs). `rate_limited`: NVD returned HTTP 403 indicating the rate limit was exceeded. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_cve_id_format",
+         "rate_limited"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Guidance on the shape of this page. When no events came back it distinguishes an offset past the end of the history, from an empty page NVD returned inside a range it says has events, from a CVE NVD holds no history for \u2014 the last of which covers both a record it has never revised and a CVE ID it does not hold. On a partial page it names the offset that reaches the next one, counted from the same end order anchors to.",
+    "type": "string"
+   },
+   "offset": {
+    "description": "Page offset used in this query.",
+    "type": "number"
+   },
+   "order": {
+    "description": "Which end of the history this page was anchored to.",
+    "enum": [
+     "oldest",
+     "newest"
+    ],
+    "type": "string"
+   },
+   "returned": {
+    "description": "Number of change events returned in this response.",
+    "type": "number"
+   },
+   "totalCount": {
+    "description": "Total change events on record for this CVE.",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Get CVE Change History"
+}

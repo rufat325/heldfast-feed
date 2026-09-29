@@ -1,0 +1,338 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Dry-run a structured filter over recent papers WITHOUT creating a watch \u2014 the tuning loop. Returns {window_days, needs_similarity, match_count, sample} so you can iterate (add a category, raise min_novelty, switch the collection relation) before saving with create_watch. Structured watches rank by 'rising' (forecasted breakout impact) by default, and tighten with min_impact_pct for an anti-noise watch that surfaces only the breakout papers in your niche. NOTE: for a similarity filter, match_count is capped at 200 (the cosine fetch window) and so saturates at 200 on broad/hot topics \u2014 tune by the `sample` scores and narrow with categories/min_novelty (or a higher similar floor) rather than relying on match_count alone. Read-only. Requires SF_API_KEY.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "criteria": {
+    "description": "The structured filter to test.",
+    "properties": {
+     "authors": {
+      "description": "Match papers by these authors.",
+      "properties": {
+       "ids": {
+        "description": "Author UUIDs.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "names": {
+        "description": "Author display names.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "type": "object"
+     },
+     "categories": {
+      "description": "arXiv categories, e.g. ['cs.SE','cs.AI'].",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "collections": {
+      "description": "Watch papers related to one or more of your collections.",
+      "properties": {
+       "ids": {
+        "description": "Collection UUIDs.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "relation": {
+        "default": "similar",
+        "description": "How a new paper relates to the collection(s): 'similar' = semantic neighborhood (broad); 'cites' = the new paper cites a collection member (uses a 30-day window); 'by_authors' = shares an author with the collection. NOTE: 'similar' here uses the default 0.70 cosine floor \u2014 to tighten it, ALSO pass a top-level `similar` predicate targeting the same collection (e.g. similar:{to:'collection:<that uuid>', min_score:0.9}); the collections group has no floor of its own.",
+        "enum": [
+         "similar",
+         "cites",
+         "by_authors"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "ids"
+      ],
+      "type": "object"
+     },
+     "has_code": {
+      "description": "Only papers with released code.",
+      "type": "boolean"
+     },
+     "min_impact_pct": {
+      "description": "Momentum floor: only surface papers in the top of forecasted citation impact within their field (e.g. 80 means roughly the top 20 percent). Only recently-scored papers have an impact percentile, so this also implies recent papers only \u2014 exactly right for a what-is-rising-now watch.",
+      "maximum": 100,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "min_novelty": {
+      "description": "Novelty floor (0..1).",
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+     },
+     "rank": {
+      "description": "How to order matches. 'rising' (default) ranks by forecasted breakout impact first (the impact_pct momentum model), falling back to novelty when a paper is not impact-scored yet; 'novelty' ranks most-novel first; 'recent' ranks newest first; 'relevance' ranks by closeness to a similar target (needs a similar target, else behaves as rising). For a creator or stay-current watch, leave it as rising.",
+      "enum": [
+       "rising",
+       "novelty",
+       "recent",
+       "relevance"
+      ],
+      "type": "string"
+     },
+     "similar": {
+      "description": "Rank by semantic similarity to a target, with an optional cosine floor. Target the SAME collection used in `collections` (to:'collection:<uuid>') to put a floor on a collection-neighborhood watch.",
+      "properties": {
+       "min_score": {
+        "description": "Cosine floor (default 0.70).",
+        "type": "number"
+       },
+       "to": {
+        "description": "Target: \"collection:<uuid>\" | \"paper:<arxivId>\" | \"text:<phrase>\".",
+        "type": "string"
+       }
+      },
+      "required": [
+       "to"
+      ],
+      "type": "object"
+     },
+     "text": {
+      "description": "Keyword (full-text) or regex match on title/abstract.",
+      "properties": {
+       "field": {
+        "enum": [
+         "title",
+         "abstract",
+         "title_abstract"
+        ],
+        "type": "string"
+       },
+       "mode": {
+        "enum": [
+         "fulltext",
+         "regex"
+        ],
+        "type": "string"
+       },
+       "query": {
+        "description": "Keyword/phrase (or a regex when mode='regex').",
+        "type": "string"
+       }
+      },
+      "required": [
+       "query"
+      ],
+      "type": "object"
+     }
+    },
+    "type": "object"
+   },
+   "recency_days": {
+    "description": "Window in days (default 7; the 'cites' relation uses 30).",
+    "maximum": 60,
+    "minimum": 1,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "criteria"
+  ],
+  "type": "object"
+ },
+ "name": "preview_watch",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": {},
+  "properties": {
+   "match_count": {
+    "type": "number"
+   },
+   "message": {
+    "type": "string"
+   },
+   "needs_similarity": {
+    "type": "boolean"
+   },
+   "ok": {
+    "type": "boolean"
+   },
+   "sample": {
+    "description": "A sample of matching papers.",
+    "items": {
+     "additionalProperties": {},
+     "description": "A paper record. Verbose calls add extraction fields (method_name, datasets, baselines, ...).",
+     "properties": {
+      "arxiv_id": {
+       "type": "string"
+      },
+      "arxiv_url": {
+       "type": "string"
+      },
+      "authors": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "categories": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "citation_count": {
+       "type": "number"
+      },
+      "collections": {
+       "description": "Collections this saved paper is filed under, e.g. 'AgentOPA/G4' (list_library only).",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "github_stars": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "github_url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "has_code": {
+       "type": "boolean"
+      },
+      "impact_pct": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "institution_tags": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "is_read": {
+       "type": "boolean"
+      },
+      "is_saved": {
+       "type": "boolean"
+      },
+      "llm_novelty_score": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "llm_significance": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "llm_summary": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "n_authors": {
+       "type": "number"
+      },
+      "note_text": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "The user's own recorded verdict on this paper, when one exists. A hit carrying this was ALREADY judged \u2014 read it instead of re-deriving a verdict from the abstract."
+      },
+      "pdf_url": {
+       "type": "string"
+      },
+      "primary_category": {
+       "type": "string"
+      },
+      "published_date": {
+       "type": "string"
+      },
+      "rank_score": {
+       "type": "number"
+      },
+      "similarity": {
+       "type": "number"
+      },
+      "title": {
+       "type": "string"
+      },
+      "venue_name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "year": {
+       "type": "number"
+      }
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "window_days": {
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Preview Watch"
+}

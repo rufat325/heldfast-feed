@@ -1,0 +1,228 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Search the last 3 months of global news coverage (65+ languages) using the GDELT DOC API. Fetches up to 250 articles with URL, title, source domain, language, country, publication date, and social image URL, and returns as many as fit a 48,000-byte response \u2014 the rest are counted in withheldCount, with a continuation to reach them. Query supports full GDELT syntax: phrases (\"bird flu\"), boolean OR ((flu OR pandemic)), source country (sourcecountry:china), source language (sourcelang:spanish), domain (domain:who.int), GKG theme (theme:TAX_DISEASE_OUTBREAK \u2014 find identifiers with gdelt_search_themes), tone filter (tone<-5 for negative), proximity (near20:\"flu virus\"), and repeat (repeat3:\"outbreak\"). 250 is a hard per-call ceiling and GDELT offers no cursor: when a query fills it or a response comes back cut, re-query narrower startDatetime/endDatetime windows \u2014 the response hands back the exact windows to use. Note: this API covers only the most recent 3 months \u2014 use gdelt_search_tv for historical TV transcripts back to 2009.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "endDatetime": {
+    "description": "End of date range in GDELT format YYYYMMDDHHMMSS \u2014 exactly 14 digits, no separators (e.g. 20240131235959). Must be supplied together with startDatetime; supplying only one of the two is rejected.",
+    "pattern": "^\\d{14}$",
+    "type": "string"
+   },
+   "maxRecords": {
+    "default": 75,
+    "description": "Maximum number of articles to fetch (1\u2013250); the response carries as many of them as fit its 48,000-byte budget. 250 is GDELT's hard per-call ceiling, not a page size \u2014 there is no cursor past it, so a query that fills 250 must be split into narrower startDatetime/endDatetime windows instead.",
+    "maximum": 250,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "query": {
+    "description": "Search query. Supports GDELT operators: phrases (\"bird flu\"), boolean OR ((flu OR pandemic)), sourcecountry:china, sourcelang:spanish, domain:who.int, theme:TAX_DISEASE_OUTBREAK (GKG theme identifiers come from gdelt_search_themes), tone<-5, near20:\"flu virus\", repeat3:\"outbreak\".",
+    "minLength": 1,
+    "type": "string"
+   },
+   "sort": {
+    "default": "relevance",
+    "description": "Sort order: relevance (default), dateDesc/dateAsc, toneDesc/toneAsc, or hybridRel (GDELT hybrid relevance and recency).",
+    "enum": [
+     "relevance",
+     "dateDesc",
+     "dateAsc",
+     "toneDesc",
+     "toneAsc",
+     "hybridRel"
+    ],
+    "type": "string"
+   },
+   "startDatetime": {
+    "description": "Start of date range in GDELT format YYYYMMDDHHMMSS \u2014 exactly 14 digits, no separators (e.g. 20240101000000). Must be supplied together with endDatetime; supplying only one of the two is rejected.",
+    "pattern": "^\\d{14}$",
+    "type": "string"
+   },
+   "timespan": {
+    "description": "Time window relative to now, minimum \"15min\"; other examples: \"24h\", \"7d\", \"1m\". Ignored when startDatetime/endDatetime are set. Maximum is 3 months (the full DOC API window). Defaults to the full 3-month window.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "query"
+  ],
+  "type": "object"
+ },
+ "name": "gdelt_search_articles",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "articles",
+     "effectiveQuery",
+     "totalCount"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "articles": {
+    "description": "Matching articles sorted per the sort parameter.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A single news article with metadata.",
+     "properties": {
+      "domain": {
+       "description": "Source domain (e.g. \"nytimes.com\").",
+       "type": "string"
+      },
+      "language": {
+       "description": "Article language (e.g. \"English\", \"Spanish\").",
+       "type": "string"
+      },
+      "seendate": {
+       "description": "Publication datetime in GDELT format (YYYYMMDDTHHMMSSZ).",
+       "type": "string"
+      },
+      "socialimage": {
+       "description": "Social sharing image URL when provided by the source.",
+       "type": "string"
+      },
+      "sourcecountry": {
+       "description": "Country of the source outlet (e.g. \"United States\").",
+       "type": "string"
+      },
+      "title": {
+       "description": "Article title.",
+       "type": "string"
+      },
+      "url": {
+       "description": "Article URL.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "url",
+      "title",
+      "seendate",
+      "domain",
+      "language",
+      "sourcecountry"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "continuationWindows": {
+    "description": "Windows to re-run this query against, one at a time, when more articles are out of reach of this response. For a response cut to its budget under dateDesc or dateAsc: one window resuming from the last returned article, reaching back to the second it was published, so articles from that second come back again \u2014 or, when resuming there cannot reach a new article, one window skipping past that second. Otherwise \u2014 maxRecords at its 250 ceiling, or a cut under any other sort \u2014 the queried window halved, overlapping by one second so no article falls through the seam. Either way, de-duplicate by url. Absent when no window is known, or none would reach further.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One window to re-query with the same query string.",
+     "properties": {
+      "endDatetime": {
+       "description": "End of this window in GDELT format YYYYMMDDHHMMSS.",
+       "type": "string"
+      },
+      "startDatetime": {
+       "description": "Start of this window in GDELT format YYYYMMDDHHMMSS.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "startDatetime",
+      "endDatetime"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "effectiveQuery": {
+    "description": "Echoed query string for use in follow-up calls.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_date_range`: Only one of startDatetime / endDatetime was supplied, one of them is not a real UTC calendar timestamp, or startDatetime is not earlier than endDatetime. `invalid_query`: GDELT rejected the query string as malformed \u2014 bad keyword length, unbalanced parentheses, or an illegal character. `gdelt_rate_limited`: GDELT rejected the request for its one-request-per-five-seconds limit, or too many requests were already queued for this one to start in time. `gdelt_unavailable`: GDELT DOC API is unreachable or temporarily returned no usable data. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_date_range",
+         "invalid_query",
+         "gdelt_rate_limited",
+         "gdelt_unavailable"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Guidance on an incomplete or empty result. When no articles matched, how to broaden the query or window. When GDELT returned articles dated outside an explicit startDatetime/endDatetime window, how many were dropped. When the response was cut to its 48,000-byte budget, how many articles it withheld and the route to them. When the maxRecords cap was reached on an uncut response, that more articles may exist \u2014 a higher maxRecords below the 250 ceiling, or a narrower date window at it. Absent when a non-empty result set fit under both the cap and the budget.",
+    "type": "string"
+   },
+   "timespan": {
+    "description": "Echoed timespan parameter when provided.",
+    "type": "string"
+   },
+   "totalCount": {
+    "description": "Number of articles returned in this response.",
+    "type": "number"
+   },
+   "withheldCount": {
+    "description": "Articles GDELT returned inside the window that this response withheld to stay within its 48,000-byte budget \u2014 fetched minus returned, not counting articles dropped for falling outside an explicit window. Absent when every in-window article fit.",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Search GDELT Articles"
+}

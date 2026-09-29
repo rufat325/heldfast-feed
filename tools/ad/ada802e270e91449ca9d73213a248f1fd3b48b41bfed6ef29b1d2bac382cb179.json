@@ -1,0 +1,262 @@
+{
+ "_meta": {
+  "category": "retrieve",
+  "tier": "retriever"
+ },
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Retriever query"
+ },
+ "description": "Forensic retrieval / rehydration from the Log10x Retriever archive (the customer's own S3 bucket) by the engine's STABLE pattern identity. The use case: events the receiver offloaded to the archive instead of the SIEM, or that aged out of SIEM retention, recovered by querying the stamped identity over a historical window. Pre-computed Bloom filters scope the scan to the matching pattern identity (tenx_user_pattern) so only relevant byte ranges are fetched (the moat: query-side token precision, not a full S3 scan). Matched events land as a list of `*.jsonl` objects in the customer's S3; the tool returns an in-context preview (capped by `limit`) PLUS `data.results_location` (the S3 bucket + prefix holding the full object set). A capable agent reads those objects directly to answer, or hands the S3 object list to the customer's own S3-to-SIEM path. No re-ingestion pipeline, no proprietary format. The envelope additionally carries per-pattern `offload_status` so retrieval results agree with the live metric-surface disposition (pass / sample / compact / drop) without a second tool call. Call for: events matching a pattern OUTSIDE SIEM retention; events filtered by a variable value that is not a faceted SIEM dimension (e.g. 'all payment_retry events for customer acme-corp 90 days ago'); compliance / audit / forensic exact retrieval; confirming what the receiver actually offloaded for a given pattern. Optional JavaScript `filters` refine over payloads after the Bloom-scoped fetch. For a time-bucketed series instead of raw events, use `log10x_retriever_series`. The envelope carries by_severity / by_service / by_day rollups with a rollup_basis provenance stamp (qrs_summaries = whole-match from engine summaries; events_capped = derived from the capped download).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "bucket_size": {
+    "default": "5m",
+    "description": "Bucket size when format=aggregated or ephemeral_series. Examples: `1m`, `5m`, `1h`, `1d`.",
+    "type": "string"
+   },
+   "debug": {
+    "description": "Escalate the CloudWatch log level to DEBUG for THIS query only \u2014 per-blob Bloom decisions, per-fetch S3 reads, per-event results-writer samples. Use only when normal-run diagnostics cannot explain a 0-result or truncated outcome (volume is ~100x higher). Default false.",
+    "type": "boolean"
+   },
+   "environment": {
+    "description": "Environment nickname \u2014 required if multi-env.",
+    "type": "string"
+   },
+   "filters": {
+    "description": "JavaScript filter expressions evaluated in-memory against each decoded event after the Bloom-scoped fetch. Full TenX JS API: `this.customer_id === \"acme-corp\"`, `this.http_code.startsWith(\"5\")`. Filters are AND-combined.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "format": {
+    "default": "events",
+    "description": "`events` (default: raw events), `count` (total + severity/service rollups, no event bodies), `aggregated` (events bucketed into a time series \u2014 use with bucket_size), `ephemeral_series` (bucketed series in Prometheus range-query shape for cross-pillar correlation). All four formats are rolled up client-side from the same events stream.",
+    "enum": [
+     "events",
+     "count",
+     "aggregated",
+     "ephemeral_series"
+    ],
+    "type": "string"
+   },
+   "from": {
+    "description": "Start of the query window. Accepts ISO8601 (`2026-01-15T00:00:00Z`), epoch millis, or relative (`now-1h`, `now-24h`, `now-7d`). Normalized to the engine's `now(\"-1h\")` form before dispatch.",
+    "type": "string"
+   },
+   "limit": {
+    "default": 500,
+    "description": "Hard cap on events returned after merging per-worker result files. Default 500. Typical conversational queries want 10-100; the LLM will render only the first 50.",
+    "maximum": 10000,
+    "minimum": 1,
+    "type": "number"
+   },
+   "pattern": {
+    "description": "Reporter-named pattern (Symbol Message). NOT SUPPORTED against the offload archive: passing it returns an error naming the remedy, rather than a silent empty result. A Symbol Message is a label DERIVED from the event, so it is never a token in the archived bytes, and the Bloom index holds only text tokens plus template hashes. (The field this once queried, `tenx_user_pattern`, does not exist in the engine at all, which is why name-scoped queries returned BLOOM_REJECTED_ALL.) Pass `pattern_hash` instead: top_patterns returns it on the same row as the name, and event_lookup resolves a name to a hash.",
+    "type": "string"
+   },
+   "pattern_hash": {
+    "description": "Canonical pattern_hash from top_patterns / event_lookup. When provided, search is auto-built as `includes(text, \"<hash>\")` and no name resolution runs. It matches the stamped hash as a TEXT TOKEN because the archive re-derives its own `tenx_hash` field per multi-line group, so a field equality against a metrics-side hash matches nothing. This is the chain-stable identity emitted by top_patterns.payload.patterns[].pattern_hash \u2014 bypasses the name\u2192hash resolver entirely. Precedence: `search` > `pattern_hash` > `pattern`. Example: `pattern_hash: \"4Kjc7PHLWqY\"`.",
+    "type": "string"
+   },
+   "result_target": {
+    "description": "Tier-1 result-sink redirect: write this query OUTPUT (events, summaries, markers) under tenx/<result_target>/ in the same bucket instead of the default target, e.g. to a prefix a SIEM connector watches. Omit to keep results under the scan target (default). Bare token [A-Za-z0-9_-]+.",
+    "pattern": "^[A-Za-z0-9_-]+$",
+    "type": "string"
+   },
+   "search": {
+    "description": "Bloom-filter search expression using the TenX subset: `==`, `||`, `&&`, `includes(field, \"substr\")`. Example: `severity_level==\"ERROR\" && includes(text, \"ECONNREFUSED\")`. Selective values are dramatically cheaper than open-ended scans. REQUIRED unless `pattern_hash` is given: the engine rejects a blank search, so there is no unscoped full-window scan. To scope to one pattern pass `pattern_hash`, which is matched as a text token; a Reporter-named `pattern` cannot be matched against the archive at all and is refused with a remedy.",
+    "type": "string"
+   },
+   "target": {
+    "description": "Target app/service prefix to scope the index scan. Defaults to __SAVE_LOG10X_RETRIEVER_TARGET__ (env var). Required if no default is configured.",
+    "type": "string"
+   },
+   "to": {
+    "default": "now",
+    "description": "End of the query window. Same grammar as `from`. Default `now`.",
+    "type": "string"
+   },
+   "view": {
+    "const": "summary",
+    "default": "summary",
+    "description": "summary returns the typed envelope (data.events_matched, data.events[], data.query_id, data.diagnostics, data.human_summary). The deprecated markdown view was removed; data.human_summary carries the prose distillation for chat rendering.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "from"
+  ],
+  "type": "object"
+ },
+ "name": "log10x_retriever_query",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": true,
+  "properties": {
+   "actions": {
+    "default": [],
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "args": {
+       "additionalProperties": {},
+       "default": {},
+       "type": "object"
+      },
+      "reason": {
+       "type": "string"
+      },
+      "role": {
+       "enum": [
+        "required-next",
+        "recommended-next",
+        "optional-followup",
+        "alternative"
+       ],
+       "type": "string"
+      },
+      "tool": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "tool",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "data": {},
+   "generated_at": {
+    "type": "string"
+   },
+   "images": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "alt": {
+       "type": "string"
+      },
+      "data": {
+       "type": "string"
+      },
+      "mimeType": {
+       "default": "image/png",
+       "enum": [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "data"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "next_cursor": {
+    "type": "string"
+   },
+   "render_hint": {
+    "additionalProperties": false,
+    "properties": {
+     "callouts": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "chart": {
+      "enum": [
+       "sparkline",
+       "timeseries",
+       "bar",
+       "none"
+      ],
+      "type": "string"
+     },
+     "units": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "schema_epoch": {
+    "type": "string"
+   },
+   "schema_version": {
+    "const": "1.0",
+    "type": "string"
+   },
+   "summary": {
+    "additionalProperties": false,
+    "properties": {
+     "bullets": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 5,
+      "type": "array"
+     },
+     "callout": {
+      "type": "string"
+     },
+     "headline": {
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "headline"
+    ],
+    "type": "object"
+   },
+   "tool": {
+    "type": "string"
+   },
+   "truncated": {
+    "default": false,
+    "type": "boolean"
+   },
+   "view": {
+    "default": "summary",
+    "enum": [
+     "summary",
+     "markdown"
+    ],
+    "type": "string"
+   },
+   "warnings": {
+    "default": [],
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "schema_version",
+   "schema_epoch",
+   "tool",
+   "generated_at",
+   "summary"
+  ],
+  "type": "object"
+ },
+ "title": "Retriever query"
+}

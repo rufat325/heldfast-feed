@@ -1,0 +1,890 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false,
+  "title": "Audit conformal interval coverage"
+ },
+ "description": "Use this when your model emits prediction intervals or confidence\nbands and you want to audit whether realised outcomes actually fall\ninside them at the claimed coverage -- a calibration audit, not advice.\nDoes your model's confidence label survive contact with outcomes?\nCoverage audit over prediction intervals -- confidence claims are the\nthird claim type after return claims and risk forecasts.\n\nSubmit the prediction intervals your ML model produced (lower and upper\nbounds, one pair per point), the realised outcomes, and the coverage\nthe model claims (e.g. 0.9). The miss count is graded against the EXACT\ndistribution that claim implies: binomial for a pointwise claim, or --\nwhen you disclose the split-conformal calibration_size -- the\nbeta-binomial the split-conformal guarantee actually promises (Vovk\n2012: realised coverage is Beta-distributed around the claim), so a\nCORRECT procedure with a small calibration set is never punished for\nits honest variance. Zones reuse the same traffic-light boundaries as\nthe VaR cell (green below cumulative probability 0.95, yellow to\n0.9999, red above); red earns the named demote\nCONFORMAL_COVERAGE_SHORTFALL. Efficiency is disclosed, never assumed:\nintervals wider than the whole observed outcome range flag the advisory\nconformal_intervals_uninformative (coverage bought by construction),\nover-conservative intervals flag conformal_overcovered -- advisories,\nnever kills, demote-only throughout. Code-computed end to end,\nfail-closed on malformed, inverted, undersized or oversized input.\nReferences: Vovk/Gammerman/Shafer 2005; Lei et al., JASA 2018. NOT\nfinancial advice; no order path.\nPrice: per check; see https://api.alphaassay.com/v1/meta/pricing\n(api_key required -- account setup at\nhttps://api.alphaassay.com/account).",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "api_key": {
+    "default": "",
+    "description": "API key for a paid MCP check. Hosted Streamable HTTP clients should send it in the Authorization: Bearer transport header so the model never sees the secret; local stdio callers may supply the raw key in this tool argument without a Bearer prefix. Create an account at https://api.alphaassay.com/account; the current free allowance and prices are published at https://api.alphaassay.com/v1/meta/pricing. Paid MCP calls use API-key credits; x402 buys only the separate REST POST /x402/v1/gauntlet and is not MCP billing.",
+    "maxLength": 512,
+    "type": "string"
+   },
+   "calibration_size": {
+    "anyOf": [
+     {
+      "maximum": 100000,
+      "minimum": 1,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Optional size of the calibration set used to build the intervals; enables the exact beta-binomial (small-sample-fair) grading."
+   },
+   "claimed_coverage": {
+    "anyOf": [
+     {
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     {
+      "type": "number"
+     }
+    ],
+    "default": 0.9,
+    "description": "The coverage level you claim, e.g. 0.9 for 90% prediction intervals.",
+    "ge": 0.5,
+    "le": 0.999
+   },
+   "intervals_lower": {
+    "description": "Lower bounds of your prediction intervals, per point.",
+    "items": {
+     "anyOf": [
+      {
+       "maximum": 1000000000000000.0,
+       "minimum": -1000000000000000.0,
+       "type": "integer",
+       "x-strictJsonInteger": true
+      },
+      {
+       "maximum": 1000000000000000.0,
+       "minimum": -1000000000000000.0,
+       "type": "number"
+      }
+     ]
+    },
+    "maxItems": 100000,
+    "minItems": 1,
+    "type": "array"
+   },
+   "intervals_upper": {
+    "description": "Upper bounds of your prediction intervals, per point.",
+    "items": {
+     "anyOf": [
+      {
+       "maximum": 1000000000000000.0,
+       "minimum": -1000000000000000.0,
+       "type": "integer",
+       "x-strictJsonInteger": true
+      },
+      {
+       "maximum": 1000000000000000.0,
+       "minimum": -1000000000000000.0,
+       "type": "number"
+      }
+     ]
+    },
+    "maxItems": 100000,
+    "minItems": 1,
+    "type": "array"
+   },
+   "outcomes": {
+    "description": "Realised outcomes each interval was meant to cover.",
+    "items": {
+     "anyOf": [
+      {
+       "maximum": 1000000000000000.0,
+       "minimum": -1000000000000000.0,
+       "type": "integer",
+       "x-strictJsonInteger": true
+      },
+      {
+       "maximum": 1000000000000000.0,
+       "minimum": -1000000000000000.0,
+       "type": "number"
+      }
+     ]
+    },
+    "maxItems": 100000,
+    "minItems": 1,
+    "type": "array"
+   },
+   "request_id": {
+    "anyOf": [
+     {
+      "maxLength": 256,
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Optional idempotency key for this paid execution. Retry the same request_id with the same payload to replay one stored result without another charge; reuse with a different payload returns idempotency_conflict."
+   }
+  },
+  "required": [
+   "intervals_lower",
+   "intervals_upper",
+   "outcomes"
+  ],
+  "type": "object",
+  "x-maxBodyBytes": 5242880,
+  "x-relations": [
+   "len(intervals_lower) == len(intervals_upper) == len(outcomes)",
+   "intervals_lower[i] <= intervals_upper[i]",
+   "ceil((calibration_size + 1) * claimed_coverage) <= calibration_size when present"
+  ]
+ },
+ "name": "assay_conformal",
+ "outputSchema": {
+  "$defs": {
+   "ConformalEfficiency": {
+    "additionalProperties": false,
+    "properties": {
+     "degenerate_share": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "mean_width": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "median_width": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "outcome_range": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "uninformative_at_ratio": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "width_to_range_ratio": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "mean_width",
+     "median_width",
+     "degenerate_share",
+     "outcome_range",
+     "width_to_range_ratio",
+     "uninformative_at_ratio"
+    ],
+    "type": "object"
+   },
+   "ConformalHalves": {
+    "additionalProperties": false,
+    "properties": {
+     "coverage_first_half": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "coverage_second_half": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "coverage_first_half",
+     "coverage_second_half"
+    ],
+    "type": "object"
+   },
+   "PublicMeta": {
+    "additionalProperties": false,
+    "properties": {
+     "api_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "as_of": {
+      "format": "date-time",
+      "maxLength": 20,
+      "minLength": 20,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "type": "string"
+     },
+     "disclaimer": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "engine_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "input_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+     },
+     "not_financial_advice": {
+      "const": true,
+      "type": "boolean"
+     },
+     "operation": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "request_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+     },
+     "request_id": {
+      "anyOf": [
+       {
+        "maxLength": 256,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "source_identity_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+     },
+     "statefulness": {
+      "enum": [
+       "pure",
+       "public_read",
+       "tenant_read",
+       "tenant_write"
+      ],
+      "type": "string"
+     },
+     "tenant_scope": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "tenant_scope_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "engine_version",
+     "api_version",
+     "as_of",
+     "input_digest",
+     "request_digest",
+     "tenant_scope",
+     "tenant_scope_version",
+     "request_id",
+     "source_identity_digest",
+     "operation",
+     "statefulness",
+     "not_financial_advice",
+     "disclaimer"
+    ],
+    "type": "object",
+    "x-relations": [
+     "as_of is a real UTC RFC3339 second"
+    ]
+   },
+   "TrafficLightZone": {
+    "additionalProperties": false,
+    "properties": {
+     "cumulative_prob": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "zone": {
+      "enum": [
+       "green",
+       "yellow",
+       "red"
+      ],
+      "type": "string"
+     },
+     "zone_thresholds": {
+      "$ref": "#/$defs/ZoneThresholds"
+     }
+    },
+    "required": [
+     "zone",
+     "cumulative_prob",
+     "zone_thresholds"
+    ],
+    "type": "object"
+   },
+   "ZoneThresholds": {
+    "additionalProperties": false,
+    "properties": {
+     "red_at_cumulative_prob": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "yellow_at_cumulative_prob": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     }
+    },
+    "required": [
+     "yellow_at_cumulative_prob",
+     "red_at_cumulative_prob"
+    ],
+    "type": "object"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "result": {
+    "additionalProperties": false,
+    "allOf": [
+     {
+      "if": {
+       "properties": {
+        "status": {
+         "const": "computed"
+        }
+       },
+       "required": [
+        "status"
+       ]
+      },
+      "then": {
+       "properties": {
+        "distribution": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "efficiency": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "empirical_coverage": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "halves": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "hits": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "interpretation": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "misses": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "n": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "reason": {
+         "type": "null"
+        },
+        "zone": {
+         "not": {
+          "type": "null"
+         }
+        }
+       },
+       "required": [
+        "n",
+        "hits",
+        "misses",
+        "empirical_coverage",
+        "distribution",
+        "zone",
+        "efficiency",
+        "halves",
+        "interpretation"
+       ]
+      }
+     },
+     {
+      "if": {
+       "properties": {
+        "status": {
+         "const": "blocked"
+        }
+       },
+       "required": [
+        "status"
+       ]
+      },
+      "then": {
+       "properties": {
+        "distribution": {
+         "type": "null"
+        },
+        "efficiency": {
+         "type": "null"
+        },
+        "empirical_coverage": {
+         "type": "null"
+        },
+        "halves": {
+         "type": "null"
+        },
+        "hits": {
+         "type": "null"
+        },
+        "interpretation": {
+         "type": "null"
+        },
+        "misses": {
+         "type": "null"
+        },
+        "reason": {
+         "not": {
+          "type": "null"
+         }
+        },
+        "zone": {
+         "type": "null"
+        }
+       },
+       "required": [
+        "reason"
+       ]
+      }
+     },
+     {
+      "if": {
+       "properties": {
+        "status": {
+         "const": "computed"
+        }
+       },
+       "required": [
+        "status"
+       ]
+      },
+      "then": {
+       "properties": {
+        "n": {
+         "minimum": 1
+        }
+       }
+      }
+     }
+    ],
+    "properties": {
+     "_meta": {
+      "$ref": "#/$defs/PublicMeta"
+     },
+     "advisories": {
+      "items": {
+       "maxLength": 2000,
+       "type": "string"
+      },
+      "maxItems": 10000,
+      "type": "array"
+     },
+     "calibration_size": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "claimed_coverage": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "died_at": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "died_at_plain": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "distribution": {
+      "anyOf": [
+       {
+        "enum": [
+         "binomial",
+         "beta_binomial"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "efficiency": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/ConformalEfficiency"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "empirical_coverage": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "failure_codes": {
+      "items": {
+       "maxLength": 2000,
+       "type": "string"
+      },
+      "maxItems": 10000,
+      "type": "array"
+     },
+     "halves": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/ConformalHalves"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "hits": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "interpretation": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "k_order_statistic": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "method": {
+      "const": "split_conformal_coverage_audit",
+      "type": "string"
+     },
+     "misses": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "n": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "reason": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "schema": {
+      "const": "conformal.v1",
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "blocked",
+       "computed"
+      ],
+      "type": "string"
+     },
+     "verdict": {
+      "enum": [
+       "pass",
+       "fail",
+       "insufficient_evidence"
+      ],
+      "type": "string"
+     },
+     "zone": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/TrafficLightZone"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "required": [
+     "_meta",
+     "schema",
+     "method",
+     "status",
+     "verdict",
+     "n",
+     "claimed_coverage",
+     "died_at",
+     "died_at_plain",
+     "failure_codes",
+     "advisories"
+    ],
+    "type": "object",
+    "x-relations": [
+     "hits + misses == n when status == computed",
+     "empirical_coverage ~= hits / n when status == computed",
+     "k_order_statistic <= calibration_size when both are present"
+    ]
+   }
+  },
+  "required": [
+   "result"
+  ],
+  "type": "object"
+ },
+ "title": "Audit conformal interval coverage"
+}

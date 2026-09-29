@@ -1,0 +1,292 @@
+{
+ "_meta": {
+  "category": "install",
+  "tier": "none"
+ },
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Install wizard"
+ },
+ "description": "Progressive install wizard for the Log10x Reporter / Receiver on Kubernetes. **This is the SINGLE entry point for installs \u2014 call it first.** Do NOT call `log10x_doctor` or `log10x_login_status` as a pre-flight; the wizard handles login state, license acquisition, and demo-mode fallback internally, and surfacing the doctor's optional-capability warnings (Retriever, Datadog backfill, cross-pillar metrics) ahead of the install confuses users with concepts that are unrelated to deploying the Reporter/Receiver. Takes a `snapshot_id` from `log10x_discover_env` and walks the user through five decisions, asking one at a time and remembering each answer across turns (the snapshot's wizard session): (1) **app** \u2014 `reporter` (dedicated DaemonSet forwarder, zero-touch) or `receiver` (sidecar inside the user's existing forwarder); (2) **forwarder** \u2014 Receiver-only, auto-picked when one is detected, asked when multiple; (3) **backends** \u2014 array of metrics destinations, can be multiple (e.g., `[\"log10x\", \"datadog\"]` to report to both SaaS + own backend simultaneously); (4) **airgapped** \u2014 opt-in CISO-friction reducer, conflicts only with `\"log10x\"` in `backends` (engine sends NOTHING to log10x.com); (5) **license_jwt** \u2014 auto-fetched from `/api/v1/license/demo` if the user is not signed in, or from `/api/v1/license` with the persisted Auth0 token if they are. Each call merges new args into the session and either asks the next question (returning a markdown prompt) or emits the final install plan once all answers are in. Demo + airgapped surfaces a soft warning (engine downgrades to online mode on demo licenses). Plan is plan-only: emits helm commands + values.yaml; the user runs them. **Tier prerequisites**: none \u2014 this is a pre-install tool.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "action": {
+    "description": "Plan scope when the wizard is ready to emit. Default: `all`.",
+    "enum": [
+     "install",
+     "verify",
+     "teardown",
+     "all"
+    ],
+    "type": "string"
+   },
+   "airgapped": {
+    "description": "When true, the Log10x agents send nothing to log10x.com \u2014 engine metrics, license re-validation, and update checks all go silent. Use to reduce CISO friction. Conflicts with `\"log10x\"` in `backends` (the wizard surfaces the conflict). **Demo licenses cannot actually run airgapped** \u2014 the engine downgrades to online mode with a warning. The wizard surfaces this softly when both are picked.",
+    "type": "boolean"
+   },
+   "app": {
+    "description": "Which Log10x app to install. **reporter** = a dedicated DaemonSet forwarder (zero-touch, runs alongside your existing forwarder); **receiver** = a sidecar plugged into your existing forwarder (filters/samples/compacts events in-flight). When omitted, the wizard asks the user.",
+    "enum": [
+     "reporter",
+     "receiver"
+    ],
+    "type": "string"
+   },
+   "backend_credentials": {
+    "additionalProperties": {
+     "additionalProperties": false,
+     "properties": {
+      "plainValues": {
+       "additionalProperties": {
+        "type": "string"
+       },
+       "description": "Non-sensitive env var overrides keyed by env var name (e.g., `{ DD_SITE: \"us5.datadoghq.com\" }`).",
+       "type": "object"
+      },
+      "secretName": {
+       "description": "Name of the Kubernetes Secret holding sensitive env vars for this backend.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "secretName"
+     ],
+     "type": "object"
+    },
+    "description": "Per-backend credential configuration, keyed by backend kind (one of: datadog, elastic, cloudwatch, prometheus; `log10x` needs none, since it authenticates with the licence JWT). Each entry has a `secretName` (the Kubernetes Secret the user creates out-of-band holding sensitive env vars like `DD_API_KEY`; default per backend is `<backend>-credentials`) and optional `plainValues` (overrides for non-sensitive env vars like `DD_SITE`). Example: `{ \"datadog\": { \"secretName\": \"datadog-secret\", \"plainValues\": { \"DD_SITE\": \"us5.datadoghq.com\" } } }`.",
+    "propertyNames": {
+     "enum": [
+      "log10x",
+      "datadog",
+      "elastic",
+      "cloudwatch",
+      "prometheus"
+     ]
+    },
+    "type": "object"
+   },
+   "backends": {
+    "description": "Where the engine emits TenXSummary metrics: the user's own TSDB(s), one or more of **prometheus**, **datadog**, **elastic**, **cloudwatch**. When omitted, the wizard asks, listing any backend whose agent discovery detected first. **log10x** (the Log10x-hosted TSDB) is for the public demo, not customer installs: it is never suggested, and is accepted only when the user explicitly asks for it. It then needs a user licence (`license_source: \"signin\"` or `\"paste\"`); on the default built-in evaluation licence it receives nothing. `airgapped: true` + `\"log10x\"` is rejected.",
+    "items": {
+     "enum": [
+      "log10x",
+      "datadog",
+      "elastic",
+      "cloudwatch",
+      "prometheus"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "forwarder": {
+    "description": "Receiver-only: which detected forwarder kind to sidecar into. Auto-uses the snapshot's detected forwarder when there's exactly one; the wizard asks when there are multiple.",
+    "enum": [
+     "fluentbit",
+     "fluentd",
+     "filebeat",
+     "logstash",
+     "otel-collector",
+     "vector"
+    ],
+    "type": "string"
+   },
+   "license_jwt_paste": {
+    "description": "License JWT supplied by the user when `license_source: \"paste\"` (passing it alone implies `paste`). Minted from `POST /api/v1/license` (signed-in) or `POST /api/v1/license/demo` (anonymous). Maps to the chart's license Secret.",
+    "type": "string"
+   },
+   "license_source": {
+    "description": "How the engine is licensed. **Defaults to `\"builtin\"`** when omitted: the plan carries no licence and the engine runs its built-in evaluation licence (10 nodes, 30 days from each start, airgapped). Nothing is minted or stored, and no licence Secret is created. Pass **`\"signin\"`** when the user wants their own user-scoped licence: the wizard mints it via the user's Auth0 session and emits `signin_required` mode (chain through `log10x_signin_start`, then re-invoke) when no session exists. Pass **`\"paste\"`** with `license_jwt_paste: \"<jwt>\"` when the user already has a JWT. Pass **`\"demo\"`** only when the user explicitly asks for the anonymous 1-node, 14-day demo JWT. Every choice other than `builtin` adds a step that creates the licence Secret. Omitting this arg on a later call keeps the earlier choice.",
+    "enum": [
+     "builtin",
+     "signin",
+     "demo",
+     "paste"
+    ],
+    "type": "string"
+   },
+   "namespace": {
+    "description": "Target namespace. Default: snapshot.recommendations.suggestedNamespace.",
+    "type": "string"
+   },
+   "release_name": {
+    "description": "Helm release name. Default: `my-<app>` (e.g., `my-reporter`).",
+    "type": "string"
+   },
+   "snapshot_id": {
+    "description": "ID returned by `log10x_discover_env`, and the one arg the wizard cannot infer. The snapshot is cached for 30 min. Call `log10x_discover_env` first when there is no snapshot yet.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "log10x_advise_install",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": true,
+  "properties": {
+   "actions": {
+    "default": [],
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "args": {
+       "additionalProperties": {},
+       "default": {},
+       "type": "object"
+      },
+      "reason": {
+       "type": "string"
+      },
+      "role": {
+       "enum": [
+        "required-next",
+        "recommended-next",
+        "optional-followup",
+        "alternative"
+       ],
+       "type": "string"
+      },
+      "tool": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "tool",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "data": {},
+   "generated_at": {
+    "type": "string"
+   },
+   "images": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "alt": {
+       "type": "string"
+      },
+      "data": {
+       "type": "string"
+      },
+      "mimeType": {
+       "default": "image/png",
+       "enum": [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "data"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "next_cursor": {
+    "type": "string"
+   },
+   "render_hint": {
+    "additionalProperties": false,
+    "properties": {
+     "callouts": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "chart": {
+      "enum": [
+       "sparkline",
+       "timeseries",
+       "bar",
+       "none"
+      ],
+      "type": "string"
+     },
+     "units": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "schema_epoch": {
+    "type": "string"
+   },
+   "schema_version": {
+    "const": "1.0",
+    "type": "string"
+   },
+   "summary": {
+    "additionalProperties": false,
+    "properties": {
+     "bullets": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 5,
+      "type": "array"
+     },
+     "callout": {
+      "type": "string"
+     },
+     "headline": {
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "headline"
+    ],
+    "type": "object"
+   },
+   "tool": {
+    "type": "string"
+   },
+   "truncated": {
+    "default": false,
+    "type": "boolean"
+   },
+   "view": {
+    "default": "summary",
+    "enum": [
+     "summary",
+     "markdown"
+    ],
+    "type": "string"
+   },
+   "warnings": {
+    "default": [],
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "schema_version",
+   "schema_epoch",
+   "tool",
+   "generated_at",
+   "summary"
+  ],
+  "type": "object"
+ },
+ "title": "Install wizard"
+}

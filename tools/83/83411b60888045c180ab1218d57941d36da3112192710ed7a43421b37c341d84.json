@@ -1,0 +1,240 @@
+{
+ "_meta": {
+  "category": "retrieve",
+  "tier": "retriever"
+ },
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Retriever time series"
+ },
+ "description": "Materialize a fidelity-aware time series from the customer's S3 archive over an arbitrary window, with optional group-by on enrichment fields. Auto-selects between exact full aggregation (Strategy A) and per-window-sampled fan-out (Strategy B) based on Reporter pattern volume \u2014 small/moderate-volume queries get exact counts; high-volume / long-window queries get a sampled series with time-distribution + group-ranking fidelity preserved and tail caveats reported. Pathological volume is refused with structured narrowing guidance, never silently truncated. Call when: (a) the user wants a 'rate of pattern X over the last 30 days, broken down by tenant' answer that exceeds SIEM retention/budget, (b) a baseline needs building from cost-driver patterns where Prometheus has continuous metrics but the *grouped breakdown* lives only in the S3 archive. Use `log10x_retriever_query` instead when you need the actual event payloads (not aggregates).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "bucket_size": {
+    "default": "5m",
+    "description": "Time bucket granularity (`1m`, `5m`, `1h`, `1d`). Determines the resolution of the output series.",
+    "type": "string"
+   },
+   "environment": {
+    "description": "Environment nickname \u2014 required if multi-env.",
+    "type": "string"
+   },
+   "fidelity": {
+    "default": "auto",
+    "description": "`auto` (tool decides via Reporter volume + window length), `full` (force exact aggregation \u2014 may exceed Lambda budget), `per_window_sampled` (force sampling, default K=1000 per sub-window), or `per_window_sampled:K` (custom K).",
+    "type": "string"
+   },
+   "filters": {
+    "description": "In-memory JS filters applied after the Bloom-scoped fetch (AND-combined).",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "from": {
+    "description": "Start of the query window. ISO8601, epoch millis, or relative (`now-1h`, `now-7d`, `now-30d`).",
+    "type": "string"
+   },
+   "group_by": {
+    "description": "Optional enrichment field to group the series by \u2014 e.g., `tenx_user_service`, `severity_level`, `k8s_namespace`. Top-1000 group values are retained; tail collapsed to `_other_`.",
+    "type": "string"
+   },
+   "pattern": {
+    "description": "Reporter-named pattern (Symbol Message). NOT SUPPORTED against the offload archive: passing it returns an error naming the remedy, rather than a silent empty result. A Symbol Message is a label DERIVED from the event, so it is never a token in the archived bytes, and the Bloom index holds only text tokens plus template hashes. (The field this once queried, `tenx_user_pattern`, does not exist in the engine at all, which is why name-scoped queries returned BLOOM_REJECTED_ALL.) Pass `pattern_hash` instead: top_patterns returns it on the same row as the name, and event_lookup resolves a name to a hash.",
+    "type": "string"
+   },
+   "search": {
+    "description": "Bloom-filter search expression using the TenX subset. Tightly bound queries (e.g., `includes(text, \"<pattern_hash>\")`, `severity_level == \"ERROR\"`) are dramatically cheaper. (legacy example removed: `tenx_user_pattern == \"PaymentRetry\"`) get the cheapest fetch path. Pattern-bound expressions are also what unlocks the Reporter-driven cost heuristic \u2014 without one, mode selection falls back to window-length only. Pass `pattern` instead for the common case of scoping to one Reporter-named pattern.",
+    "type": "string"
+   },
+   "target": {
+    "description": "Target app prefix. Defaults to __SAVE_LOG10X_RETRIEVER_TARGET__.",
+    "type": "string"
+   },
+   "to": {
+    "default": "now",
+    "description": "End of the query window. Same grammar as `from`. Default `now`.",
+    "type": "string"
+   },
+   "view": {
+    "const": "summary",
+    "default": "summary",
+    "description": "summary returns the typed envelope (data.mode, data.bucket_seconds, data.series_count, data.points_returned, data.top_groups, data.caveats, data.human_summary). The deprecated markdown view was removed; data.human_summary carries the prose distillation for chat rendering.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "from"
+  ],
+  "type": "object"
+ },
+ "name": "log10x_retriever_series",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": true,
+  "properties": {
+   "actions": {
+    "default": [],
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "args": {
+       "additionalProperties": {},
+       "default": {},
+       "type": "object"
+      },
+      "reason": {
+       "type": "string"
+      },
+      "role": {
+       "enum": [
+        "required-next",
+        "recommended-next",
+        "optional-followup",
+        "alternative"
+       ],
+       "type": "string"
+      },
+      "tool": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "tool",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "data": {},
+   "generated_at": {
+    "type": "string"
+   },
+   "images": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "alt": {
+       "type": "string"
+      },
+      "data": {
+       "type": "string"
+      },
+      "mimeType": {
+       "default": "image/png",
+       "enum": [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "data"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "next_cursor": {
+    "type": "string"
+   },
+   "render_hint": {
+    "additionalProperties": false,
+    "properties": {
+     "callouts": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "chart": {
+      "enum": [
+       "sparkline",
+       "timeseries",
+       "bar",
+       "none"
+      ],
+      "type": "string"
+     },
+     "units": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "schema_epoch": {
+    "type": "string"
+   },
+   "schema_version": {
+    "const": "1.0",
+    "type": "string"
+   },
+   "summary": {
+    "additionalProperties": false,
+    "properties": {
+     "bullets": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 5,
+      "type": "array"
+     },
+     "callout": {
+      "type": "string"
+     },
+     "headline": {
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "headline"
+    ],
+    "type": "object"
+   },
+   "tool": {
+    "type": "string"
+   },
+   "truncated": {
+    "default": false,
+    "type": "boolean"
+   },
+   "view": {
+    "default": "summary",
+    "enum": [
+     "summary",
+     "markdown"
+    ],
+    "type": "string"
+   },
+   "warnings": {
+    "default": [],
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "schema_version",
+   "schema_epoch",
+   "tool",
+   "generated_at",
+   "summary"
+  ],
+  "type": "object"
+ },
+ "title": "Retriever time series"
+}

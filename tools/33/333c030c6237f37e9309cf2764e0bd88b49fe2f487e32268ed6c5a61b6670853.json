@@ -1,0 +1,272 @@
+{
+ "_meta": {
+  "category": "install",
+  "tier": "none"
+ },
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Set up recurring cost-reduction"
+ },
+ "description": "Conversational wizard that configures a recurring autonomous cost-reduction agent. Walks the user through seven decisions \u2014 target services, savings target (%), tick schedule, scheduler runtime, gitops config repo, exception services, and final confirm \u2014 then emits two ready-to-commit artifacts: `policy.yaml` (the declarative policy the tick CLI consumes) and a scheduler manifest (Kubernetes CronJob YAML, GitHub Actions workflow, or crontab entry + wrapper script depending on the chosen scheduler). Each call merges the latest answer into the wizard session and either asks the next missing question or emits the artifacts once all answers are present. Re-invoke with the same `session_id` on every subsequent turn; sessions live 30 minutes. To skip interactive Q&A, supply all fields (`target_services`, `target_percent`, `schedule`, `scheduler`, `config_plane`, `confirm: true`) in a single call. Optional overrides: `exceptions` (services never touched), `min_delta_pp` (minimum savings delta before committing a new CSV, default 2pp), `env_id`, `namespace`, `secret_name`. Apply instructions for the chosen scheduler are in `data.apply_instructions`. After the first tick runs, call `log10x_commitment_report` to verify realized savings. REQUIRES nothing deployed to ASK: it renders manifests from your answers and writes to no account. The emitted tick needs a scheduler runtime (k8s CronJob, GitHub Actions, crontab, EventBridge, Container Apps job) and a policy repo or S3 prefix you control before it runs.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "budget_gb_monthly": {
+    "description": "VOLUME BUDGET: keep monthly ingest for the targeted services at or under this many GB/mo. A standing line, not a one-shot cut: each tick scales the budget to its lookback window and cuts only the overage \u2014 already under budget means every pattern passes. Replaces target_percent in policy.yaml (mutually exclusive). Dollar budgets are a one-shot answer via log10x_estimate_savings (budget_usd_monthly); the recurring tick is byte-denominated.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "config_plane": {
+    "description": "Where the recurring CLI reads policy.yaml and writes updated cap CSVs: a gitops repo URL (e.g. https://github.com/acme/log10x-config), a local path, or \u2014 required when scheduler=eventbridge \u2014 an S3 prefix (e.g. s3://acme-logs/log10x-config).",
+    "minLength": 1,
+    "type": "string"
+   },
+   "confirm": {
+    "description": "Set to true to confirm the configuration and emit the artifacts. The wizard asks for confirmation interactively when omitted.",
+    "type": "boolean"
+   },
+   "env_id": {
+    "description": "Log10x environment ID. Auto-detected from LOG10X_ENV_ID when absent.",
+    "type": "string"
+   },
+   "exceptions": {
+    "description": "Service names the policy must never touch (audit / regulatory / executive). Optional \u2014 defaults to empty. Pass [] to explicitly clear all exceptions.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "min_delta_pp": {
+    "description": "Minimum change in savings percentage points required before the tick commits a new CSV. Default: 2. Set to 0 to commit on every tick.",
+    "maximum": 50,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "namespace": {
+    "description": "Kubernetes namespace for the CronJob. Default: log10x. Only used when scheduler=k8s_cron.",
+    "type": "string"
+   },
+   "schedule": {
+    "anyOf": [
+     {
+      "enum": [
+       "daily-03utc",
+       "every-6h",
+       "every-12h",
+       "every-24h-localtz"
+      ],
+      "type": "string"
+     },
+     {
+      "pattern": "^[\\d*,\\-\\/\\s]+$",
+      "type": "string"
+     }
+    ],
+    "description": "Tick schedule. Presets: daily-03utc (default), every-6h, every-12h, every-24h-localtz. Or pass a raw 5-field cron expression (e.g. \"0 5 * * 1\")."
+   },
+   "scheduler": {
+    "description": "Where the recurring tick runs. k8s_cron = Kubernetes CronJob (default when kubectl reachable), github_actions = GHA workflow, crontab = crontab + wrapper script, eventbridge = AWS-native (EventBridge Scheduler + CodeBuild, S3 config plane \u2014 no cluster, no GitHub; the fit for AWS serverless estates), container_apps_job = Azure-native (Container Apps scheduled Job, git config plane; the fit for Azure serverless estates).",
+    "enum": [
+     "k8s_cron",
+     "github_actions",
+     "crontab",
+     "eventbridge",
+     "container_apps_job"
+    ],
+    "type": "string"
+   },
+   "secret_name": {
+    "description": "Name of the Kubernetes Secret holding LOG10X_API_KEY. Default: log10x-secret. Only used when scheduler=k8s_cron.",
+    "type": "string"
+   },
+   "session_id": {
+    "description": "Wizard session handle. Omit on the first call \u2014 a new session is minted and returned. Pass it back unchanged on every subsequent call.",
+    "type": "string"
+   },
+   "target_percent": {
+    "description": "Desired savings target, as a percentage of current log volume (1-95). Default: 30. The CLI's per-pattern planner works backward from this target.",
+    "maximum": 95,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "target_services": {
+    "description": "Services the policy targets. Empty array = all services. Use service names from `log10x_services`. The wizard asks if omitted.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "name": "log10x_setup_recurring",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": true,
+  "properties": {
+   "actions": {
+    "default": [],
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "args": {
+       "additionalProperties": {},
+       "default": {},
+       "type": "object"
+      },
+      "reason": {
+       "type": "string"
+      },
+      "role": {
+       "enum": [
+        "required-next",
+        "recommended-next",
+        "optional-followup",
+        "alternative"
+       ],
+       "type": "string"
+      },
+      "tool": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "tool",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "data": {},
+   "generated_at": {
+    "type": "string"
+   },
+   "images": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "alt": {
+       "type": "string"
+      },
+      "data": {
+       "type": "string"
+      },
+      "mimeType": {
+       "default": "image/png",
+       "enum": [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "data"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "next_cursor": {
+    "type": "string"
+   },
+   "render_hint": {
+    "additionalProperties": false,
+    "properties": {
+     "callouts": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "chart": {
+      "enum": [
+       "sparkline",
+       "timeseries",
+       "bar",
+       "none"
+      ],
+      "type": "string"
+     },
+     "units": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "schema_epoch": {
+    "type": "string"
+   },
+   "schema_version": {
+    "const": "1.0",
+    "type": "string"
+   },
+   "summary": {
+    "additionalProperties": false,
+    "properties": {
+     "bullets": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 5,
+      "type": "array"
+     },
+     "callout": {
+      "type": "string"
+     },
+     "headline": {
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "headline"
+    ],
+    "type": "object"
+   },
+   "tool": {
+    "type": "string"
+   },
+   "truncated": {
+    "default": false,
+    "type": "boolean"
+   },
+   "view": {
+    "default": "summary",
+    "enum": [
+     "summary",
+     "markdown"
+    ],
+    "type": "string"
+   },
+   "warnings": {
+    "default": [],
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "schema_version",
+   "schema_epoch",
+   "tool",
+   "generated_at",
+   "summary"
+  ],
+  "type": "object"
+ },
+ "title": "Set up recurring cost-reduction"
+}

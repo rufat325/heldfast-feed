@@ -1,0 +1,125 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Search the podcast catalog by what is said in episodes \u2014 by meaning (`semantic_search`), by exact phrase (`keyword_search`), or both at once (hybrid ranking). This is THE way to retrieve relevant dialogue, segments, and clips: each result is one segment of one episode with bounded transcript windows pinpointing the highest-relevance lines, plus any highlight clips that overlap the segment inline on the match.\n\nSegments partition an episode's transcript \u2014 where start_line and end_line are present, every spoken line belongs to exactly one segment and one segment's end_line + 1 is the next one's start_line. They are contiguous in transcript lines, not in wall-clock seconds: the seconds between one segment's end_seconds and the next's start_seconds contain no transcribed speech. These matches do not carry the line ranges themselves \u2014 fetch them with `particle_podcast_get_episode` and `include: [\"segments\"]`, where their absence marks an episode segmented by an earlier version, a small share of which do leave lines uncovered. Clips are sparse, engagement-ranked highlights that overlap some segments. There is no separate clip-search tool \u2014 relevant clips arrive on these matches, and a known episode's full clip list is `particle_podcast_get_episode` with `include: [\"clips\"]`.\n\nA match window defaults to one line of context around each matched line; raise `context` to widen windows in place instead of fetching the full transcript.\n\nUse this for \"find dialogue *about* a topic\". For \"every line *naming* a person or company\" use `particle_podcast_find_mentions` instead \u2014 `person_slug` and `company_slug` here narrow ranked results, they don't drive the ranking.\n\n**Choosing your query.** At least one of `semantic_search` or `keyword_search` is required, and they do different jobs:\n- `semantic_search` carries the *idea*. Write it as a sentence describing what should be discussed, in the vocabulary a speaker would use. It is paraphrase-tolerant, so it finds the topic however it happens to be worded.\n- `keyword_search` carries words that must be *literally spoken*. Every word must occur in the same passage, so it is for one or two exact tokens \u2014 a ticker, a product name \u2014 not for a description. Putting a sentence here returns nothing.\n- Use both when a topic must also contain an exact term. The result is their intersection, which is narrow by design; if that comes back empty, `keyword_match: \"ranked\"` relaxes the keyword side to a relevance hint.\n\n**Do not put a name in `semantic_search`.** Resolve it (`particle_person_resolve`, `particle_company_resolve`, `particle_entity_resolve`) and pass the slug \u2014 searching for \"Sam Altman\" as text finds passages that *sound like* him, while `person_slug` finds the episodes actually featuring him.\n\n**Start broad, then narrow.** Every filter compounds, and each one can silently remove all results. Issue the query with `semantic_search` alone first, then add filters once you know the topic has coverage. If a search returns nothing because of your filters, the error names the specific parameter responsible and the retry to make \u2014 act on it rather than re-issuing variations of the same query.\n\n**Note on `role`.** It describes how someone relates to the episode: `guest`/`host`/`panelist`/`correspondent` mean they *spoke*, `mention` means they were *talked about*. Omitting `role` covers both and is almost always what you want.",
+ "inputSchema": {
+  "properties": {
+   "company_slug": {
+    "description": "Company slug, domain, or ID. Resolves to the company's linked entity and applies as a filter.",
+    "type": "string"
+   },
+   "context": {
+    "description": "Lines of surrounding dialogue around each matched line (1-15, default 1). Widens each match window in place \u2014 use a larger value instead of fetching the full transcript when a match needs more context.",
+    "maximum": 15,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "cursor": {
+    "description": "Opaque pagination cursor from a previous response.",
+    "type": "string"
+   },
+   "entity_slug": {
+    "description": "Knowledge-graph entity slug from particle_entity_resolve for the long tail that isn't a person or company \u2014 places, organizations, events, products, concepts (e.g. 'germany'). Use person_slug for people and company_slug for companies.",
+    "type": "string"
+   },
+   "entity_type": {
+    "description": "Narrow to dialogue in episodes that mention any entity of this category \u2014 e.g. 'book', 'company', 'movie', 'school'. Use for 'discussions of X that reference some book'. Ignored when person_slug/company_slug/entity_slug names a specific entity, which is strictly narrower. Categories come from particle_catalog.",
+    "type": "string"
+   },
+   "episode_slug": {
+    "description": "Filter to a specific episode by slug or ID. A particle.pro or Radar episode link also works.",
+    "type": "string"
+   },
+   "keyword_match": {
+    "description": "How UNQUOTED keyword_search words are applied. 'required' (default) excludes any passage missing one of them, which also makes a hybrid call an intersection with semantic_search. Switch to 'ranked' when keyword_search is a loose bag of related words that will not co-occur \u2014 then those words only steer relevance. Quoted phrases still filter in both modes: to relax a phrase, remove its quotes rather than switching mode.",
+    "enum": [
+     "required",
+     "ranked"
+    ],
+    "type": "string"
+   },
+   "keyword_search": {
+    "description": "Words that must literally be spoken. Use for exact tokens a paraphrase would miss \u2014 tickers, product names, drug names, model numbers. Every word must appear in the same passage (see keyword_match), so keep it to the one or two words that must be said and put the rest of the idea in semantic_search. Wrap words in double quotes to also require them adjacent and in order in the segment's spoken dialogue \u2014 only for short exact strings, never for a sentence. A quoted name matches segments where the name appears in the dialogue, not segments that person speaks in; use person_slug or particle_podcast_find_mentions for a person's appearances. There is no boolean OR: 'a OR b' requires the literal word 'OR', so issue one call per alternative.",
+    "maxLength": 500,
+    "type": "string"
+   },
+   "language": {
+    "description": "Restrict to episodes of podcasts in this language \u2014 ISO 639-1 code (e.g. 'fr'). Matches the podcast's primary language subtag, so 'fr' covers 'fr-FR'.",
+    "type": "string"
+   },
+   "limit": {
+    "description": "Results per page (1-50, default 10).",
+    "maximum": 50,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "output_format": {
+    "description": "Output serialization. 'markdown' (default) returns the LLM-facing rendering. 'json' returns the structured payload as JSON text \u2014 use only for programmatic chaining where exact field extraction matters; the JSON shape is larger and noisier for an LLM to read.",
+    "enum": [
+     "markdown",
+     "json"
+    ],
+    "type": "string"
+   },
+   "person_slug": {
+    "description": "Person slug or encoded person ID from particle_person_resolve, particle_entity_resolve, or the guest tools (e.g. 'sam-altman'). Filters results to dialogue featuring this person. For 'every line about X' use particle_podcast_find_mentions instead.",
+    "type": "string"
+   },
+   "podcast_slug": {
+    "description": "Podcast slug, internal ID, or numeric iTunes ID. A particle.pro or Radar show link also works.",
+    "type": "string"
+   },
+   "role": {
+    "description": "How the entity must relate to the episode. Speaking roles: 'guest', 'host', 'panelist', 'correspondent', or 'speaker' for any of them. 'mention' means the entity is talked about rather than speaking. Omit to match both \u2014 usually what you want.",
+    "enum": [
+     "guest",
+     "host",
+     "panelist",
+     "correspondent",
+     "speaker",
+     "mention"
+    ],
+    "type": "string"
+   },
+   "segment_type": {
+    "description": "Segment type filter.",
+    "enum": [
+     "INTRO",
+     "PERSONAL_BANTER",
+     "TOPIC_DISCUSSION",
+     "INTERVIEW",
+     "TRANSITION",
+     "AD",
+     "OUTRO"
+    ],
+    "type": "string"
+   },
+   "semantic_search": {
+    "description": "Vector-similarity search by meaning. Express the query the way you'd describe the topic to a colleague \u2014 paraphrase tolerant. Combine with keyword_search for hybrid ranking. Describe a topic, not a name: to find a specific person/company/entity, filter with person_slug / company_slug / entity_slug (or use particle_podcast_find_mentions for every line about them) \u2014 and for an exact token like a ticker, use keyword_search.",
+    "maxLength": 500,
+    "type": "string"
+   },
+   "since": {
+    "description": "Only segments from episodes published on or after this ISO 8601 date.",
+    "type": "string"
+   },
+   "sort": {
+    "description": "Sort order. Defaults to relevance.",
+    "enum": [
+     "relevance",
+     "recency"
+    ],
+    "type": "string"
+   },
+   "until": {
+    "description": "Only segments from episodes published on or before this ISO 8601 date.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "particle_podcast_search_transcripts"
+}

@@ -1,0 +1,423 @@
+{
+ "_meta": {
+  "category": "cost",
+  "tier": "reporter"
+ },
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Estimate savings"
+ },
+ "description": "[FRESH-SESSION ROUTING: if this is the user first cost question of the session, call log10x_start first instead \u2014 it returns the orientation menu the user needs before any per-tool action.] Two-mode savings estimator with percent-first reporting and a dollar overlay. `forecast` projects bytes_in -> bytes_out and percent reduction for a proposed plan; pass `effective_ingest_per_gb` (or rely on the account profile list-price rate) to overlay $/mo per pattern and in totals. `verify` counts realized savings from the engine `routeState` label over a window with cap-hit / drift / new-patterns / leakage attribution, leading with percent and adding the dollar overlay only when a rate is set. Without a rate, dollar fields are emitted as null (never as a fabricated $1/GB number); the envelope carries `rate_source: list_price | customer_supplied | unset` so callers can show how the overlay was derived. Accepts siem_lens (what-if destination): keeps the real volumes, prices + gates for that destination at list rates, and stamps siem_actual vs siem_lens in the envelope. REQUIRES Reporter-tier cost attribution (per-pattern bytes in the metrics backend). Before anything is deployed, use log10x_poc_from_local or log10x_poc_from_siem_submit instead.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "allow_lossy": {
+    "default": false,
+    "description": "Permit the ladder solver to close a keep-everything shortfall with sample/drop (lossy, opt-in). Default false: the plan stops at the keep-everything ceiling and reports the gap instead of silently discarding events. Only set after the user explicitly chooses loss.",
+    "type": "boolean"
+   },
+   "baseline_window": {
+    "description": "verify mode: PromQL range expression for the pre-merge window, e.g. \"7d\", \"168h\".",
+    "pattern": "^\\d+[dh]$",
+    "type": "string"
+   },
+   "budget_gb_monthly": {
+    "description": "forecast mode: VOLUME BUDGET \u2014 keep monthly ingest toward the destination at or under this many GB/mo. BYTE accounting: tier_down keeps every byte in the destination, so it cannot serve this target and is excluded from the ladder (compact only where it lands on the billed wire, then offload with the retriever, then lossy on allow_lossy). Mutually exclusive with target_percent, budget_usd_monthly, default_action, and proposed_config.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "budget_usd_monthly": {
+    "description": "forecast mode: DOLLAR BUDGET \u2014 keep the (service-scoped or whole) destination bill at or under this $/mo. The ladder solver derives the reduction: max(0, bill - budget). Idempotent: already under budget returns an empty plan with the headroom stated. Mutually exclusive with target_percent, budget_gb_monthly, default_action, and proposed_config.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "check_dependencies": {
+    "default": true,
+    "description": "Ladder-plan path only: scan the destination (read-only) for dashboards, alerts, and saved searches that reference the top planned message types, and attach the result as plan_dependencies. Runs only when credentials for the destination are present in the session environment; otherwise the plan carries a one-line note saying it was not checked. Set false to skip the scan for speed.",
+    "type": "boolean"
+   },
+   "commitment_id": {
+    "description": "verify mode: when present, the verify output is shaped as a commitment delta (used by log10x_commitment_report).",
+    "type": "string"
+   },
+   "contract_type": {
+    "description": "verify mode: shapes the dollar projection (committed vs on-demand renewal math).",
+    "enum": [
+     "committed",
+     "on_demand"
+    ],
+    "type": "string"
+   },
+   "current_compute_units": {
+    "description": "forecast mode, compute-billed destinations only (ClickHouse): the service's current compute unit count. Turns the modeled compute saving in totals.compute_saving from a fraction into dollars.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "default_action": {
+    "description": "forecast mode, OPTIONAL: force one action onto every solver-selected pattern (a mode choice \u2014 \"cut 50% via drop\"). Hard constraint when present, subject to destination compatibility (compact is replaced by the destination canonical action when compact_mode=no-op). OMIT for the product default: the ladder solver picks the destination's keep-everything lever per pattern (compact -> tier_down -> offload-with-retriever), never lossy unless allow_lossy.",
+    "enum": [
+     "pass",
+     "sample",
+     "compact",
+     "tier_down",
+     "offload",
+     "drop"
+    ],
+    "type": "string"
+   },
+   "deployment": {
+    "description": "How the customer RUNS the destination, which decides whether compaction is available at all: the expander is software they install (the l1es Elasticsearch/OpenSearch plugin, the 10x Splunk app), so a managed or serverless platform can carry compacted bytes but has nowhere to expand them. Set only from what the user actually said \u2014 absent means unknown, and an unknown deployment prices only the levers that hold either way. Irrelevant on destinations whose levers do not depend on it (Datadog, CloudWatch, Azure, Coralogix).",
+    "enum": [
+     "self_managed",
+     "managed"
+    ],
+    "type": "string"
+   },
+   "destination": {
+    "description": "Destination stack. Required for both modes (used to look up ingest $/GB + compact ratio band).",
+    "enum": [
+     "splunk",
+     "datadog",
+     "elasticsearch",
+     "clickhouse",
+     "cloudwatch",
+     "azure-monitor",
+     "gcp-logging",
+     "sumo",
+     "coralogix",
+     "elastic-serverless"
+    ],
+    "type": "string"
+   },
+   "effective_ingest_per_gb": {
+    "description": "forecast and verify mode: override the destination list-price rate with the customer's contracted $/GB. When supplied, dollar projections use this rate and surface rate_source='customer_supplied'.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "enforcement_mode": {
+    "description": "forecast mode: when manual_report, reframes the headline as a potential-savings estimate under external enforcement rather than engine enforcement. Headline reads 'If you enforce externally: X savings potential. Enforcement choice is yours.' instead of the standard forecast headline.",
+    "enum": [
+     "engine",
+     "manual_report"
+    ],
+    "type": "string"
+   },
+   "environment": {
+    "description": "Environment nickname; routes to the right metrics backend.",
+    "type": "string"
+   },
+   "es_pruned": {
+    "description": "Elasticsearch only: are compactable fields excluded from _source? Default false \u2014 the unpruned ratio band is used.",
+    "type": "boolean"
+   },
+   "exception_services": {
+    "description": "Ladder-plan path only: services pinned at pass \u2014 their patterns stay in the bill but are never planned, exactly like protected severities. The SOC-owned or compliance-bound slice of the estate, stated as a hard exclusion. Case-insensitive.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "include_referenced": {
+    "default": false,
+    "description": "Ladder-plan path only: message types LITERALLY referenced by a monitor, alert, saved search, or dashboard (found by the dependency scan) are EXCLUDED from the plan by default \u2014 they stay exactly as they are, and the plan re-solves around them. Pass true only after the user explicitly chooses to include them (the render shows what including them adds).",
+    "type": "boolean"
+   },
+   "mode": {
+    "default": "forecast",
+    "description": "forecast: project savings of a proposed per-pattern policy (or a target_percent). verify: measure realized savings from a deployed policy by comparing baseline vs post-merge windows.",
+    "enum": [
+     "forecast",
+     "verify"
+    ],
+    "type": "string"
+   },
+   "monthly_compute_spend_usd": {
+    "description": "forecast mode, compute-billed destinations only (ClickHouse): the service's current monthly compute spend in dollars. Converted to units at the destination's unit price; ignored when current_compute_units is supplied.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "monthly_volume_gb": {
+    "description": "What-if volume lens (forecast mode): model the environment at THIS monthly volume (decimal GB/month) instead of its measured volume. The real per-pattern shares and pattern mix are held fixed; only absolute bytes and dollars scale, by one uniform factor. Use it to project a prospect onto their own scale, or to forecast a real env after growth. Pairs with `siem_lens`. This is a PROJECTION: the envelope stamps volume_actual_gb vs volume_projected_gb and the scale factor, and the note points at the POC for the caller's real patterns.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "observation_window": {
+    "description": "forecast mode: PromQL range expression for the observation window the solver/projection runs over. Default `30d`. Accepts `1h`, `24h`, `7d`, `30d`, etc. Alias: `timeRange`.",
+    "pattern": "^\\d+[dh]$",
+    "type": "string"
+   },
+   "pattern_limit": {
+    "default": 50,
+    "description": "forecast mode: maximum number of per_pattern rows returned. Default 50 when service is omitted; ignored (unlimited) when service is set. Totals and coverage_pct are always computed over the full solver result before slicing.",
+    "exclusiveMinimum": 0,
+    "type": "integer"
+   },
+   "post_window": {
+    "description": "verify mode: PromQL range expression for the post-merge window, e.g. \"7d\".",
+    "pattern": "^\\d+[dh]$",
+    "type": "string"
+   },
+   "proposed_config": {
+    "description": "forecast mode: explicit per-pattern (action, optional cap) rows. Either this OR target_percent is required.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "action": {
+       "description": "Action the receiver would take for this pattern.",
+       "enum": [
+        "pass",
+        "sample",
+        "compact",
+        "tier_down",
+        "offload",
+        "drop"
+       ],
+       "type": "string"
+      },
+      "cap_bytes_per_window": {
+       "description": "Per-5min-window cap in bytes. Informational; the forecast computes savings from `action` alone.",
+       "minimum": 0,
+       "type": "number"
+      },
+      "pattern_hash": {
+       "description": "Stable pattern identity (tenx_hash).",
+       "type": "string"
+      },
+      "sample_n": {
+       "description": "For action='sample', N where we keep 1 in N. Default 10.",
+       "exclusiveMinimum": 0,
+       "type": "integer"
+      }
+     },
+     "required": [
+      "pattern_hash",
+      "action"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "retention_months": {
+    "default": 1,
+    "description": "Retention window for storage cost. Default 1 month.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "retriever_installed": {
+    "default": false,
+    "description": "Whether the S3 retriever is installed (or the user has agreed to install it). Gates the offload rung of the ladder solver: without it, offloaded events would be unreachable, so the plan stops at the in-SIEM levers and the gap names \"install the retriever\" as the lossless remedy. Set from conversation; log10x_advise_retriever is the install path.",
+    "type": "boolean"
+   },
+   "service": {
+    "description": "Scope the target_percent greedy solver and coverage_pct to a single service. When present, only patterns from that service are candidates; coverage_of_env_pct and dollar totals reflect that service only. pattern_limit is ignored (all service patterns are returned). If omitted, runs across all services.",
+    "type": "string"
+   },
+   "siem_lens": {
+    "description": "What-if destination lens (alias of `destination` with provenance stamping): price the projection for THIS destination while the pipeline keeps its actual one. Envelope stamps siem_actual vs siem_lens.",
+    "enum": [
+     "cloudwatch",
+     "datadog",
+     "splunk",
+     "elasticsearch",
+     "azure-monitor",
+     "gcp-logging",
+     "sumo",
+     "clickhouse",
+     "coralogix",
+     "elastic-serverless"
+    ],
+    "type": "string"
+   },
+   "target_percent": {
+    "description": "forecast mode: % volume reduction goal. Tool runs the same greedy solver as configure_engine on observed 30d bytes.",
+    "maximum": 95,
+    "minimum": 1,
+    "type": "number"
+   },
+   "tier_down_plan": {
+    "description": "Which tier_down plan to price when the action is tier_down. Matches the plan name (case-insensitive substring): omit for the destination default (e.g. Azure Basic Logs), or pass e.g. \"auxiliary\" to price the aggressive alternative (Azure Auxiliary Logs). No effect on destinations without an alternative tier.",
+    "type": "string"
+   },
+   "timeRange": {
+    "description": "forecast mode: alias for `observation_window` for consistency with other Log10x tools. If both are set, `observation_window` wins.",
+    "type": "string"
+   },
+   "unprotect_patterns": {
+    "description": "Ladder-plan path only: pattern hashes the user EXPLICITLY unpinned from the severity floor (a warn-level retry storm they chose to act on). Bypasses severity protection for the listed hashes only; hard exclusions still win. Set only after the user names the type and chooses this \u2014 never inferred. The render flags these rows with their severity.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "name": "log10x_estimate_savings",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": true,
+  "properties": {
+   "actions": {
+    "default": [],
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "args": {
+       "additionalProperties": {},
+       "default": {},
+       "type": "object"
+      },
+      "reason": {
+       "type": "string"
+      },
+      "role": {
+       "enum": [
+        "required-next",
+        "recommended-next",
+        "optional-followup",
+        "alternative"
+       ],
+       "type": "string"
+      },
+      "tool": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "tool",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "data": {},
+   "generated_at": {
+    "type": "string"
+   },
+   "images": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "alt": {
+       "type": "string"
+      },
+      "data": {
+       "type": "string"
+      },
+      "mimeType": {
+       "default": "image/png",
+       "enum": [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "data"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "next_cursor": {
+    "type": "string"
+   },
+   "render_hint": {
+    "additionalProperties": false,
+    "properties": {
+     "callouts": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "chart": {
+      "enum": [
+       "sparkline",
+       "timeseries",
+       "bar",
+       "none"
+      ],
+      "type": "string"
+     },
+     "units": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "schema_epoch": {
+    "type": "string"
+   },
+   "schema_version": {
+    "const": "1.0",
+    "type": "string"
+   },
+   "summary": {
+    "additionalProperties": false,
+    "properties": {
+     "bullets": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 5,
+      "type": "array"
+     },
+     "callout": {
+      "type": "string"
+     },
+     "headline": {
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "headline"
+    ],
+    "type": "object"
+   },
+   "tool": {
+    "type": "string"
+   },
+   "truncated": {
+    "default": false,
+    "type": "boolean"
+   },
+   "view": {
+    "default": "summary",
+    "enum": [
+     "summary",
+     "markdown"
+    ],
+    "type": "string"
+   },
+   "warnings": {
+    "default": [],
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "schema_version",
+   "schema_epoch",
+   "tool",
+   "generated_at",
+   "summary"
+  ],
+  "type": "object"
+ },
+ "title": "Estimate savings"
+}

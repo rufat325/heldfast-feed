@@ -1,0 +1,1762 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false,
+  "title": "Evaluate a matured pre-registration"
+ },
+ "description": "Use this when a signal was pre-registered with assay_register and the\nmaturity window has passed -- get the post-cutoff verdict computed only\nfrom data after registration. A sealed audit, it gives no buy/sell advice.\nPost-cutoff verdict under the registration's sealed terms.\n\nEvaluates a registration strictly on bars AFTER the registration cutoff,\nwith maturity floor and fail-closed data-gap handling (use\ntrading_calendar='weekdays' for equity daily bars so weekends do not\ncount as gaps; omit fee/calendar to use the registration's sealed\nterms). The verdict embeds the family-deflated Sharpe: even an\nanchored signal is deflated by how much its family was searched. For\nv2 registrations with a sealed hypothesis, the verdict additionally\nreports oos_sharpe_annualized against the pre-committed bar\n(threshold_met -- a descriptive fact, never an endorsement) and flags\ngoalpost_moved when the requested terms deviate from the sealed ones\n(the seal always wins). Price: per check; see\nhttps://api.alphaassay.com/v1/meta/pricing (api_key required -- account\nsetup at https://api.alphaassay.com/account).",
+ "inputSchema": {
+  "$defs": {
+   "OHLCVSeries": {
+    "additionalProperties": false,
+    "properties": {
+     "close": {
+      "items": {
+       "anyOf": [
+        {
+         "exclusiveMinimum": 0,
+         "maximum": 1000000000000000.0,
+         "type": "integer",
+         "x-strictJsonInteger": true
+        },
+        {
+         "exclusiveMinimum": 0,
+         "maximum": 1000000000000000.0,
+         "type": "number"
+        }
+       ]
+      },
+      "maxItems": 5000,
+      "minItems": 1,
+      "type": "array"
+     },
+     "high": {
+      "anyOf": [
+       {
+        "items": {
+         "anyOf": [
+          {
+           "exclusiveMinimum": 0,
+           "maximum": 1000000000000000.0,
+           "type": "integer",
+           "x-strictJsonInteger": true
+          },
+          {
+           "exclusiveMinimum": 0,
+           "maximum": 1000000000000000.0,
+           "type": "number"
+          }
+         ]
+        },
+        "maxItems": 5000,
+        "minItems": 1,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "low": {
+      "anyOf": [
+       {
+        "items": {
+         "anyOf": [
+          {
+           "exclusiveMinimum": 0,
+           "maximum": 1000000000000000.0,
+           "type": "integer",
+           "x-strictJsonInteger": true
+          },
+          {
+           "exclusiveMinimum": 0,
+           "maximum": 1000000000000000.0,
+           "type": "number"
+          }
+         ]
+        },
+        "maxItems": 5000,
+        "minItems": 1,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "open": {
+      "anyOf": [
+       {
+        "items": {
+         "anyOf": [
+          {
+           "exclusiveMinimum": 0,
+           "maximum": 1000000000000000.0,
+           "type": "integer",
+           "x-strictJsonInteger": true
+          },
+          {
+           "exclusiveMinimum": 0,
+           "maximum": 1000000000000000.0,
+           "type": "number"
+          }
+         ]
+        },
+        "maxItems": 5000,
+        "minItems": 1,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "time": {
+      "anyOf": [
+       {
+        "items": {
+         "maxLength": 64,
+         "minLength": 1,
+         "type": "string"
+        },
+        "maxItems": 5000,
+        "minItems": 1,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "volume": {
+      "anyOf": [
+       {
+        "items": {
+         "anyOf": [
+          {
+           "maximum": 1000000000000000.0,
+           "minimum": 0,
+           "type": "integer",
+           "x-strictJsonInteger": true
+          },
+          {
+           "maximum": 1000000000000000.0,
+           "minimum": 0,
+           "type": "number"
+          }
+         ]
+        },
+        "maxItems": 5000,
+        "minItems": 1,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "required": [
+     "close"
+    ],
+    "type": "object",
+    "x-relations": [
+     "len(time|open|high|low|volume) == len(close) when present"
+    ]
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "api_key": {
+    "default": "",
+    "description": "API key for a paid MCP check. Hosted Streamable HTTP clients should send it in the Authorization: Bearer transport header so the model never sees the secret; local stdio callers may supply the raw key in this tool argument without a Bearer prefix. Create an account at https://api.alphaassay.com/account; the current free allowance and prices are published at https://api.alphaassay.com/v1/meta/pricing. Paid MCP calls use API-key credits; x402 buys only the separate REST POST /x402/v1/gauntlet and is not MCP billing.",
+    "maxLength": 512,
+    "type": "string"
+   },
+   "fee_bps_per_side": {
+    "anyOf": [
+     {
+      "maximum": 1000,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     {
+      "maximum": 1000,
+      "minimum": 0,
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Round-trip cost in bps/side."
+   },
+   "ohlcv_by_symbol": {
+    "additionalProperties": false,
+    "description": "Post-registration candles per symbol to evaluate the sealed strategy on.",
+    "maxProperties": 50,
+    "patternProperties": {
+     "^\\S+$": {
+      "$ref": "#/$defs/OHLCVSeries"
+     }
+    },
+    "propertyNames": {
+     "maxLength": 64,
+     "minLength": 1
+    },
+    "type": "object"
+   },
+   "prereg_id": {
+    "description": "Id returned by assay_register; the verdict uses ONLY data from after that registration.",
+    "maxLength": 256,
+    "minLength": 1,
+    "pattern": "^\\S+$",
+    "type": "string"
+   },
+   "request_id": {
+    "anyOf": [
+     {
+      "maxLength": 256,
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Optional idempotency key for this paid execution. Retry the same request_id with the same payload to replay one stored result without another charge; reuse with a different payload returns idempotency_conflict."
+   },
+   "trading_calendar": {
+    "anyOf": [
+     {
+      "enum": [
+       "24/7",
+       "weekdays"
+      ],
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Market calendar for the instrument."
+   }
+  },
+  "required": [
+   "prereg_id",
+   "ohlcv_by_symbol"
+  ],
+  "type": "object",
+  "x-maxBodyBytes": 5242880
+ },
+ "name": "assay_verdict",
+ "outputSchema": {
+  "$defs": {
+   "DsrAttributionComputed": {
+    "additionalProperties": false,
+    "properties": {
+     "base_psr_normal_no_selection": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "dsr": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "dsr_normal_tails": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "interaction": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "interpretation": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "non_normality_haircut": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "selection_haircut": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "status": {
+      "const": "computed",
+      "type": "string"
+     },
+     "tipping_point_n_trials": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "total_haircut": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "verdict_would_flip_under_normal_tails": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "status",
+     "base_psr_normal_no_selection",
+     "dsr",
+     "dsr_normal_tails",
+     "total_haircut",
+     "selection_haircut",
+     "non_normality_haircut",
+     "interaction",
+     "tipping_point_n_trials",
+     "verdict_would_flip_under_normal_tails",
+     "interpretation"
+    ],
+    "type": "object"
+   },
+   "DsrAttributionUnavailable": {
+    "additionalProperties": false,
+    "properties": {
+     "dsr": {
+      "type": "null"
+     },
+     "reason": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "status": {
+      "const": "not_computed",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "reason",
+     "dsr"
+    ],
+    "type": "object"
+   },
+   "EbComputed": {
+    "additionalProperties": false,
+    "properties": {
+     "family_t_stats_n": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "method": {
+      "const": "efron_morris_prior_zero",
+      "type": "string"
+     },
+     "note": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "sharpe_shrunk_per_obs": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "shrink_factor": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "sigma_signal_sq": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "status": {
+      "const": "computed",
+      "type": "string"
+     },
+     "t_observed": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "t_shrunk": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     }
+    },
+    "required": [
+     "status",
+     "family_t_stats_n",
+     "sigma_signal_sq",
+     "shrink_factor",
+     "t_observed",
+     "t_shrunk",
+     "sharpe_shrunk_per_obs",
+     "method",
+     "note"
+    ],
+    "type": "object"
+   },
+   "EbInsufficient": {
+    "additionalProperties": false,
+    "properties": {
+     "family_t_stats_n": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "method": {
+      "const": "efron_morris_prior_zero",
+      "type": "string"
+     },
+     "note": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "status": {
+      "const": "insufficient_family_history",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "family_t_stats_n",
+     "method",
+     "note"
+    ],
+    "type": "object"
+   },
+   "EvaluatedHypothesis": {
+    "additionalProperties": false,
+    "properties": {
+     "declared_pass_sharpe_annualized": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "fee_bps_per_side": {
+      "anyOf": [
+       {
+        "maximum": 1000,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "hypothesis_hash": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "max_evaluation_bars": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "rationale": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "trading_calendar": {
+      "enum": [
+       "24/7",
+       "weekdays"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "declared_pass_sharpe_annualized",
+     "max_evaluation_bars",
+     "fee_bps_per_side",
+     "trading_calendar",
+     "rationale",
+     "hypothesis_hash"
+    ],
+    "type": "object"
+   },
+   "EvaluatedVerdict": {
+    "additionalProperties": false,
+    "properties": {
+     "disclaimer": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "engine_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "evaluation_start_at": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+     },
+     "family_deflated_verdict": {
+      "discriminator": {
+       "mapping": {
+        "computed": "#/$defs/FamilyComputed",
+        "not_computed": "#/$defs/FamilyNotComputed"
+       },
+       "propertyName": "status"
+      },
+      "oneOf": [
+       {
+        "$ref": "#/$defs/FamilyNotComputed"
+       },
+       {
+        "$ref": "#/$defs/FamilyComputed"
+       }
+      ]
+     },
+     "fee_bps_per_side": {
+      "anyOf": [
+       {
+        "maximum": 1000,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "goalpost_moved": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "goalpost_moved_plain": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "goalpost_moved_reasons": {
+      "anyOf": [
+       {
+        "items": {
+         "maxLength": 2000,
+         "type": "string"
+        },
+        "maxItems": 10000,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "hypothesis": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/EvaluatedHypothesis"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "oos_sharpe_annualized": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "threshold_met": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "verdict": {
+      "const": "evaluated",
+      "type": "string"
+     },
+     "window": {
+      "$ref": "#/$defs/EvaluationWindow"
+     },
+     "window_capped_at_sealed_maximum": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "required": [
+     "verdict",
+     "engine_version",
+     "evaluation_start_at",
+     "window",
+     "fee_bps_per_side",
+     "family_deflated_verdict",
+     "disclaimer"
+    ],
+    "type": "object"
+   },
+   "EvaluationWindow": {
+    "additionalProperties": false,
+    "properties": {
+     "bars": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "end": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+     },
+     "start": {
+      "maxLength": 64,
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "start",
+     "end",
+     "bars"
+    ],
+    "type": "object"
+   },
+   "EvtDsrThreshold": {
+    "additionalProperties": false,
+    "properties": {
+     "dsr": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "min": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "survives": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "dsr",
+     "min",
+     "survives"
+    ],
+    "type": "object"
+   },
+   "FamilyComputed": {
+    "additionalProperties": false,
+    "properties": {
+     "break_even_n": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "cumulative_n": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "dsr": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "dsr_attribution": {
+      "discriminator": {
+       "mapping": {
+        "computed": "#/$defs/DsrAttributionComputed",
+        "not_computed": "#/$defs/DsrAttributionUnavailable"
+       },
+       "propertyName": "status"
+      },
+      "oneOf": [
+       {
+        "$ref": "#/$defs/DsrAttributionUnavailable"
+       },
+       {
+        "$ref": "#/$defs/DsrAttributionComputed"
+       }
+      ]
+     },
+     "eb_shrinkage": {
+      "discriminator": {
+       "mapping": {
+        "computed": "#/$defs/EbComputed",
+        "insufficient_family_history": "#/$defs/EbInsufficient"
+       },
+       "propertyName": "status"
+      },
+      "oneOf": [
+       {
+        "$ref": "#/$defs/EbInsufficient"
+       },
+       {
+        "$ref": "#/$defs/EbComputed"
+       }
+      ]
+     },
+     "effective_n_method": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "expected_max_sharpe_null": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "family_verdict": {
+      "enum": [
+       "survives",
+       "deflated_out"
+      ],
+      "type": "string"
+     },
+     "global_family_n": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "killed_by": {
+      "items": {
+       "enum": [
+        "evt_dsr",
+        "harvey_liu_bh"
+       ],
+       "type": "string"
+      },
+      "maxItems": 2,
+      "type": "array"
+     },
+     "kurtosis": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "mean_correlation": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": -1,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": -1,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "n_hat_ledger": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "n_observations": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "n_trials": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "n_trials_effective": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     },
+     "note": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "overlap_warning": {
+      "type": "boolean"
+     },
+     "psr_vs_zero": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "sharpe_per_obs": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "sketch_note": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "sketch_retained": {
+      "type": "boolean"
+     },
+     "skew": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": -1000000000000000.0,
+        "type": "number"
+       }
+      ]
+     },
+     "status": {
+      "const": "computed",
+      "type": "string"
+     },
+     "thresholds": {
+      "$ref": "#/$defs/FamilyThresholds"
+     },
+     "variance_of_sharpe": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1000000000000000.0,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "variants_in_call": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     }
+    },
+    "required": [
+     "status",
+     "sharpe_per_obs",
+     "n_observations",
+     "skew",
+     "kurtosis",
+     "n_trials",
+     "variance_of_sharpe",
+     "expected_max_sharpe_null",
+     "psr_vs_zero",
+     "dsr",
+     "cumulative_n",
+     "global_family_n",
+     "variants_in_call",
+     "n_trials_effective",
+     "n_hat_ledger",
+     "effective_n_method",
+     "mean_correlation",
+     "overlap_warning",
+     "thresholds",
+     "killed_by",
+     "family_verdict",
+     "sketch_retained",
+     "eb_shrinkage",
+     "break_even_n",
+     "dsr_attribution",
+     "note"
+    ],
+    "type": "object"
+   },
+   "FamilyNotComputed": {
+    "additionalProperties": false,
+    "properties": {
+     "reason": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "status": {
+      "const": "not_computed",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "reason"
+    ],
+    "type": "object"
+   },
+   "FamilyThresholds": {
+    "additionalProperties": false,
+    "properties": {
+     "evt_dsr": {
+      "$ref": "#/$defs/EvtDsrThreshold"
+     },
+     "harvey_liu_bh": {
+      "$ref": "#/$defs/HarveyLiuThreshold"
+     }
+    },
+    "required": [
+     "evt_dsr",
+     "harvey_liu_bh"
+    ],
+    "type": "object"
+   },
+   "HarveyLiuThreshold": {
+    "additionalProperties": false,
+    "properties": {
+     "alpha": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       }
+      ]
+     },
+     "p_adjusted": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "p_single": {
+      "anyOf": [
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "survives": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "p_single",
+     "p_adjusted",
+     "alpha",
+     "survives"
+    ],
+    "type": "object"
+   },
+   "IntegerMap": {
+    "additionalProperties": false,
+    "description": "Bounded runtime-keyed map of integer counts.",
+    "maxProperties": 256,
+    "patternProperties": {
+     "^\\S+$": {
+      "maximum": 9223372036854775807,
+      "minimum": 0,
+      "type": "integer",
+      "x-strictJsonInteger": true
+     }
+    },
+    "propertyNames": {
+     "maxLength": 128,
+     "minLength": 1
+    },
+    "type": "object"
+   },
+   "PublicMeta": {
+    "additionalProperties": false,
+    "properties": {
+     "api_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "as_of": {
+      "format": "date-time",
+      "maxLength": 20,
+      "minLength": 20,
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}Z$",
+      "type": "string"
+     },
+     "disclaimer": {
+      "maxLength": 2000,
+      "type": "string"
+     },
+     "engine_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "input_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+     },
+     "not_financial_advice": {
+      "const": true,
+      "type": "boolean"
+     },
+     "operation": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "request_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+     },
+     "request_id": {
+      "anyOf": [
+       {
+        "maxLength": 256,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "source_identity_digest": {
+      "pattern": "^sha256:[0-9a-f]{64}$",
+      "type": "string"
+     },
+     "statefulness": {
+      "enum": [
+       "pure",
+       "public_read",
+       "tenant_read",
+       "tenant_write"
+      ],
+      "type": "string"
+     },
+     "tenant_scope": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "tenant_scope_version": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "engine_version",
+     "api_version",
+     "as_of",
+     "input_digest",
+     "request_digest",
+     "tenant_scope",
+     "tenant_scope_version",
+     "request_id",
+     "source_identity_digest",
+     "operation",
+     "statefulness",
+     "not_financial_advice",
+     "disclaimer"
+    ],
+    "type": "object",
+    "x-relations": [
+     "as_of is a real UTC RFC3339 second"
+    ]
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "result": {
+    "additionalProperties": false,
+    "oneOf": [
+     {
+      "not": {
+       "anyOf": [
+        {
+         "required": [
+          "detail"
+         ]
+        },
+        {
+         "required": [
+          "covered_bars"
+         ]
+        },
+        {
+         "required": [
+          "maturity_bars"
+         ]
+        },
+        {
+         "required": [
+          "gap_bars"
+         ]
+        },
+        {
+         "required": [
+          "gap_tolerance_bars"
+         ]
+        },
+        {
+         "required": [
+          "expected_bars"
+         ]
+        }
+       ]
+      },
+      "properties": {
+       "status": {
+        "const": "evaluated"
+       },
+       "verdict": {
+        "$ref": "#/$defs/EvaluatedVerdict"
+       }
+      },
+      "required": [
+       "status",
+       "verdict"
+      ]
+     },
+     {
+      "not": {
+       "anyOf": [
+        {
+         "required": [
+          "verdict"
+         ]
+        },
+        {
+         "required": [
+          "detail"
+         ]
+        },
+        {
+         "required": [
+          "gap_bars"
+         ]
+        },
+        {
+         "required": [
+          "gap_tolerance_bars"
+         ]
+        },
+        {
+         "required": [
+          "expected_bars"
+         ]
+        }
+       ]
+      },
+      "properties": {
+       "covered_bars": {
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       "maturity_bars": {
+        "not": {
+         "type": "null"
+        }
+       },
+       "status": {
+        "const": "maturing"
+       }
+      },
+      "required": [
+       "status",
+       "covered_bars",
+       "maturity_bars"
+      ]
+     },
+     {
+      "not": {
+       "anyOf": [
+        {
+         "required": [
+          "gap_bars"
+         ]
+        },
+        {
+         "required": [
+          "gap_tolerance_bars"
+         ]
+        },
+        {
+         "required": [
+          "covered_bars"
+         ]
+        },
+        {
+         "required": [
+          "expected_bars"
+         ]
+        },
+        {
+         "required": [
+          "maturity_bars"
+         ]
+        }
+       ]
+      },
+      "properties": {
+       "detail": {
+        "not": {
+         "type": "null"
+        }
+       },
+       "status": {
+        "enum": [
+         "registered",
+         "maturing"
+        ]
+       },
+       "verdict": {
+        "const": "inconclusive_data_gap"
+       }
+      },
+      "required": [
+       "status",
+       "verdict",
+       "detail"
+      ]
+     },
+     {
+      "not": {
+       "anyOf": [
+        {
+         "required": [
+          "detail"
+         ]
+        },
+        {
+         "required": [
+          "maturity_bars"
+         ]
+        }
+       ]
+      },
+      "properties": {
+       "covered_bars": {
+        "$ref": "#/$defs/IntegerMap"
+       },
+       "expected_bars": {
+        "not": {
+         "type": "null"
+        }
+       },
+       "gap_bars": {
+        "not": {
+         "type": "null"
+        }
+       },
+       "gap_tolerance_bars": {
+        "not": {
+         "type": "null"
+        }
+       },
+       "status": {
+        "enum": [
+         "registered",
+         "maturing"
+        ]
+       },
+       "verdict": {
+        "const": "inconclusive_data_gap"
+       }
+      },
+      "required": [
+       "status",
+       "verdict",
+       "gap_bars",
+       "gap_tolerance_bars",
+       "covered_bars",
+       "expected_bars"
+      ]
+     }
+    ],
+    "properties": {
+     "_meta": {
+      "$ref": "#/$defs/PublicMeta"
+     },
+     "covered_bars": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "$ref": "#/$defs/IntegerMap"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "detail": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "expected_bars": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/IntegerMap"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "gap_bars": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "gap_tolerance_bars": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "maturity_bars": {
+      "anyOf": [
+       {
+        "maximum": 9223372036854775807,
+        "minimum": 0,
+        "type": "integer",
+        "x-strictJsonInteger": true
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "note": {
+      "anyOf": [
+       {
+        "maxLength": 2000,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "prereg_id": {
+      "maxLength": 256,
+      "minLength": 1,
+      "pattern": "^\\S+$",
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "registered",
+       "maturing",
+       "evaluated"
+      ],
+      "type": "string"
+     },
+     "verdict": {
+      "anyOf": [
+       {
+        "const": "inconclusive_data_gap",
+        "type": "string"
+       },
+       {
+        "$ref": "#/$defs/EvaluatedVerdict"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "required": [
+     "_meta",
+     "prereg_id",
+     "status"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "result"
+  ],
+  "type": "object"
+ },
+ "title": "Evaluate a matured pre-registration"
+}

@@ -1,0 +1,275 @@
+{
+ "_meta": {
+  "category": "cost",
+  "tier": "reporter"
+ },
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Top patterns"
+ },
+ "description": "Return the top N log patterns ranked by byte volume (with cost overlay when $/GB is set), optionally with a delta column vs a `comparison_window` baseline (week-over-week / day-over-day / 1h-vs-prior-1h). Use for \"what is expensive right now\", \"what are the noisy patterns in <service> this hour\", \"give me a snapshot of my loudest events\", \"what changed this week\", \"did the deploy add cost\". Can be scoped by service label. `timeRange` accepts free-form `<n><m|h|d>` durations (e.g., `48h`, `3d`, `15m`) \u2014 there's no enum snap. Pass `comparison_window` to get a per-row delta column; omit for current-rank-only. Pass `include` to choose which cohort to rank: `admitted` (default \u2014 what the receiver let through), `dropped` (the offloaded / overflow cohort alone), or `both` (total ingest pre-receiver). Use `dropped` for \"what is the receiver throwing away\" and `both` for an apples-to-apples pre/post comparison. Accepts siem_lens (what-if destination): keeps the real volumes, prices + gates for that destination at list rates, and stamps siem_actual vs siem_lens in the envelope. REQUIRES Reporter-tier metrics. Before anything is deployed, the POC tools answer the same question from your own logs.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "analyzerCost": {
+    "description": "DEPRECATED \u2014 use effective_ingest_per_gb. stack ingestion cost in $/GB. Auto-detected from profile if omitted.",
+    "type": "number"
+   },
+   "effective_ingest_per_gb": {
+    "description": "Customer-supplied $/GB rate used for the dollar overlay. When set, headline tags `rate_source=customer_supplied`. When absent, falls back to the profile list rate (`rate_source=list_price`) or omits dollars entirely (`rate_source=unset`).",
+    "type": "number"
+   },
+   "environment": {
+    "description": "Environment nickname (for multi-env setups).",
+    "type": "string"
+   },
+   "include": {
+    "default": "kept",
+    "description": "Which engine-decision cohort to scope to. `kept` (default) = events the engine forwarded as-is (routeState!=\"drop\") \u2014 the pre-PL-12 behavior. `dropped` = events stamped routeState=\"drop\" by the engine (the offload/down-tier cohort). `both` = the pre-decision union; per-row output adds kept_bytes / dropped_bytes / dropped_share_pct. Use `dropped` to verify post-deploy realised savings or to answer \"which patterns are we offloading right now\". Use `both` to compute the offload share denominator in a single call.",
+    "enum": [
+     "kept",
+     "dropped",
+     "both"
+    ],
+    "type": "string"
+   },
+   "include_chart": {
+    "default": false,
+    "description": "Set include_chart=true to embed the rendered chart inline (large; default false to avoid response truncation).",
+    "type": "boolean"
+   },
+   "limit": {
+    "default": 10,
+    "description": "Number of patterns to return. Default 10.",
+    "maximum": 50,
+    "minimum": 1,
+    "type": "number"
+   },
+   "monthly_volume_gb": {
+    "description": "What-if volume lens (forecast mode): model the environment at THIS monthly volume (decimal GB/month) instead of its measured volume. The real per-pattern shares and pattern mix are held fixed; only absolute bytes and dollars scale, by one uniform factor. Use it to project a prospect onto their own scale, or to forecast a real env after growth. Pairs with siem_lens. This is a PROJECTION: the envelope stamps volume_actual_gb vs volume_projected_gb and the scale factor, and the note points at the POC for the caller real patterns.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "offset": {
+    "default": 0,
+    "description": "Skip the first N patterns of the ranked result (for pagination). Default 0.",
+    "minimum": 0,
+    "type": "number"
+   },
+   "service": {
+    "description": "Service name to scope the result. Omit for all services.",
+    "type": "string"
+   },
+   "severity": {
+    "description": "Severity level to scope the result (e.g., `ERROR`, `CRITICAL`, `DEBUG`).",
+    "type": "string"
+   },
+   "siemScope": {
+    "description": "stack scope for the verbatim sample line on the top rows.",
+    "type": "string"
+   },
+   "siem_lens": {
+    "description": "What-if destination lens: keep the real volumes, price the $/mo columns at this destination's list rates (env-configured rates never cross destinations). Envelope stamps siem_actual vs siem_lens.",
+    "enum": [
+     "cloudwatch",
+     "datadog",
+     "splunk",
+     "elasticsearch",
+     "azure-monitor",
+     "gcp-logging",
+     "sumo",
+     "clickhouse",
+     "coralogix",
+     "elastic-serverless"
+    ],
+    "type": "string"
+   },
+   "timeRange": {
+    "default": "1h",
+    "description": "Time range to aggregate over. Default 1h.",
+    "pattern": "^\\d+[mhd]$",
+    "type": "string"
+   },
+   "verbose": {
+    "default": false,
+    "description": "When true, every card carries the full forwarder snippet inline, every CTA renders unconditionally, and the volume-trend chart shows on every top-3 card. Default: compact mode (snippet templated once at top, CTAs gated to where they earn their line, chart only on ACUTE/NEW patterns).",
+    "type": "boolean"
+   },
+   "view": {
+    "const": "summary",
+    "default": "summary",
+    "description": "Output format. Always \"summary\" \u2014 the structured JSON envelope with patterns, incidents, totals, and chained-tool action hints. Field retained for backward-compat with callers that still pass `view: \"summary\"`.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "log10x_top_patterns",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": true,
+  "properties": {
+   "actions": {
+    "default": [],
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "args": {
+       "additionalProperties": {},
+       "default": {},
+       "type": "object"
+      },
+      "reason": {
+       "type": "string"
+      },
+      "role": {
+       "enum": [
+        "required-next",
+        "recommended-next",
+        "optional-followup",
+        "alternative"
+       ],
+       "type": "string"
+      },
+      "tool": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "tool",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "data": {},
+   "generated_at": {
+    "type": "string"
+   },
+   "images": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "alt": {
+       "type": "string"
+      },
+      "data": {
+       "type": "string"
+      },
+      "mimeType": {
+       "default": "image/png",
+       "enum": [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "data"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "next_cursor": {
+    "type": "string"
+   },
+   "render_hint": {
+    "additionalProperties": false,
+    "properties": {
+     "callouts": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "chart": {
+      "enum": [
+       "sparkline",
+       "timeseries",
+       "bar",
+       "none"
+      ],
+      "type": "string"
+     },
+     "units": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "schema_epoch": {
+    "type": "string"
+   },
+   "schema_version": {
+    "const": "1.0",
+    "type": "string"
+   },
+   "summary": {
+    "additionalProperties": false,
+    "properties": {
+     "bullets": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 5,
+      "type": "array"
+     },
+     "callout": {
+      "type": "string"
+     },
+     "headline": {
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "headline"
+    ],
+    "type": "object"
+   },
+   "tool": {
+    "type": "string"
+   },
+   "truncated": {
+    "default": false,
+    "type": "boolean"
+   },
+   "view": {
+    "default": "summary",
+    "enum": [
+     "summary",
+     "markdown"
+    ],
+    "type": "string"
+   },
+   "warnings": {
+    "default": [],
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "schema_version",
+   "schema_epoch",
+   "tool",
+   "generated_at",
+   "summary"
+  ],
+  "type": "object"
+ },
+ "title": "Top patterns"
+}

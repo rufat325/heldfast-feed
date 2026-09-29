@@ -1,0 +1,406 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Search Scholar Feed's 600k+ CS/AI/ML paper corpus. Semantic (embedding) search by default, so it finds conceptually related work even when the wording differs. EVERY PARAMETER DOCUMENTS ITS OWN BEHAVIOUR AND COVERAGE LIMITS \u2014 read the ones you intend to use; this description covers only what no single parameter can tell you. RETRIEVAL LIMIT: semantic ranking favours recent, stylistically-matched papers and routinely MISSES the old high-citation anchor of a field (H2O for KV eviction, GRIT for unified embedding+generation). To reach a field's canonical work, read the top-5 abstracts for repeated baseline mentions ('we compare against X') and look that name up directly, or call get_foundational_lineage. THREE UNRELATED NOTIONS OF IMPACT, easily confused: proven citations (sort='impactful', min_citations) | a ~90-day forecast percentile that is NULL on older papers and therefore excludes them (sort='trending', impact_min) | GitHub adoption (sort='community', min_stars). YOUR LIBRARY IS MARKED INLINE on authenticated calls: each hit carries is_saved and is_read, and a hit you previously annotated carries note_text \u2014 your own earlier verdict. Read note_text INSTEAD of re-deriving a conclusion from the abstract; re-judging a paper you already ruled on is the most common way an agent wastes a research session. is_saved=false is a real measurement; on anonymous calls these keys are absent entirely, so never read a missing is_saved as false. Papers new to you are ranked exactly as before \u2014 nothing is demoted for being unseen.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "anchor_paper_id": {
+    "description": "Return papers similar to this arXiv paper ID. When set, q is ignored and results carry similarity_score. Example: '2407.15831'.",
+    "type": "string"
+   },
+   "category": {
+    "description": "Filter by arXiv category e.g. 'cs.AI', 'cs.LG'",
+    "type": "string"
+   },
+   "contribution_type": {
+    "description": "Filter by paper's contribution type",
+    "enum": [
+     "model",
+     "method",
+     "benchmark",
+     "dataset",
+     "survey",
+     "theoretical",
+     "empirical_study",
+     "system"
+    ],
+    "type": "string"
+   },
+   "cursor": {
+    "description": "Cursor from previous response's next_cursor for keyset pagination",
+    "type": "string"
+   },
+   "dataset": {
+    "description": "Filter to papers that evaluate on a specific dataset e.g. 'MMLU', 'ImageNet'",
+    "type": "string"
+   },
+   "days": {
+    "description": "Limit to papers published within N days",
+    "maximum": 3650,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "exclude_ids": {
+    "description": "arXiv IDs to exclude from results (for deduplication across chained calls)",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "fields": {
+    "description": "Comma-separated list of fields to return (e.g. 'arxiv_id,title,llm_summary,llm_novelty_score'). If omitted, returns the lean 12-field default unless verbose=true.",
+    "type": "string"
+   },
+   "github_url_exists": {
+    "description": "Filter on whether the paper has a linked GitHub URL (true = only papers with a repo). Stricter than has_code (which counts any code link).",
+    "type": "boolean"
+   },
+   "has_code": {
+    "description": "Filter to papers with a linked code release (has_code=true). Surfaces runnable/reproducible work \u2014 pair with min_stars/sort='community' to find the papers practitioners actually adopt.",
+    "type": "boolean"
+   },
+   "impact_min": {
+    "description": "Minimum impact_pct (0-100), e.g. 80 = top 20% FORECAST impact. This is a RISING-WORK filter: impact_pct is only computed for the last ~90 days, so impact_min restricts results to recent papers predicted to land well AND DROPS everything older. Use it for 'what's rising in X'. Do NOT use it to find the influential/seminal papers in a topic \u2014 that excludes the established work; use sort='impactful' instead.",
+    "maximum": 100,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "limit": {
+    "default": 20,
+    "description": "Results per page (max 50)",
+    "maximum": 50,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "method_category": {
+    "description": "Filter by method category e.g. 'reinforcement learning', 'transformer'",
+    "type": "string"
+   },
+   "method_name": {
+    "description": "Filter to papers introducing/using a specific named method e.g. 'LoRA', 'YOLO', 'DPO'. Case-insensitive substring match on the extracted method_name field.",
+    "type": "string"
+   },
+   "min_citations": {
+    "description": "Minimum real citation count. Unlike impact_min (a ~90-day FORECAST percentile), this filters on PROVEN citations and keeps established/canonical papers.",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "min_stars": {
+    "description": "Minimum GitHub stars on the paper's linked repo. A proxy for engineering adoption \u2014 surfaces work that practitioners are actually running/building on. Pair with sort='community' to rank by it. COVERAGE CAVEAT: a never-fetched repo is stored as 0, not NULL, so this filter cannot distinguish 'no adoption' from 'never measured'. It is applied as 'KNOWN to have >= N stars' \u2014 papers whose stars were never fetched are excluded rather than treated as 0-star, so the result is honest but INCOMPLETE: a genuinely popular older paper can be missing simply because nobody measured it. Coverage skews toward recently-published papers and is being backfilled. Use it to filter recent work; for established papers use min_citations instead.",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "mode": {
+    "description": "Search mode. 'semantic' (default) uses embedding similarity \u2014 finds conceptually related papers even without exact keyword matches. 'keyword' uses Postgres full-text search \u2014 faster but only matches exact terms.",
+    "enum": [
+     "keyword",
+     "semantic"
+    ],
+    "type": "string"
+   },
+   "novelty_min": {
+    "description": "Minimum novelty score (0-1). Use 0.5+ for novel papers.",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "page": {
+    "default": 1,
+    "description": "Page number",
+    "maximum": 9007199254740991,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "published_after": {
+    "description": "Only papers published on or after this date, 'YYYY-MM-DD'. Use with published_before to bound an arbitrary date window (days only gives a rolling N-day lookback).",
+    "type": "string"
+   },
+   "published_before": {
+    "description": "Only papers published on or before this date, 'YYYY-MM-DD'. Pair with published_after for an explicit window.",
+    "type": "string"
+   },
+   "q": {
+    "description": "Search query keywords. REQUIRED unless (a) anchor_paper_id or scope_to_citations_of is set (anchor mode ignores q and returns papers similar to the anchor), or (b) sort is one of 'trending' / 'recent' / 'impactful' \u2014 the query-less 'browse the frontier' feed, which is capped to the FIRST 200 RESULTS (paging past offset 200 is a 422; narrow with q= or filters instead). Any other q-less call is a 422, INCLUDING a q-less call with only filters (category/days/...) and a q-less sort='community'. Filters alone do NOT substitute for q \u2014 pair them with a browse sort (e.g. category='cs.AI' + sort='recent') or pass q. For 'what's hot in AI right now', either sort='trending' alone or a broad q plus sort='trending' works.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "scope_to_citations_of": {
+    "description": "Restrict search to this paper's citation graph, ranked by relevance to q. Pass the arXiv ID of the paper whose citations you want to search within.",
+    "type": "string"
+   },
+   "sort": {
+    "description": "Result ranking \u2014 a relevance\u2194impact dial plus time-based and adoption orders. 'relevance' (default) = best topical match. 'balanced' = relevant AND well-cited. 'impactful' = the most-cited (proven-influential) papers among those relevant to the query \u2014 use this for 'the important/seminal papers on topic X'. 'trending' = rising/FORECAST impact (impact_pct, last ~90 days) \u2014 use for 'what's hot/new in X', NOT for established work. 'recent' = newest first. 'community' = GitHub adoption (stars + star-velocity) \u2014 surfaces the papers practitioners are actually running/building on, independent of citations. COVERAGE CAVEAT (the analogue of impact_min's ~90-day hole): an unfetched repo stores 0 rather than NULL, and coverage skews heavily toward recently-published papers, so most older papers with a repo currently rank as 0-star and sink \u2014 'community' reflects measured adoption, not corpus-wide adoption. Proven impact ('impactful'/'balanced') ranks by real citations; 'trending' is a model prediction; 'community' is real-world engineering traction within its window. Pair with get_foundational_lineage for a topic's canonical roots.",
+    "enum": [
+     "relevance",
+     "balanced",
+     "impactful",
+     "trending",
+     "recent",
+     "community"
+    ],
+    "type": "string"
+   },
+   "task": {
+    "description": "Filter by task e.g. 'image classification', 'question answering' (partial match)",
+    "type": "string"
+   },
+   "task_category": {
+    "description": "Filter by broad research area",
+    "enum": [
+     "NLP",
+     "Computer Vision",
+     "RL",
+     "Audio/Speech",
+     "Graphs",
+     "Multimodal",
+     "Systems",
+     "Theory",
+     "Security",
+     "Other"
+    ],
+    "type": "string"
+   },
+   "verbose": {
+    "description": "If true, returns the full 28-field paper shape (method/task/dataset extraction, application_domain, baselines, etc.). Default false returns the lean 12-field set. Ignored when `fields` is provided.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "name": "search_papers",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": {},
+  "properties": {
+   "direction": {
+    "description": "Citation direction (get_citations: citing | cited_by).",
+    "type": "string"
+   },
+   "limit": {
+    "type": "number"
+   },
+   "mode": {
+    "description": "Search mode actually applied.",
+    "type": "string"
+   },
+   "next_cursor": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Keyset cursor for the next page, or null when exhausted."
+   },
+   "not_found": {
+    "description": "Requested IDs that had no match.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "note": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "page": {
+    "type": "number"
+   },
+   "papers": {
+    "description": "Matched / returned papers.",
+    "items": {
+     "additionalProperties": {},
+     "description": "A paper record. Verbose calls add extraction fields (method_name, datasets, baselines, ...).",
+     "properties": {
+      "arxiv_id": {
+       "type": "string"
+      },
+      "arxiv_url": {
+       "type": "string"
+      },
+      "authors": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "categories": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "citation_count": {
+       "type": "number"
+      },
+      "collections": {
+       "description": "Collections this saved paper is filed under, e.g. 'AgentOPA/G4' (list_library only).",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "github_stars": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "github_url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "has_code": {
+       "type": "boolean"
+      },
+      "impact_pct": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "institution_tags": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "is_read": {
+       "type": "boolean"
+      },
+      "is_saved": {
+       "type": "boolean"
+      },
+      "llm_novelty_score": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "llm_significance": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "llm_summary": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "n_authors": {
+       "type": "number"
+      },
+      "note_text": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "The user's own recorded verdict on this paper, when one exists. A hit carrying this was ALREADY judged \u2014 read it instead of re-deriving a verdict from the abstract."
+      },
+      "pdf_url": {
+       "type": "string"
+      },
+      "primary_category": {
+       "type": "string"
+      },
+      "published_date": {
+       "type": "string"
+      },
+      "rank_score": {
+       "type": "number"
+      },
+      "similarity": {
+       "type": "number"
+      },
+      "title": {
+       "type": "string"
+      },
+      "venue_name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "year": {
+       "type": "number"
+      }
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "sort": {
+    "description": "Search sort order actually applied.",
+    "type": "string"
+   },
+   "topic": {
+    "type": "string"
+   },
+   "total": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Total results available for the query. null when the count was skipped (query-less browse, or the count query timed out)."
+   }
+  },
+  "type": "object"
+ },
+ "title": "Search Papers"
+}

@@ -1,0 +1,152 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Browse leads"
+ },
+ "description": "Browse leads \u2014 rows for a shape or a saved list, or (`summary=True`) its counts, facets and price.\n\n    Two ways to say which records, one contract underneath:\n      * a saved list \u2014 `list_id`, the 8-char id in `#browse?list=<id>`. Its states,\n        filters, sort and inactive-or-holding toggle are read from the list;\n        pass nothing else about the shape.\n      * an inline shape \u2014 `filters` plus `state` (one state) or `states`\n        (several); omit both for every live state (CO, CT, FL, NY, TX, VA).\n\n    `summary=True` returns the summary contract instead of rows \u2014 the same\n    numbers the buying surface shows, from the same code path: `matching`, `sellable`, `verified_one`, `verified_both`, `no_channel`, `unnamed`,\n    `facets`, `prices`, `quote` (present when `lane` or `cap` is given),\n    `exact`, `computed_at`, `quote_valid_until`, `per_state`. **Only `sellable`\n    \u2014 a matching record whose filing names a person \u2014 is ever billed or\n    delivered; never quote `matching` as a price.** name and address $0.25 per record \u00b7 plus one verified phone or email $0.50 \u00b7 plus both $0.70 (price rule v1; live prices always come from the summary call's `prices` block). Lanes: `all` / `best` / `contact`\n    (`all` = every sellable record at the name-and-address price; `best` =\n    each record at its own grade, verified first; `contact` = only records\n    with a verified phone or email). Cap: `{\"type\": \"count|budget\", \"value\"}`\n    \u2014 records for count, cents for budget. To buy, hand the same list / shape,\n    lane and cap to `create_checkout`.\n\n    Speak the canonical vocabulary \u2014 it is the same across every state:\n    `status` and `entity_type` take canonical values (`\"active\"`, `\"LLC\"`),\n    so `entity_type = \"LLC\"` matches Colorado's raw `DLLC`, Florida's `FLAL`,\n    and New York's spelled-out form alike; state-specific raw codes live\n    behind `status_raw` / `entity_type_raw` if you ever need them.\n    \"Contacts\" is the buyer's word for the records themselves \u2014 every record\n    names a person, so \"contacts for new salons\" needs no extra filter.\n    \"Decision-makers\" = filter\n    `contact_relevance_tier in [\"Decision Maker\", \"Likely Decision Maker\"]` \u2014\n    our scored is-this-the-right-person opinion, available in EVERY state;\n    apply it when the buyer asks for decision-makers, never silently.\n    (`role_is_decision_maker: true` is the stricter, title-attested variant:\n    it means the state's own filing lists an authority title. Several states \u2014\n    Colorado and New York among them \u2014 publish no officer titles at all, so\n    filtering on it there returns zero and silently drops real decision-makers.\n    Layer it on top only when you specifically want title-attested records.)\n    When a filter touches a (field, value) the requested state never populates\n    by design (e.g. `entity_type=\"SOLE_PROP\"` in TX), the payload additionally\n    carries `zero_reasons` \u2014 machine-readable notes saying WHY the count is\n    zero and the nearest alternative; the key is absent otherwise. A\n    `formation_date` window that holds nothing explains itself the same way\n    on a summary: whether it ends before our earliest matching record, and\n    what the same filters match without the date limit.\n    Add `has_phone` / `has_email` for reachable ones. Worked example \u2014 active\n    LLC decision-makers with a phone, across all states, excluding two sectors:\n\n        browse_leads(filters=[\n            {\"field\": \"status\", \"op\": \"eq\", \"value\": \"active\"},\n            {\"field\": \"entity_type\", \"op\": \"eq\", \"value\": \"LLC\"},\n            {\"field\": \"contact_relevance_tier\", \"op\": \"in\",\n             \"value\": [\"Decision Maker\", \"Likely Decision Maker\"]},\n            {\"field\": \"has_phone\", \"op\": \"eq\", \"value\": true},\n            {\"field\": \"industry_sector\", \"op\": \"not_in\",\n             \"value\": [\"Real Estate\", \"Finance\"]},\n        ])\n\n    `filing_kind` says what the state filing did. The default is Just started\n    (`formation`) \u2014 a business that did not exist before its filing \u2014 so a plain\n    call never returns an existing business that the state gave a new document\n    number. Widen with `include_existing=True` (every existing business with a\n    new filing at once) or by name: `filing_kind in [\"registration\", \"conversion\",\n    \"name_change\", \"reinstatement\", \"address_change\"]` returns existing businesses\n    the state published a fresh event about; `lead_class` on every row carries\n    the answer in the buyer's words \u2014 `Just started`, `New to <state>` (the\n    record's own state), `Established business, new entity`, `New trade name`,\n    `Back in business`, `Moved`. Never mix the two in one order \u2014 they are priced and\n    sold as separate lists. Closed businesses (`dissolution`) are excluded unless\n    named or `include_non_operating=True`. Every row also carries `last_event`\n    and `last_event_date` \u2014 the most recent thing the state published and the day\n    it published it.\n\n    Same owner: `cluster_size >= 2` is every business whose owner filed more\n    than one, so one call reaches the set; `cluster_code` is the record's place\n    in that group (`XF-O` / `XP-O` / `XM-O` an operating business, the `-V` codes\n    a holding company built around one). Blank on a single, so a filter on either\n    never matches a business with no related filing. `new_business_tier`\n    (`Confirmed new` \u2026 `Established`, newest first) is how sure we are the\n    business is genuinely new \u2014 filter on it, never sort by it; an empty result on\n    a fresh cohort means the score has not reached it yet.\n\n    Filter grammar (rendered from the schema \u2014 `list_filterable_fields(section=\"grammar\")` is the full contract): a leaf is `{\"field\", \"op\", \"value\"}`; the top-level filters list is an implicit `and` group; group nodes `{\"op\": \"and\", \"filters\": [...]}` and `{\"op\": \"or\", \"filters\": [...]}` nest one or more children, `{\"op\": \"not\", \"filters\": [<one leaf or group>]}` negates exactly one. Operators by field type \u2014 text: eq, neq, in, not_in, contains, does_not_contain, exists, missing; number: eq, neq, gt, gte, lt, lte, between, in, not_in, exists, missing; date: eq, neq, gt, gte, lt, lte, between, in, not_in, exists, missing; boolean: eq, neq; geo: within. Narrower pseudo-fields \u2014 `run_manifest_id` eq; `cluster_ref` eq; `missing_stage` eq; `created_at` gt, gte, lt, lte, between; `geo_polygon` within; `geo_radius` within; `has_phone_or_email` eq; `filing_kind` eq, neq, in, not_in; `new_business_tier` eq, neq, in, not_in. `neq`, `not_in`, `does_not_contain`, `not` keep rows where the field has no value. `exists` / `missing` take no value; `in` / `not_in` take a non-empty list; `between` takes `[start, end]`, both required. A (field, op) pair outside its type's row is a 422 naming the row, never a 500. Records appear here the morning after the state posts them \u2014 speed is measured from publication, never from filing.\n\n    Args:\n        state: Two-letter state code (e.g. `FL`, `CO`) for one state.\n        states: Several state codes (rows or summary). Omit both `state` and\n            `states` for every live state.\n        list_id: A saved list id. Mutually exclusive with `state` / `states` /\n            `filters` \u2014 the list already carries them.\n        filters: Filter clauses in the grammar above (leaves and `and` / `or` /\n            `not` groups). Use `list_filterable_fields` to discover the\n            85 fields, each one's enforced operators and allowed values.\n        page: 1-based page number.\n        page_size: Rows per page (1\u2013200 with a key; capped at 25 on the free\n            tier, default 50).\n        sort: `[{\"field\", \"dir\"}]`, one or more keys over any of the 76 sortable fields (`asc` / `desc`); a bare field name still works with `sort_dir`. Tier fields sort by rank (reachability_tier On Fire > Very Hot > Hot > Warm > Cold; contact_relevance_tier Decision Maker > Likely Decision Maker > Probable Contact > Uncertain Contact > Unlikely Decision Maker; contact_confidence_tier Verified Contact > Likely Contact > Possible Contact > Uncertain Contact; industry_confidence_tier confirmed > likely > possible > unknown; new_business_tier Confirmed new > Likely new > Uncertain > Likely established > Established); lead_ref ASC is always appended (total order). An unknown field or direction is a 422 listing the sortable fields \u2014 never a silent fallback. Default `reachability_score` descending.\n        sort_dir: `asc` or `desc` (default `desc`) \u2014 used when `sort` is a bare field name.\n        include_non_operating: Include inactive or holding businesses\n            (default False \u2014 only the records we sell). A saved list's own\n            toggle wins when `list_id` is given.\n        include_existing: Include existing businesses with a new filing \u2014\n            opening a location here, formed in another state, back in\n            business, a new entity, moved, a new trade name (default False \u2014\n            Just started only). Naming a `filing_kind` implies it.\n        summary: Return the summary contract (counts, facets, prices, quote)\n            instead of rows. Implied when `lane` or `cap` is given.\n        lane: `all` / `best` / `contact` \u2014 asks the summary for a `quote`.\n        cap: `{\"type\": \"count|budget\", \"value\": <int>}` \u2014 the dial the quote is\n            solved against (records for count, cents for budget).\n\n    Returns:\n        Rows: `{\"items\": [...], \"total\", \"page\", \"page_size\", \"pages\", \"access_level\",\n        \"_meta\"}`. `_meta` is the provenance block every read carries:\n        `schema_version` (the read-contract version \u2014 pin migrations to it),\n        `freshness.data_refreshed_at` (when this state's data was last worked),\n        `source` (public registry + derived-field attribution), `score_versions`,\n        and `access_level` (preview = masked contacts, full = keyed). Keyless\n        callers see `contact_name`, `email_primary`, `phone_primary` masked and may not filter the summary on them (422).\n        Summary: the contract described above.\n    ",
+ "inputSchema": {
+  "properties": {
+   "cap": {
+    "anyOf": [
+     {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Cap"
+   },
+   "filters": {
+    "anyOf": [
+     {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Filters"
+   },
+   "include_existing": {
+    "default": false,
+    "title": "Include Existing",
+    "type": "boolean"
+   },
+   "include_non_operating": {
+    "default": false,
+    "title": "Include Non Operating",
+    "type": "boolean"
+   },
+   "lane": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Lane"
+   },
+   "list_id": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "List Id"
+   },
+   "page": {
+    "default": 1,
+    "title": "Page",
+    "type": "integer"
+   },
+   "page_size": {
+    "default": 50,
+    "title": "Page Size",
+    "type": "integer"
+   },
+   "sort": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "items": {
+       "additionalProperties": true,
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Sort"
+   },
+   "sort_dir": {
+    "default": "desc",
+    "title": "Sort Dir",
+    "type": "string"
+   },
+   "state": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "State"
+   },
+   "states": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "States"
+   },
+   "summary": {
+    "default": false,
+    "title": "Summary",
+    "type": "boolean"
+   }
+  },
+  "title": "browse_leadsArguments",
+  "type": "object"
+ },
+ "name": "browse_leads",
+ "outputSchema": {
+  "additionalProperties": true,
+  "title": "browse_leadsDictOutput",
+  "type": "object"
+ },
+ "title": "Browse leads"
+}

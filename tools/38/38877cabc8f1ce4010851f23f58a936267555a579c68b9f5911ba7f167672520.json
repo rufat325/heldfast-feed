@@ -1,0 +1,436 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Get current weather observations (METARs) for named airports, or survey every reporting station inside a geographic area. Returns decoded fields \u2014 wind direction/speed/gusts, visibility, ceiling with its kind (measured, or indefinite for vertical visibility into an obscuration), present weather, temperature, dewpoint, altimeter, cloud layers \u2014 plus the computed flight category (VFR/MVFR/IFR/LIFR) and the raw METAR string. Requires either station_ids (1\u201310 ICAO IDs, e.g., KSEA, KJFK, K0S9) or bbox (area survey) \u2014 not both. station_ids returns every observation inside the hours window; bbox returns the latest observation per station in the box, with flight_category keeping only the stations in the categories named (e.g., IFR and LIFR) and limit bounding how many stations come back. Use aviation_find_stations to resolve or verify an ICAO ID, or to discover nearby stations.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "bbox": {
+    "description": "Geographic bounding box for an area observation survey.",
+    "properties": {
+     "maxLat": {
+      "description": "Northern boundary latitude in decimal degrees.",
+      "maximum": 90,
+      "minimum": -90,
+      "type": "number"
+     },
+     "maxLon": {
+      "description": "Eastern boundary longitude in decimal degrees.",
+      "maximum": 180,
+      "minimum": -180,
+      "type": "number"
+     },
+     "minLat": {
+      "description": "Southern boundary latitude in decimal degrees.",
+      "maximum": 90,
+      "minimum": -90,
+      "type": "number"
+     },
+     "minLon": {
+      "description": "Western boundary longitude in decimal degrees.",
+      "maximum": 180,
+      "minimum": -180,
+      "type": "number"
+     }
+    },
+    "required": [
+     "minLat",
+     "minLon",
+     "maxLat",
+     "maxLon"
+    ],
+    "type": "object"
+   },
+   "flight_category": {
+    "description": "Return only the stations whose flight category is one of these (e.g., [\"IFR\", \"LIFR\"] to find where conditions are poor). Applied in the tool after the draw is reduced to the latest observation per station and before limit, so it changes which stations come back, not what AWC draws or the upstream row cap. A station AWC could not rate (flight_category \"unknown\") never matches. Belongs to the bbox mode; supplying it alongside station_ids is rejected, since each named station already reports its own category. Optional.",
+    "items": {
+     "description": "A flight category: VFR, MVFR, IFR, or LIFR.",
+     "enum": [
+      "VFR",
+      "MVFR",
+      "IFR",
+      "LIFR"
+     ],
+     "type": "string"
+    },
+    "minItems": 1,
+    "type": "array"
+   },
+   "hours": {
+    "default": 1,
+    "description": "Lookback window in hours (1\u201312), not a row limit. With station_ids every observation inside the window is returned, so a station reporting more often than hourly yields more than one row per hour: at the default of 1, half-hourly stations return two observations and SPECI-issuing stations can return more, so budget rows by the station reporting interval, never one per station. With bbox the result is reduced to the latest observation per station, but the window still shapes the draw the upstream row cap applies to \u2014 a wide window spends that cap on repeat readings from busy stations instead of on more stations, so lower it before narrowing the box.",
+    "maximum": 12,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "limit": {
+    "description": "Maximum stations to return, applied after the draw is reduced to the latest observation per station, after any flight_category filter, and ordered by station ID ascending \u2014 so the same query with the same limit returns the same stations. It bounds the response without changing the area searched, which a smaller bbox would, and it keeps an alphabetical slice rather than a region or a condition. Distinct from the 400-row upstream cap: a limited result examined every station it counted and withheld some, while a capped one never drew the rest. Belongs to the bbox mode; supplying it alongside station_ids is rejected, since that mode already names the set. Omit to return every station in the box. Optional.",
+    "maximum": 400,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "station_ids": {
+    "description": "ICAO station IDs to query. 1\u201310 stations per call, and every observation inside the hours window is returned for each. Supplying it alongside bbox is rejected \u2014 use bbox to ask about an area rather than a named set.",
+    "items": {
+     "description": "ICAO station ID: 4 uppercase letters or digits (e.g., KSEA, KJFK, K0S9).",
+     "pattern": "^[A-Z0-9]{4}$",
+     "type": "string"
+    },
+    "maxItems": 10,
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "name": "aviation_get_metar",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "observations"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cap": {
+    "description": "The upstream row maximum that was applied to the draw. Present only on a truncated result.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `no_stations_found`: No station returned METAR data \u2014 none of the requested IDs, or no station inside the bounding box. `missing_location`: Neither station_ids nor bbox was provided. `conflicting_location`: Both station_ids and bbox were provided. `invalid_bbox`: The bounding box is inverted \u2014 minLat > maxLat or minLon > maxLon. `conflicting_limit`: limit was provided together with station_ids, where the caller has already named the set. `conflicting_flight_category`: flight_category was provided together with station_ids, where the caller has already named the set. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "no_stations_found",
+         "missing_location",
+         "conflicting_location",
+         "invalid_bbox",
+         "conflicting_limit",
+         "conflicting_flight_category"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "limited": {
+    "description": "True when the requested limit withheld stations that matched \u2014 the caller asked to see fewer of them. False affirms the limit did not bite, so every station drawn is here. Present only when a bbox survey supplied a limit. It never states anything about the upstream cap: a limited result examined every station it counted, while a truncated one never drew the rest.",
+    "type": "boolean"
+   },
+   "matched": {
+    "description": "Stations the draw held before the limit selected from them \u2014 after the flight_category filter, where one was supplied. Present only on a limited result. Where the result is also truncated this counts the capped draw and not the box \u2014 the observations the cap dropped were never examined, so no count can include them.",
+    "type": "number"
+   },
+   "missing": {
+    "description": "Requested station IDs absent from the result. Absent when none are missing.",
+    "items": {
+     "description": "A requested ICAO station ID that produced no observation.",
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "notice": {
+    "description": "Guidance for whichever disclosures fired, in this order: the levers that narrow a truncated draw; what the flight_category filter kept of the stations surveyed, or that it emptied the result; what a requested limit withheld; and \u2014 on a survey of more than 40 stations from a call that set no limit \u2014 that limit bounds the response but keeps an alphabetical slice, not a region. Or, on a station_ids lookup, the station IDs that returned nothing. The survey statements share one notice and the text keeps them apart; the reconciliation cannot join them, since only bbox reaches the row cap or takes a filter or a limit, and only station_ids reconciles a request.",
+    "type": "string"
+   },
+   "observations": {
+    "description": "Weather observations. With station_ids, one per station/time pair \u2014 multiple entries per station when the hours window holds more than one observation. With bbox, one per station: the latest observation inside that window.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A single weather observation from one station at one time.",
+     "properties": {
+      "altimeter_inhg": {
+       "description": "Altimeter setting in inches of mercury, or null when the observation carried no altimeter group (common at stations reporting sea-level pressure only).",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "ceiling_ft": {
+       "description": "Ceiling in feet AGL \u2014 the lowest broken, overcast, or obscuration layer. Per FAA AIM 7-1-29 the ceiling is the lowest broken or overcast layer, or the vertical visibility into an obscuration; few and scattered layers are never ceilings. Null in two cases that are not the same: the observation reported no such layer, or it reported an obscuration whose vertical visibility the station could not determine (a VV/// group), where the ceiling exists and only its height is missing. A sky_condition of OVX marks the second.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "ceiling_type": {
+       "anyOf": [
+        {
+         "enum": [
+          "measured",
+          "indefinite"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "How the ceiling height was determined: \"measured\" for a broken or overcast layer base, \"indefinite\" for vertical visibility into an obscuration (an OVX layer). Null exactly when ceiling_ft is null."
+      },
+      "clouds": {
+       "description": "Cloud layers from lowest to highest, as AWC decoded them \u2014 at most four, so a fifth or higher reported layer is left out with no marker and raw_metar is the complete source. Empty whenever the observation published no layer heights, which covers a clear sky, an obscuration with no determinable height, and an observation that reported no sky condition at all; sky_condition distinguishes them. An empty array is not a clear sky on its own.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A reported cloud layer.",
+        "properties": {
+         "base_ft": {
+          "description": "Cloud base altitude in feet AGL.",
+          "type": "number"
+         },
+         "cover": {
+          "description": "Sky cover code: FEW, SCT, BKN, OVC, SKC, CLR, CAVOK, or OVX. OVX is the decoded form of a VVhhh group \u2014 the sky is obscured and the base is the vertical visibility into it, not a cloud bottom.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "cover",
+         "base_ft"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "dewpoint_c": {
+       "description": "Dewpoint in degrees Celsius. 0 is a real reading; null means the observation carried no dewpoint, so it is unknown.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "elevation_ft": {
+       "description": "Station elevation in feet MSL.",
+       "type": "number"
+      },
+      "flight_category": {
+       "description": "Flight category: VFR, MVFR, IFR, or LIFR based on ceiling and visibility.",
+       "type": "string"
+      },
+      "lat": {
+       "description": "Station latitude in decimal degrees.",
+       "type": "number"
+      },
+      "lon": {
+       "description": "Station longitude in decimal degrees.",
+       "type": "number"
+      },
+      "metar_type": {
+       "description": "METAR (routine) or SPECI (special observation triggered by significant weather change).",
+       "type": "string"
+      },
+      "name": {
+       "description": "Human-readable station or airport name.",
+       "type": "string"
+      },
+      "observed_at": {
+       "description": "Observation time in ISO 8601 format (UTC).",
+       "type": "string"
+      },
+      "present_weather": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "decoded": {
+           "description": "Plain-English reading of each group, joined with \"; \" (e.g., \"fog\", \"light rain showers; mist\"). A group the decoder does not recognize is carried through as its own raw token rather than half-translated, so compare against raw when a reading still looks coded.",
+           "type": "string"
+          },
+          "raw": {
+           "description": "Weather groups exactly as encoded, space-delimited (e.g., \"FG\", \"-SHRA\", \"VCTS -RA\").",
+           "type": "string"
+          }
+         },
+         "required": [
+          "raw",
+          "decoded"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Present weather at the station, or null when the observation carried no weather group (a dry, unobscured day)."
+      },
+      "raw_metar": {
+       "description": "Original encoded METAR string (e.g., \"KSEA 041453Z 18006KT 10SM FEW035 09/03 A2991\").",
+       "type": "string"
+      },
+      "sky_condition": {
+       "description": "The sky condition the observation stated when it published no layer heights: CLR, SKC, or CAVOK for a clear or insignificant-cloud report, OVX for an obscuration whose layer carried no height (a VV/// group, and the opposite of clear). Null when clouds carries layers \u2014 those are the statement \u2014 and also when the observation carried no sky-condition group at all. An empty clouds array beside a null here is an unreported sky, never a clear one.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "station_id": {
+       "description": "ICAO station identifier, 4 uppercase letters or digits (e.g., KSEA, K0S9).",
+       "type": "string"
+      },
+      "temp_c": {
+       "description": "Temperature in degrees Celsius. 0 is a real reading; null means the observation carried no temperature, so it is unknown.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "visibility_sm": {
+       "description": "Prevailing visibility in statute miles (e.g., \"10+\", \"3\", \"1/2\"), or the string \"unknown\" when the observation carried no visibility group. \"unknown\" is not a measurement and carries no unit.",
+       "type": "string"
+      },
+      "wind": {
+       "additionalProperties": false,
+       "description": "Wind conditions at the station.",
+       "properties": {
+        "direction_deg": {
+         "description": "Wind direction in degrees true. Null when the observation reported a variable wind (VRB), and also when it carried no wind group at all \u2014 speed_kt is a number in the first case and null in the second.",
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "gust_kt": {
+         "description": "Gust speed in knots, or null if no gusts reported.",
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "speed_kt": {
+         "description": "Wind speed in knots. 0 is calm (a reported 00000KT); null means the observation carried no wind group, so the speed is unknown.",
+         "type": [
+          "number",
+          "null"
+         ]
+        }
+       },
+       "required": [
+        "direction_deg",
+        "speed_kt",
+        "gust_kt"
+       ],
+       "type": "object"
+      }
+     },
+     "required": [
+      "station_id",
+      "name",
+      "lat",
+      "lon",
+      "elevation_ft",
+      "flight_category",
+      "metar_type",
+      "observed_at",
+      "wind",
+      "visibility_sm",
+      "ceiling_ft",
+      "ceiling_type",
+      "clouds",
+      "sky_condition",
+      "present_weather",
+      "temp_c",
+      "dewpoint_c",
+      "altimeter_inhg",
+      "raw_metar"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "partial": {
+    "description": "True when a requested station produced no observation. False affirms the result covers every requested station, so full coverage is distinguishable from a short batch rather than being inferred from the count. Present only on a station_ids lookup.",
+    "type": "boolean"
+   },
+   "requested": {
+    "description": "Station IDs this call asked for, in the order given. Present only on a station_ids lookup \u2014 a bbox survey asks for an area, not a list.",
+    "items": {
+     "description": "An ICAO station ID as requested.",
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "returned": {
+    "description": "Distinct station IDs that produced at least one observation. Counted per station, not per row \u2014 with hours > 1 a station reporting six times still appears once. Present only on a station_ids lookup.",
+    "items": {
+     "description": "An ICAO station ID present in the result.",
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "shown": {
+    "description": "Stations in this result, counted after the reduction to one observation per station, after any flight_category filter, and after any limit. Present only on a bbox survey.",
+    "type": "number"
+   },
+   "surveyed": {
+    "description": "Stations the survey reached \u2014 one per station, the latest observation of each \u2014 before the flight_category filter selected from them. Present only when a bbox survey supplied flight_category; the count after the filter is shown, or matched where a limit then withheld stations. Where the result is also truncated this counts the capped draw and not the box.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when the upstream draw hit the AWC row cap, so stations inside the box are missing from this result. False says the draw did not reach that cap, which a count alone cannot establish \u2014 the draw is reduced to one row per station, so the returned count sits far below the cap either way. It is not a completeness claim: AWC also thins a dense box by station priority, independently of the cap and with nothing in the response to mark it, so re-run over smaller quadrants and union the results when the box must be complete. Present only on a bbox survey.",
+    "type": "boolean"
+   },
+   "upstreamRows": {
+    "description": "Observations AWC returned before the reduction to one row per station. Present only on a truncated draw the reduction then narrowed, where the station count sits below the cap and so cannot reveal the truncation on its own.",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Get METAR Weather Observations"
+}

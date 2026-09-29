@@ -1,0 +1,235 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Search National Flood Insurance Program (NFIP) claims data by state, county, ZIP code, and year range. Returns the matching claim count and claim records \u2014 amounts paid on building and contents, damage estimates, flood zones, cause and occupancy codes, and loss dates \u2014 newest loss first. state is required \u2014 the full NFIP dataset is 2.7 million rows; unfiltered access is prohibited. Page the inline claims with limit and offset; a page holds at most 100,000 characters of claims. When DataCanvas is enabled (CANVAS_PROVIDER_TYPE=duckdb) and the match exceeds that inline budget, a call at offset 0 stages the match (up to 50,000 claims) on a canvas: inspect the staged table with fema_dataframe_describe, then aggregate it with SQL via fema_dataframe_query.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "canvas_id": {
+    "description": "Optional canvas ID from a prior call, to stage this match as another table on that canvas. Used only when the match is staged; omit it to stage on a fresh canvas. Pass the returned canvas_id to fema_dataframe_describe for the table columns, then to fema_dataframe_query for SQL.",
+    "pattern": "^[A-Za-z0-9_-]{10}$",
+    "type": "string"
+   },
+   "county_code": {
+    "description": "County code to narrow results within the state. Accepts the full 5-digit state+county FIPS (e.g., 48201 for Harris County TX) or the 3-digit county portion (e.g., 201) when state is provided \u2014 the server prepends the state FIPS automatically.",
+    "type": "string"
+   },
+   "limit": {
+    "default": 1000,
+    "description": "Maximum claims to return inline (1\u201310000, default 1000). A page also stops at 100,000 characters of claims (roughly 330 claims); when either bound leaves matching claims out, the notice names the offset to continue from. When DataCanvas is enabled and the match exceeds that character budget, a call at offset 0 stages the match on a canvas regardless of this value.",
+    "maximum": 10000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "offset": {
+    "default": 0,
+    "description": "Pagination offset into the matching claims, ordered newest date of loss first (default 0). Use with limit to page through a match. Only a call at offset 0 stages a match on a canvas; a later offset returns just its inline page. After a spill (spilled=true), read rows past the inline claims from the canvas table with fema_dataframe_query.",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "state": {
+    "description": "Two-letter US state code (required). NFIP dataset is 2.7M rows \u2014 state filter is mandatory.",
+    "maxLength": 2,
+    "minLength": 2,
+    "type": "string"
+   },
+   "year_from": {
+    "description": "Start year of loss, inclusive (e.g., 2020).",
+    "maximum": 2100,
+    "minimum": 1970,
+    "type": "integer"
+   },
+   "year_to": {
+    "description": "End year of loss, inclusive (e.g., 2023).",
+    "maximum": 2100,
+    "minimum": 1970,
+    "type": "integer"
+   },
+   "zip_code": {
+    "description": "ZIP code to narrow results to a specific area (5-digit, e.g., 77002).",
+    "pattern": "^\\d{5}$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "state"
+  ],
+  "type": "object"
+ },
+ "name": "fema_search_nfip",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "claims",
+     "total_count",
+     "returned_count",
+     "spilled"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "canvas_id": {
+    "description": "Canvas ID for the staged match. Pass to fema_dataframe_describe and fema_dataframe_query. Present only when spilled=true.",
+    "type": "string"
+   },
+   "canvas_table": {
+    "description": "DuckDB table on the canvas holding the staged claims. List its columns with fema_dataframe_describe, then reference it in fema_dataframe_query FROM clauses. Present only when spilled=true.",
+    "type": "string"
+   },
+   "claims": {
+    "description": "Claims from offset onward, newest date of loss first, bounded by limit and 100,000 characters of claims. When spilled=true, canvas_table holds the staged match.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A single NFIP flood insurance claim record.",
+     "properties": {
+      "amount_paid_building": {
+       "description": "NFIP claim payment for the building structure in USD; 0 when the claim paid nothing on the building. Absent when not recorded.",
+       "type": "number"
+      },
+      "amount_paid_contents": {
+       "description": "NFIP claim payment for contents (personal property) in USD; 0 when the claim paid nothing on contents. Absent when not recorded.",
+       "type": "number"
+      },
+      "building_damage_amount": {
+       "description": "Estimated total building damage in USD (may exceed paid amount). Absent when not assessed.",
+       "type": "number"
+      },
+      "cause_of_damage": {
+       "description": "OpenFEMA cause-of-damage code, as published: 0 other causes; 1 tidal water overflow; 2 stream, river, or lake overflow; 3 alluvial fan overflow; 4 accumulation of rainfall or snowmelt; 7 erosion-demolition; 8 erosion-removal; 9 earth movement, landslide, land subsidence, sinkholes, etc.; A closed basin lake; B expedited claim handling without site inspection; C expedited claim handling follow-up site inspection; D expedited claim handling by the Adjusting Process Pilot Program (remote adjustment). Other values pass through unchanged. Absent when not recorded.",
+       "type": "string"
+      },
+      "contents_damage_amount": {
+       "description": "Estimated total contents damage in USD (may exceed paid amount). Absent when not assessed.",
+       "type": "number"
+      },
+      "county_code": {
+       "description": "5-digit state+county FIPS code (e.g., 48201 for Harris County TX). Absent when not recorded.",
+       "type": "string"
+      },
+      "date_of_loss": {
+       "description": "ISO 8601 date the flood loss occurred. Absent when not recorded.",
+       "type": "string"
+      },
+      "occupancy_type": {
+       "description": "NFIP occupancy type code, as published. Legacy codes: 1 single-family residence; 2 residential building with 2 to 4 units; 3 residential building with more than 4 units; 4 non-residential building; 6 non-residential business. Risk Rating 2.0 codes: 11 single-family residential building (except a mobile home or a single unit within a multi-unit building); 12 residential non-condo building with 2 to 4 units, insuring all units; 13 residential non-condo building with 5 or more units, insuring all units; 14 residential mobile or manufactured home; 15 residential condo association building; 16 single residential unit within a multi-unit building; 17 non-residential mobile or manufactured home; 18 non-residential building; 19 non-residential unit within a multi-unit building. Other values pass through unchanged. Absent when not recorded.",
+       "type": "number"
+      },
+      "rated_flood_zone": {
+       "description": "FEMA flood zone designation at the property (e.g., AE, X, VE). Absent when not recorded.",
+       "type": "string"
+      },
+      "state": {
+       "description": "Two-letter state code. Absent when not in the record.",
+       "type": "string"
+      },
+      "year_of_loss": {
+       "description": "Calendar year the flood loss occurred. Absent when not recorded.",
+       "type": "number"
+      },
+      "zip_code": {
+       "description": "5-digit ZIP code of the insured property. Absent when not recorded.",
+       "type": "string"
+      }
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_state`: The state parameter is not a valid 2-letter US state/territory code. `no_results`: Query returned zero matching NFIP claims. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_state",
+         "no_results"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Paging and canvas guidance: the offset to continue from when claims were left out, the last valid offset when offset is past the end, or the canvas table and dataframe tools after a spill.",
+    "type": "string"
+   },
+   "returned_count": {
+    "description": "Number of claim records in claims.",
+    "type": "number"
+   },
+   "spilled": {
+    "description": "True when the match exceeded the inline budget and was staged on DataCanvas: call fema_dataframe_describe, then fema_dataframe_query, with canvas_id. False when nothing was staged.",
+    "type": "boolean"
+   },
+   "staged_count": {
+    "description": "Claims staged on canvas_table: the whole match, or its first 50,000 when truncated=true. Present only when spilled=true.",
+    "type": "number"
+   },
+   "total_count": {
+    "description": "Claims matching the filters, as counted by OpenFEMA \u2014 before offset, limit, and the canvas row cap.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when the 50,000-row canvas cap was reached: canvas_table holds staged_count of the total_count matching claims. Apply tighter filters (county_code, zip_code, year range) to stage the complete set.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Search NFIP Flood Insurance Claims"
+}

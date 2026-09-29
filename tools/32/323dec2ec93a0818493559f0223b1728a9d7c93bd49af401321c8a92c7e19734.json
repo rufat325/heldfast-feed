@@ -1,0 +1,323 @@
+{
+ "_meta": {
+  "category": "poc",
+  "tier": "none"
+ },
+ "annotations": {
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "POC from local logs (kubectl)"
+ },
+ "description": "Run a log-cost-optimization POC entirely from local log sources \u2014 pass `path` for one log file (wrapper-normalized) or `paths` for files, directories and globs; `kubectl` samples pod logs; `docker` and `journald` to follow. No log-analyzer credentials required. Use when the prospect has no SIEM connection or has not yet shared API keys. Returns a synchronous markdown report with: (a) **sample composition** table \u2014 top-N pods by byte volume; the prospect must confirm the sample looks like their production mix, (b) **industry-pricing matrix** \u2014 projected savings at Datadog / Splunk / CloudWatch / Sumo / Elastic / OpenSearch list prices, NOT a prediction of any specific bill, (c) **top patterns** in the kubectl-sourced sample. For native exclusion configs, paste-ready Receiver YAML, and the full 9-section report tied to a specific log analyzer's actual GB-billed volume, run `log10x_poc_from_siem` once credentials are available. **No automatic fallthrough**: this tool is invoked explicitly. If `log10x_poc_from_siem` failed on missing credentials, the calling LLM should ask the user before re-invoking with this tool \u2014 local-source framing is genuinely different from SIEM-attached framing and silent fallthrough would be a bait-and-switch. REQUIRES a local engine: the tenx binary on PATH, or Docker with LOG10X_TENX_MODE=docker. No log-analyzer credentials and no deployment are needed, but without an engine this returns an error rather than a report. Pass target_percent_reduction as a whole-number percent (e.g. 40 for 40%) to get a feasibility verdict against that target. **Two modes, and the agent should name whichever the user's phrasing invites.** Run normally, this tool reads local files but the server around it still has network. Run inside the FENCED profile (`TENX_AIRGAPPED=true`, `--network none`, the `log10x/poc` image) it is the same analysis with no network at all, and its output carries its own `docker inspect` proof. `log10x_emit_sample_plan` produces the sample for that mode from the user's own analyzer. Offer it; do not ask which one first.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "allow_lossy": {
+    "default": false,
+    "description": "Permit sample/drop (lossy) to close a keep-everything shortfall. Default false: the plan stops at the keep-everything ceiling and reports the gap. Only set after the user explicitly chooses loss.",
+    "type": "boolean"
+   },
+   "budget_gb_monthly": {
+    "description": "VOLUME BUDGET: keep projected monthly ingest at or under this many GB/mo. BYTE accounting: tier_down keeps every byte and is excluded from the ladder for this target. Sample scaled to a 30-day month before solving. Mutually exclusive with target_percent_reduction and budget_usd_monthly.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "budget_usd_monthly": {
+    "description": "DOLLAR BUDGET: keep the projected monthly bill on the assumed SIEM at or under this $/mo. The sample is scaled to a 30-day month (kubectl window, or file timestamp span) before solving, so the budget and the bill share a denominator. Mutually exclusive with target_percent_reduction and budget_gb_monthly.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "exception_services": {
+    "description": "Services / pods flagged by the customer to stay in the log analyzer with full retention (action=pass). Their bytes are subtracted from the achievable reduction pool used for the feasibility verdict. Matched case-insensitively against the pod / source name.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "forwarder": {
+    "description": "Forwarder in the pipeline (fluentd, fluent-bit, filebeat, logstash, otel-collector, vector, hec). Used to pick verified apply/undo commands. Not guessed when absent \u2014 the report says commands are unavailable.",
+    "type": "string"
+   },
+   "max_pods": {
+    "default": 20,
+    "description": "Cap on number of pods sampled. Default 20.",
+    "maximum": 200,
+    "minimum": 1,
+    "type": "number"
+   },
+   "namespace": {
+    "default": "default",
+    "description": "Kubernetes namespace to sample from (`source: kubectl` only). Pass `*` to sample across all namespaces. Default `default`.",
+    "type": "string"
+   },
+   "path": {
+    "description": "One local log file to analyse (source=`file`). Wrapped JSONL is normalized so the engine patterns payloads, not wrappers. For many files or globs use `paths` instead.",
+    "type": "string"
+   },
+   "paths": {
+    "description": "Required for `source: file`: files, directories, or glob patterns (`*`, `**`, `?`) to sample, e.g. `[\"/var/log/app/*.log\", \"./bundle/**\"]`. A directory is read one level deep; use `dir/**` for the tree.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "per_pod_limit": {
+    "default": 5000,
+    "description": "Cap on log lines pulled per pod. Default 5000.",
+    "maximum": 50000,
+    "minimum": 100,
+    "type": "number"
+   },
+   "pin_patterns": {
+    "additionalProperties": {
+     "enum": [
+      "pass",
+      "sample",
+      "compact",
+      "tier_down",
+      "offload",
+      "drop"
+     ],
+     "type": "string"
+    },
+    "description": "Advanced \u2014 most customers will not need this. Map of pattern_hash to action for rare per-pattern overrides within a pod / source. Applied AFTER pin_services.",
+    "type": "object"
+   },
+   "pin_services": {
+    "additionalProperties": {
+     "enum": [
+      "pass",
+      "sample",
+      "compact",
+      "tier_down",
+      "offload",
+      "drop"
+     ],
+     "type": "string"
+    },
+    "description": "Primary per-pod/source override surface. Map of pod / source name to action. Pins are applied AFTER the destination default and AFTER exception_services. Feasibility reruns with the pins; max_achievable shifts and reason cites the pins.",
+    "type": "object"
+   },
+   "report_annotations": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "description": "Optional one-sentence annotations keyed by evidence statement identifier, rendered under the matching action. Hard cap 140 chars each; over-cap or unknown-hash input refuses the render (nothing is truncated).",
+    "type": "object"
+   },
+   "retriever_installed": {
+    "default": false,
+    "description": "Whether the prospect will install the S3 retriever. Gates the offload rung of the plan ladder: without it offloaded events would be unreachable, so the plan stops at the in-SIEM levers and the gap names \"install the retriever\" as the lossless remedy. Set from conversation.",
+    "type": "boolean"
+   },
+   "siem": {
+    "description": "The destination SIEM, used for the report header chip and command selection. When absent the analysis assumes CloudWatch and the report labels the assumption.",
+    "enum": [
+     "cloudwatch",
+     "datadog",
+     "sumo",
+     "gcp-logging",
+     "elasticsearch",
+     "azure-monitor",
+     "splunk",
+     "clickhouse",
+     "coralogix",
+     "elastic-serverless"
+    ],
+    "type": "string"
+   },
+   "source": {
+    "default": "kubectl",
+    "description": "Where to pull log lines from. `kubectl` samples pod logs; `file` samples local logs \u2014 pass `paths` (files, directories, globs) or `path` (one file; fluentd/k8s/docker-wrapped JSONL is detected and normalized before the engine sees it). `docker` and `journald` are follow-up work.",
+    "enum": [
+     "kubectl",
+     "file"
+    ],
+    "type": "string"
+   },
+   "target_percent_reduction": {
+    "description": "Customer-specified target reduction percent. If absent, POC produces a recommendation-only output. If present, POC produces a feasibility verdict + a pre-deploy commitment artifact stub the agent can surface alongside the per-pod savings matrix. The cap CSV is attached by a later change.",
+    "maximum": 100,
+    "minimum": 0,
+    "type": "number"
+   },
+   "window": {
+    "default": "1h",
+    "description": "How far back to read per pod (`source: kubectl`). For `source: file` this is the time span you declare the sampled file tails to cover \u2014 it drives the daily projection, so set it if you know it. Accepts `1h`, `24h`, etc. Default `1h`.",
+    "type": "string"
+   },
+   "workload": {
+    "description": "Forwarder workload name (daemonset/deployment) for the apply commands. Not guessed when absent.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "log10x_poc_from_local",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": true,
+  "properties": {
+   "actions": {
+    "default": [],
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "args": {
+       "additionalProperties": {},
+       "default": {},
+       "type": "object"
+      },
+      "reason": {
+       "type": "string"
+      },
+      "role": {
+       "enum": [
+        "required-next",
+        "recommended-next",
+        "optional-followup",
+        "alternative"
+       ],
+       "type": "string"
+      },
+      "tool": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "tool",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "data": {},
+   "generated_at": {
+    "type": "string"
+   },
+   "images": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "alt": {
+       "type": "string"
+      },
+      "data": {
+       "type": "string"
+      },
+      "mimeType": {
+       "default": "image/png",
+       "enum": [
+        "image/png",
+        "image/jpeg",
+        "image/gif",
+        "image/webp"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "data"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "next_cursor": {
+    "type": "string"
+   },
+   "render_hint": {
+    "additionalProperties": false,
+    "properties": {
+     "callouts": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "chart": {
+      "enum": [
+       "sparkline",
+       "timeseries",
+       "bar",
+       "none"
+      ],
+      "type": "string"
+     },
+     "units": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "schema_epoch": {
+    "type": "string"
+   },
+   "schema_version": {
+    "const": "1.0",
+    "type": "string"
+   },
+   "summary": {
+    "additionalProperties": false,
+    "properties": {
+     "bullets": {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 5,
+      "type": "array"
+     },
+     "callout": {
+      "type": "string"
+     },
+     "headline": {
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "headline"
+    ],
+    "type": "object"
+   },
+   "tool": {
+    "type": "string"
+   },
+   "truncated": {
+    "default": false,
+    "type": "boolean"
+   },
+   "view": {
+    "default": "summary",
+    "enum": [
+     "summary",
+     "markdown"
+    ],
+    "type": "string"
+   },
+   "warnings": {
+    "default": [],
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "schema_version",
+   "schema_epoch",
+   "tool",
+   "generated_at",
+   "summary"
+  ],
+  "type": "object"
+ },
+ "title": "POC from local logs (kubectl)"
+}

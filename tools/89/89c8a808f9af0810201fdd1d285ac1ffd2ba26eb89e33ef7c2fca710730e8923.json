@@ -1,0 +1,263 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Vet an MCP server through the full WARDEN gate chain"
+ },
+ "description": "Run WARDEN's ordered gate chain (static-scan \u2192 threat-feed \u2192 origin \u2192 pinning) over a server identity plus its advertised tools/list payload and return a recordable verdict (allow/block, 0..1 product score, findings, allowedTools/blockedTools, ruleset digest).\n\nWhen to use: you have a complete server record and want the same decision a host should make before any of those tool definitions reach the model. Prefer this over calling the four gates yourself.\n\nWhen NOT to use: inspecting descriptions only (call static_scan_tools \u2014 no origin/pinning); splitting tools by operator glob (classify_sensitive_tools); checking one outbound URL (check_egress_url); producing RFC 8785 bytes (canonicalize_json).\n\nBehaviour: local, deterministic, no network. This stdio process uses the built-in 11-record threat floor (it does not fetch a signed feed) and an empty in-memory pin store, so every server is first-contact: TOOL_DEF_UNPINNED is advisory and does not block. Origin defaults to allowUnknownServers=true so catalog-discovered servers are not fail-closed. Override policy when you need the host's real knobs. Does not connect to, start, or approve the target server.\n\nReturns structured JSON matching outputSchema. Example: vet_mcp_server({ server: { id: \"demo@0\", name: \"demo\", transport: \"stdio\", command: \"npx\" }, tools: [{ name: \"add\", description: \"Add two integers.\", inputSchema: { type: \"object\" } }] }).",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "policy": {
+    "additionalProperties": false,
+    "description": "Optional WardenPolicy overlay. Omitted keys keep the stdio defaults: blockAtSeverity=high, empty sensitiveToolPatterns, allowUnknownServers=true, pinToolDefs=true. Use classify_sensitive_tools when you only want the glob split.",
+    "properties": {
+     "allowUnknownServers": {
+      "description": "When false, servers that carry server.catalog are refused by the origin gate. Default true on this stdio scanner so you can inspect catalog entries without declaring them.",
+      "type": "boolean"
+     },
+     "blockAtSeverity": {
+      "description": "Block the whole connection when any non-advisory finding reaches this severity. Default high. advisory findings never block, even at info.",
+      "enum": [
+       "info",
+       "low",
+       "medium",
+       "high",
+       "critical"
+      ],
+      "type": "string"
+     },
+     "pinToolDefs": {
+      "description": "When true, tool-def drift after a stored pin is fatal. This process has an empty pin store, so first contact stays UNPINNED/advisory. Default true.",
+      "type": "boolean"
+     },
+     "sensitiveToolPatterns": {
+      "description": "Case-insensitive * globs matched against tool names. Hits are still advertised; they go to blockedTools only when a finding also trips. For a glob-only split, call classify_sensitive_tools.",
+      "items": {
+       "maxLength": 128,
+       "type": "string"
+      },
+      "maxItems": 64,
+      "type": "array"
+     }
+    },
+    "type": "object"
+   },
+   "server": {
+    "additionalProperties": false,
+    "description": "Identity of the MCP server being vetted \u2014 the host's McpServerRef, not a live connection. WARDEN never launches this command or fetches this URL.",
+    "properties": {
+     "args": {
+      "description": "stdio argv. Included in the launch-identity hash used by pinning. Omit when unused.",
+      "items": {
+       "maxLength": 1024,
+       "type": "string"
+      },
+      "maxItems": 32,
+      "type": "array"
+     },
+     "catalog": {
+      "description": "Remote catalog this server was discovered from. When set and policy.allowUnknownServers is false, the origin gate fail-closes. Omit for operator-declared servers.",
+      "maxLength": 256,
+      "type": "string"
+     },
+     "command": {
+      "description": "stdio executable (e.g. \"npx\"). Required for a realistic stdio identity hash; omit for url transports.",
+      "maxLength": 1024,
+      "type": "string"
+     },
+     "id": {
+      "description": "Stable server id the host uses for pins and logs (e.g. \"github@1\"). Findings quote this id.",
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+     },
+     "name": {
+      "description": "Human-facing server name. Threat-feed server-scope patterns match this field.",
+      "maxLength": 256,
+      "minLength": 1,
+      "type": "string"
+     },
+     "transport": {
+      "description": "How the host would launch the server. stdio uses command/args; sse/http use url. WARDEN does not open the transport.",
+      "enum": [
+       "stdio",
+       "sse",
+       "http"
+      ],
+      "type": "string"
+     },
+     "url": {
+      "description": "sse/http endpoint. Threat-feed and identity hashing see this string; this tool does not request it.",
+      "maxLength": 2048,
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "name",
+     "transport"
+    ],
+    "type": "object"
+   },
+   "tools": {
+    "description": "Exact tools/list payload (1..256 tools). Each item is name + description + inputSchema from the server. Do not filter before vetting \u2014 blockedTools is the partition.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "description": {
+       "description": "Advertised description string from tools/list. This is prompt text the model would see; WARDEN scans it. Pass the server's text unmodified \u2014 rewriting it hides the injection surface.",
+       "maxLength": 16384,
+       "type": "string"
+      },
+      "inputSchema": {
+       "description": "JSON Schema object from tools/list (type/properties/required/\u2026). Pass through as-is. WARDEN stringifies it and scans field names, descriptions, and enums. Do not invent properties the server did not advertise.",
+       "type": "object"
+      },
+      "name": {
+       "description": "Exact tool name as advertised by tools/list. Matched case-sensitively against findings.tool and against sensitive glob patterns.",
+       "maxLength": 256,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "description",
+      "inputSchema"
+     ],
+     "type": "object"
+    },
+    "maxItems": 256,
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "required": [
+   "server",
+   "tools"
+  ],
+  "type": "object"
+ },
+ "name": "vet_mcp_server",
+ "outputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "allow": {
+    "description": "false when a gate was fatal or a non-advisory finding reached blockAtSeverity.",
+    "type": "boolean"
+   },
+   "allowedTools": {
+    "description": "Tool names the host may expose to the model.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "blockedTools": {
+    "description": "Tool names quarantined; the rest of the server may still be usable.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "decidedBy": {
+    "description": "Gate that produced the blocking decision, present only when allow is false.",
+    "type": "string"
+   },
+   "findings": {
+    "description": "Accumulated findings across all gates, including advisory.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "advisory": {
+       "description": "When true the finding is report-only: it never blocks and never costs a tool, at any blockAtSeverity.",
+       "type": "boolean"
+      },
+      "code": {
+       "description": "Stable machine code, e.g. TOOL_DEF_INJECTION or THREAT_TOOL_MATCH.",
+       "type": "string"
+      },
+      "gate": {
+       "description": "Gate that produced the finding: static-scan, threat-feed, origin, or pinning.",
+       "type": "string"
+      },
+      "message": {
+       "description": "Human-readable finding, including the matched span where a static-scan rule fired.",
+       "type": "string"
+      },
+      "severity": {
+       "description": "Attention rank. Independent of whether the finding blocks.",
+       "enum": [
+        "info",
+        "low",
+        "medium",
+        "high",
+        "critical"
+       ],
+       "type": "string"
+      },
+      "tool": {
+       "description": "Tool name the finding refers to, when the defect is per-tool rather than server-wide.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "gate",
+      "severity",
+      "code",
+      "message"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "rulesets": {
+    "additionalProperties": false,
+    "description": "Rule-table identity in force for this verdict. Store this with the scan.",
+    "properties": {
+     "staticScan": {
+      "additionalProperties": false,
+      "properties": {
+       "digest": {
+        "description": "sha256-<base64> over the RFC 8785 canonical form of the published rule table. A recorded scan is not reproducible without this.",
+        "type": "string"
+       },
+       "version": {
+        "description": "Monotonic static-scan ruleset version (currently \"5\").",
+        "type": "string"
+       }
+      },
+      "required": [
+       "version",
+       "digest"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "staticScan"
+    ],
+    "type": "object"
+   },
+   "score": {
+    "description": "Product of per-gate scores in [0, 1]. One bad gate drags the whole server down; it is not an average.",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   }
+  },
+  "required": [
+   "allow",
+   "score",
+   "findings",
+   "allowedTools",
+   "blockedTools",
+   "rulesets"
+  ],
+  "type": "object"
+ },
+ "title": "Vet an MCP server through the full WARDEN gate chain"
+}

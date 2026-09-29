@@ -1,0 +1,429 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Fetch one or more CVEs by ID from the NIST National Vulnerability Database. Returns CVSS scores across all available versions (v2.0, v3.0, v3.1, v4.0), CWE weakness classifications, affected CPE configurations, CISA KEV fields, and references. Up to 100 CVE IDs per call. For bulk lookups of more than 10 IDs, use brief: true \u2014 full records for 100 CVEs can exceed 1MB and exhaust context budgets.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "allLanguages": {
+    "default": false,
+    "description": "When true, keeps every localized description NVD supplies on each record, and full records render all of them. Default keeps English only, falling back to whatever exists if a record has no English entry. Brief records always carry a single truncated description.",
+    "type": "boolean"
+   },
+   "brief": {
+    "default": false,
+    "description": "When true, returns trimmed records (ID, status, top CVSS score, KEV name, published date, and a truncated description) instead of full detail. Recommended for batches of more than 10 IDs.",
+    "type": "boolean"
+   },
+   "cveIds": {
+    "anyOf": [
+     {
+      "description": "A single CVE ID (e.g., \"CVE-2021-44228\").",
+      "type": "string"
+     },
+     {
+      "description": "An array of CVE IDs \u2014 at least 1, up to 100 per call.",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 100,
+      "minItems": 1,
+      "type": "array"
+     }
+    ],
+    "description": "One CVE ID or an array of up to 100 CVE IDs to fetch."
+   },
+   "includeReferences": {
+    "default": true,
+    "description": "When false, omits the references array to reduce response size.",
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "cveIds"
+  ],
+  "type": "object"
+ },
+ "name": "nvd_get_cve",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "brief",
+     "cves",
+     "requested",
+     "returned"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "brief": {
+    "description": "Whether brief or full records were returned.",
+    "type": "boolean"
+   },
+   "cves": {
+    "description": "CVE records \u2014 full detail by default, trimmed rows when brief is true.",
+    "items": {
+     "additionalProperties": {},
+     "description": "One CVE record. Every field beyond cveId, vulnStatus, and published depends on the mode: full mode (the default) carries all of them except description and cisaVulnerabilityName, which are the brief-mode substitutes for descriptions and cisaKev.",
+     "properties": {
+      "cisaKev": {
+       "additionalProperties": false,
+       "description": "CISA KEV fields. Present only when CVE is in the KEV catalog.",
+       "properties": {
+        "actionDueDate": {
+         "description": "Federal agency remediation deadline.",
+         "type": "string"
+        },
+        "exploitAddDate": {
+         "description": "Date added to CISA KEV catalog.",
+         "type": "string"
+        },
+        "requiredAction": {
+         "description": "Required remediation steps.",
+         "type": "string"
+        },
+        "vulnerabilityName": {
+         "description": "CISA's vulnerability name.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "exploitAddDate",
+        "actionDueDate",
+        "requiredAction",
+        "vulnerabilityName"
+       ],
+       "type": "object"
+      },
+      "cisaVulnerabilityName": {
+       "description": "CISA KEV vulnerability name. Present only when in the KEV catalog.",
+       "type": "string"
+      },
+      "configurationNodes": {
+       "description": "Affected product configuration nodes. NVD nests these under configuration groups; the groups are represented by groupIndex so each node's own criteria stay together.",
+       "items": {
+        "additionalProperties": false,
+        "description": "One affected product configuration node, tagged with the group it came from.",
+        "properties": {
+         "cpeMatch": {
+          "description": "This node's CPE match criteria, in the order NVD lists them.",
+          "items": {
+           "additionalProperties": false,
+           "description": "One CPE match criterion.",
+           "properties": {
+            "criteria": {
+             "description": "CPEv2.3 match criteria string.",
+             "type": "string"
+            },
+            "versionEndExcluding": {
+             "description": "Exclusive upper version bound.",
+             "type": "string"
+            },
+            "versionEndIncluding": {
+             "description": "Inclusive upper version bound.",
+             "type": "string"
+            },
+            "versionStartExcluding": {
+             "description": "Exclusive lower version bound.",
+             "type": "string"
+            },
+            "versionStartIncluding": {
+             "description": "Inclusive lower version bound.",
+             "type": "string"
+            },
+            "vulnerable": {
+             "description": "Whether this CPE is the vulnerable component or only the context it runs in.",
+             "type": "boolean"
+            }
+           },
+           "required": [
+            "vulnerable",
+            "criteria"
+           ],
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "groupIndex": {
+          "description": "Zero-based index of the NVD configuration group this node belongs to. Nodes sharing a groupIndex were siblings in one group, combined by groupOperator.",
+          "type": "number"
+         },
+         "groupOperator": {
+          "description": "Logical operator (AND/OR) combining this node with its sibling nodes in the same group. An \"AND\" means every node in the group must match for the CVE to apply \u2014 e.g. a firmware node and the hardware it runs on. Absent when the group has nothing to combine.",
+          "type": "string"
+         },
+         "nodeOperator": {
+          "description": "Logical operator (AND/OR) combining this node's own criteria below. Absent when the node has nothing to combine.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "groupIndex",
+         "cpeMatch"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "cveId": {
+       "description": "CVE identifier (e.g., \"CVE-2021-44228\").",
+       "type": "string"
+      },
+      "cvssScores": {
+       "description": "All available CVSS scores across versions.",
+       "items": {
+        "additionalProperties": false,
+        "description": "One CVSS score entry.",
+        "properties": {
+         "baseScore": {
+          "description": "Base score (0.0\u201310.0).",
+          "type": "number"
+         },
+         "severity": {
+          "description": "Severity label: CRITICAL, HIGH, MEDIUM, or LOW.",
+          "type": "string"
+         },
+         "sourceType": {
+          "description": "Score source: \"Primary\" = NVD, \"Secondary\" = CNA.",
+          "type": "string"
+         },
+         "vectorString": {
+          "description": "CVSS vector string.",
+          "type": "string"
+         },
+         "version": {
+          "description": "CVSS version (e.g., \"2.0\", \"3.1\", \"4.0\").",
+          "type": "string"
+         }
+        },
+        "required": [
+         "version",
+         "sourceType",
+         "baseScore",
+         "severity"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "description": {
+       "description": "Opening 200 characters of the English CVE description, truncated with an ellipsis when longer. Enough to tell one result from another; call nvd_get_cve for the full text. Absent when NVD carries no description for the record.",
+       "type": "string"
+      },
+      "descriptions": {
+       "description": "CVE descriptions by language.",
+       "items": {
+        "additionalProperties": false,
+        "description": "One localized CVE description.",
+        "properties": {
+         "lang": {
+          "description": "Language code.",
+          "type": "string"
+         },
+         "value": {
+          "description": "CVE description.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "lang",
+         "value"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "lastModified": {
+       "description": "ISO 8601 last-modified datetime.",
+       "type": "string"
+      },
+      "published": {
+       "description": "ISO 8601 publication datetime.",
+       "type": "string"
+      },
+      "references": {
+       "description": "External references.",
+       "items": {
+        "additionalProperties": false,
+        "description": "One external reference.",
+        "properties": {
+         "source": {
+          "description": "Who contributed the reference, as the contributor name NVD publishes for it (e.g. \"CVE\", \"CISA-ADP\"). Contributors NVD identifies by email address keep that address (e.g. \"security@apache.org\"); an identifier absent from NVD's contributor dictionary passes through as its raw value.",
+          "type": "string"
+         },
+         "tags": {
+          "description": "Classification tags.",
+          "items": {
+           "description": "One classification tag.",
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "url": {
+          "description": "Reference URL.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "url"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "severity": {
+       "additionalProperties": false,
+       "description": "Top severity. Absent if no CVSS scores present.",
+       "properties": {
+        "fromVersion": {
+         "description": "Which CVSS version this top score came from.",
+         "type": "string"
+        },
+        "label": {
+         "description": "Highest severity label across all CVSS versions.",
+         "type": "string"
+        },
+        "score": {
+         "description": "Highest base score (0.0\u201310.0).",
+         "type": "number"
+        }
+       },
+       "required": [
+        "label",
+        "score",
+        "fromVersion"
+       ],
+       "type": "object"
+      },
+      "vulnStatus": {
+       "description": "NVD analysis status.",
+       "type": "string"
+      },
+      "weaknesses": {
+       "description": "CWE weakness classifications.",
+       "items": {
+        "additionalProperties": false,
+        "description": "One weakness classification entry.",
+        "properties": {
+         "cweIds": {
+          "description": "CWE identifiers for this source.",
+          "items": {
+           "description": "One CWE identifier.",
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "source": {
+          "description": "Who classified the weakness, as the contributor name NVD publishes for it (e.g. \"CVE\", \"CISA-ADP\"). Contributors NVD identifies by email address keep that address (e.g. \"nvd@nist.gov\"); an identifier absent from NVD's contributor dictionary passes through as its raw value.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "source",
+         "cweIds"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      }
+     },
+     "required": [
+      "cveId",
+      "vulnStatus",
+      "published"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_cve_id_format`: One or more CVE IDs fail format validation (NVD returns HTTP 404 for malformed IDs). `cve_not_found`: A valid-format CVE ID returns no results \u2014 the ID is well-formed but does not exist in NVD. `rate_limited`: NVD returned HTTP 403 indicating the rate limit was exceeded. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_cve_id_format",
+         "cve_not_found",
+         "rate_limited"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "missingIds": {
+    "description": "CVE IDs requested but not found in NVD. Absent when all IDs matched.",
+    "items": {
+     "description": "A CVE ID not found in NVD.",
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "requested": {
+    "description": "Number of CVE IDs requested.",
+    "type": "number"
+   },
+   "returned": {
+    "description": "Number of CVE records returned.",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Get CVE Details"
+}

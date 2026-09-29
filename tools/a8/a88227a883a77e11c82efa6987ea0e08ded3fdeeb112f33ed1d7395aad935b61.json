@@ -1,0 +1,488 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Turn the XML of a Mexican electronic invoice (CFDI 4.0) into structured JSON: header, issuer, receiver, every line item with its transferred and withheld taxes, the tax totals, and the Timbre Fiscal Digital (UUID, stamp date, SAT certificate number, PAC's RFC) \u2014 or `timbre: null` when the document was never stamped.\n\nThree things this does beyond reading attributes:\n\n  1. **It labels the catalogue codes.** '601' becomes 'General de Ley Personas Morales', 'G03' becomes 'Gastos en general', 'PPD' becomes 'Pago en parcialidades o diferido'. An unknown code is reported as unknown rather than guessed at.\n  2. **It validates both RFCs** (issuer and receiver) with the full modulus-11 check, and flags the SAT generics.\n  3. **It checks the arithmetic**: subtotal \u2212 discount + transferred \u2212 withheld should equal the declared total. A mismatch is a warning, not a verdict \u2014 rounding at the line level is allowed within a centavo.\n\nIt walks the document by local element name, so it does not care whether the PAC used the `cfdi:` and `tfd:` prefixes, different ones, or none.\n\n**What this does NOT do:** it does not verify the digital signature, and it does not ask the SAT anything. A document that parses cleanly can still be cancelled, or have been fabricated wholesale. Use `cfdi_status` for the SAT's own answer.\n\nArgs:\n  - xml (string): the CFDI XML.\n  - response_format ('markdown' | 'json'): output format (default 'markdown').\n\nReturns: { version, serie, folio, fecha, tipo(+label), forma_pago(+label), metodo_pago(+label), moneda, tipo_cambio, sub_total, descuento, total, lugar_expedicion, exportacion, condiciones_de_pago, no_certificado, emisor{rfc, nombre, regimen(+label), rfc_valid, rfc_kind, rfc_errors}, receptor{\u2026 domicilio, uso(+label)}, conceptos[{descripcion, clave_prod_serv, cantidad, clave_unidad, unidad, valor_unitario, importe, descuento, objeto_imp(+label), traslados[], retenciones[]}], concepto_count, total_trasladados, total_retenidos, stamped, timbre{uuid, fecha_timbrado, no_certificado_sat, rfc_prov_certif} | null, arithmetic{\u2026}, findings[] }.\n\nExample: \"Read this invoice and tell me who issued it and for how much\" -> parse_cfdi(xml=\"<cfdi:Comprobante \u2026>\").",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "response_format": {
+    "default": "markdown",
+    "description": "Output format: 'markdown' for a human-readable summary (default) or 'json' for the full structured payload.",
+    "enum": [
+     "markdown",
+     "json"
+    ],
+    "type": "string"
+   },
+   "xml": {
+    "description": "The complete CFDI XML as a string, from '<cfdi:Comprobante' (or '<?xml') to the closing tag.",
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "xml"
+  ],
+  "type": "object"
+ },
+ "name": "parse_cfdi",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "arithmetic": {
+    "additionalProperties": false,
+    "properties": {
+     "computed_total": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "declared_total": {
+      "type": "string"
+     },
+     "difference": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "matches": {
+      "type": [
+       "boolean",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "declared_total",
+     "computed_total",
+     "matches",
+     "difference"
+    ],
+    "type": "object"
+   },
+   "concepto_count": {
+    "type": "number"
+   },
+   "conceptos": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "cantidad": {
+       "type": "string"
+      },
+      "clave_prod_serv": {
+       "type": "string"
+      },
+      "clave_unidad": {
+       "type": "string"
+      },
+      "descripcion": {
+       "type": "string"
+      },
+      "descuento": {
+       "type": "string"
+      },
+      "importe": {
+       "type": "string"
+      },
+      "objeto_imp": {
+       "type": "string"
+      },
+      "objeto_imp_label": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "retenciones": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "base": {
+          "type": "string"
+         },
+         "importe": {
+          "type": "string"
+         },
+         "impuesto": {
+          "type": "string"
+         },
+         "impuesto_label": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "tasa_o_cuota": {
+          "type": "string"
+         },
+         "tipo_factor": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "base",
+         "impuesto",
+         "impuesto_label",
+         "tipo_factor",
+         "tasa_o_cuota",
+         "importe"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "traslados": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "base": {
+          "type": "string"
+         },
+         "importe": {
+          "type": "string"
+         },
+         "impuesto": {
+          "type": "string"
+         },
+         "impuesto_label": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "tasa_o_cuota": {
+          "type": "string"
+         },
+         "tipo_factor": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "base",
+         "impuesto",
+         "impuesto_label",
+         "tipo_factor",
+         "tasa_o_cuota",
+         "importe"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "unidad": {
+       "type": "string"
+      },
+      "valor_unitario": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "descripcion",
+      "clave_prod_serv",
+      "cantidad",
+      "clave_unidad",
+      "unidad",
+      "valor_unitario",
+      "importe",
+      "descuento",
+      "objeto_imp",
+      "objeto_imp_label",
+      "traslados",
+      "retenciones"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "conceptos_truncated": {
+    "type": "boolean"
+   },
+   "condiciones_de_pago": {
+    "type": "string"
+   },
+   "descuento": {
+    "type": "string"
+   },
+   "emisor": {
+    "additionalProperties": false,
+    "properties": {
+     "nombre": {
+      "type": "string"
+     },
+     "regimen": {
+      "type": "string"
+     },
+     "regimen_label": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "rfc": {
+      "type": "string"
+     },
+     "rfc_errors": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "rfc_kind": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "rfc_valid": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "rfc",
+     "nombre",
+     "regimen",
+     "regimen_label",
+     "rfc_valid",
+     "rfc_kind",
+     "rfc_errors"
+    ],
+    "type": "object"
+   },
+   "exportacion": {
+    "type": "string"
+   },
+   "fecha": {
+    "type": "string"
+   },
+   "findings": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "message": {
+       "type": "string"
+      },
+      "severity": {
+       "enum": [
+        "pass",
+        "warn",
+        "fail",
+        "info"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "severity",
+      "message"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "folio": {
+    "type": "string"
+   },
+   "forma_pago": {
+    "type": "string"
+   },
+   "forma_pago_label": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "lugar_expedicion": {
+    "type": "string"
+   },
+   "metodo_pago": {
+    "type": "string"
+   },
+   "metodo_pago_label": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "moneda": {
+    "type": "string"
+   },
+   "no_certificado": {
+    "type": "string"
+   },
+   "receptor": {
+    "additionalProperties": false,
+    "properties": {
+     "domicilio": {
+      "type": "string"
+     },
+     "nombre": {
+      "type": "string"
+     },
+     "regimen": {
+      "type": "string"
+     },
+     "regimen_label": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "rfc": {
+      "type": "string"
+     },
+     "rfc_errors": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "rfc_kind": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "rfc_valid": {
+      "type": "boolean"
+     },
+     "uso": {
+      "type": "string"
+     },
+     "uso_label": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "rfc",
+     "nombre",
+     "regimen",
+     "regimen_label",
+     "rfc_valid",
+     "rfc_kind",
+     "rfc_errors",
+     "domicilio",
+     "uso",
+     "uso_label"
+    ],
+    "type": "object"
+   },
+   "serie": {
+    "type": "string"
+   },
+   "stamped": {
+    "type": "boolean"
+   },
+   "sub_total": {
+    "type": "string"
+   },
+   "timbre": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "fecha_timbrado": {
+        "type": "string"
+       },
+       "no_certificado_sat": {
+        "type": "string"
+       },
+       "rfc_prov_certif": {
+        "type": "string"
+       },
+       "uuid": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "uuid",
+       "fecha_timbrado",
+       "no_certificado_sat",
+       "rfc_prov_certif"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "tipo": {
+    "type": "string"
+   },
+   "tipo_cambio": {
+    "type": "string"
+   },
+   "tipo_label": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "total": {
+    "type": "string"
+   },
+   "total_retenciones_locales": {
+    "type": "string"
+   },
+   "total_retenidos": {
+    "type": "string"
+   },
+   "total_trasladados": {
+    "type": "string"
+   },
+   "total_traslados_locales": {
+    "type": "string"
+   },
+   "version": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "version",
+   "serie",
+   "folio",
+   "fecha",
+   "tipo",
+   "tipo_label",
+   "forma_pago",
+   "forma_pago_label",
+   "metodo_pago",
+   "metodo_pago_label",
+   "moneda",
+   "tipo_cambio",
+   "sub_total",
+   "descuento",
+   "total",
+   "lugar_expedicion",
+   "exportacion",
+   "condiciones_de_pago",
+   "no_certificado",
+   "emisor",
+   "receptor",
+   "conceptos",
+   "concepto_count",
+   "conceptos_truncated",
+   "total_trasladados",
+   "total_retenidos",
+   "total_traslados_locales",
+   "total_retenciones_locales",
+   "stamped",
+   "timbre",
+   "arithmetic",
+   "findings"
+  ],
+  "type": "object"
+ },
+ "title": "Parse CFDI 4.0 XML"
+}

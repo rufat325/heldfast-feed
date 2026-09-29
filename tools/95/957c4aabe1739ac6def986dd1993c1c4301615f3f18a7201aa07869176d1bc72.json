@@ -1,0 +1,750 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Read-only structured YDB table DDL generator. It renders strict JSON specs for CREATE TABLE, ALTER TABLE, DROP TABLE, and secondary indexes, returns the generated script with official references and warnings, and can optionally validate through the YDB JS SDK without applying changes.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "configPath": {
+    "description": "Absolute path to an explicit local-ydb config file. Missing, unreadable, oversized, or invalid explicit files fail closed instead of using defaults.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "databasePath": {
+    "description": "YDB database path to use when validate=true. Defaults to the configured tenant root.",
+    "type": "string"
+   },
+   "maxOutputBytes": {
+    "description": "Maximum UTF-8 bytes returned per validation issue stream when validate=true. Defaults to 65536.",
+    "maximum": 1048576,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "profile": {
+    "description": "Named profile from local-ydb.config.json. Defaults to config.defaultProfile.",
+    "type": "string"
+   },
+   "statements": {
+    "description": "Structured schema statement specs to render into YDB table DDL.",
+    "items": {
+     "oneOf": [
+      {
+       "additionalProperties": false,
+       "properties": {
+        "columns": {
+         "description": "Columns for the new table.",
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "default": {
+            "description": "Optional DEFAULT value. The generator renders type-aware YQL defaults such as Utf8('x'), Uint64('1'), Date('2026-05-27'), or TRUE.",
+            "oneOf": [
+             {
+              "type": "string"
+             },
+             {
+              "type": "number"
+             },
+             {
+              "type": "boolean"
+             }
+            ]
+           },
+           "name": {
+            "description": "Column name. The generator always backtick-quotes and escapes it in YQL.",
+            "minLength": 1,
+            "type": "string"
+           },
+           "notNull": {
+            "description": "Emit NOT NULL for the column. Supported only for columns that are part of the CREATE TABLE primaryKey.",
+            "type": "boolean"
+           },
+           "type": {
+            "description": "YDB primitive column type such as Uint64, Utf8, Timestamp, JsonDocument, or Decimal(precision, scale).",
+            "minLength": 1,
+            "type": "string"
+           }
+          },
+          "required": [
+           "name",
+           "type"
+          ],
+          "type": "object"
+         },
+         "minItems": 1,
+         "type": "array"
+        },
+        "ifNotExists": {
+         "description": "Emit IF NOT EXISTS.",
+         "type": "boolean"
+        },
+        "indexes": {
+         "description": "Secondary indexes to define inside CREATE TABLE.",
+         "items": {
+          "additionalProperties": false,
+          "allOf": [
+           {
+            "if": {
+             "properties": {
+              "using": {
+               "const": "vector_kmeans_tree"
+              }
+             },
+             "required": [
+              "using"
+             ]
+            },
+            "then": {
+             "properties": {
+              "global": {
+               "const": true
+              },
+              "local": {
+               "const": false
+              },
+              "sync": {
+               "const": "sync"
+              },
+              "unique": {
+               "const": false
+              }
+             },
+             "required": [
+              "global",
+              "sync"
+             ]
+            }
+           },
+           {
+            "if": {
+             "anyOf": [
+              {
+               "not": {
+                "required": [
+                 "using"
+                ]
+               }
+              },
+              {
+               "properties": {
+                "using": {
+                 "const": "secondary"
+                }
+               },
+               "required": [
+                "using"
+               ]
+              }
+             ]
+            },
+            "then": {
+             "not": {
+              "required": [
+               "with"
+              ]
+             },
+             "properties": {
+              "global": {
+               "const": true
+              },
+              "local": {
+               "const": false
+              }
+             },
+             "required": [
+              "global"
+             ]
+            }
+           },
+           {
+            "if": {
+             "properties": {
+              "unique": {
+               "const": true
+              }
+             },
+             "required": [
+              "unique"
+             ]
+            },
+            "then": {
+             "properties": {
+              "sync": {
+               "const": "sync"
+              }
+             },
+             "required": [
+              "sync"
+             ]
+            }
+           }
+          ],
+          "properties": {
+           "columns": {
+            "description": "Index key columns, in order. For createTable, each must exist in columns.",
+            "items": {
+             "minLength": 1,
+             "type": "string"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+           },
+           "cover": {
+            "description": "Optional non-empty COVER columns for the index.",
+            "items": {
+             "minLength": 1,
+             "type": "string"
+            },
+            "minItems": 1,
+            "type": "array",
+            "uniqueItems": true
+           },
+           "global": {
+            "description": "Emit GLOBAL for the index. Required for secondary and vector indexes.",
+            "type": "boolean"
+           },
+           "local": {
+            "description": "Emit LOCAL for supported index types. Rejected for secondary and vector indexes in v1.",
+            "type": "boolean"
+           },
+           "name": {
+            "description": "Index name. The generator always backtick-quotes and escapes it in YQL.",
+            "minLength": 1,
+            "type": "string"
+           },
+           "sync": {
+            "description": "Emit SYNC or ASYNC for the index. unique and vector_kmeans_tree indexes require sync.",
+            "enum": [
+             "sync",
+             "async"
+            ],
+            "type": "string"
+           },
+           "unique": {
+            "description": "Emit UNIQUE for the index. Unique indexes must be sync and are rejected for vector indexes.",
+            "type": "boolean"
+           },
+           "using": {
+            "description": "Optional index type. secondary is the default and is not rendered as USING secondary; vector_kmeans_tree requires a row-oriented GLOBAL SYNC non-unique index and complete vector WITH settings.",
+            "enum": [
+             "secondary",
+             "vector_kmeans_tree"
+            ],
+            "type": "string"
+           },
+           "with": {
+            "additionalProperties": {
+             "oneOf": [
+              {
+               "type": "string"
+              },
+              {
+               "type": "number"
+              },
+              {
+               "type": "boolean"
+              },
+              {
+               "additionalProperties": false,
+               "properties": {
+                "token": {
+                 "description": "Bare YQL token value, for settings such as AUTO_PARTITIONING_BY_SIZE = ENABLED.",
+                 "minLength": 1,
+                 "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                 "type": "string"
+                }
+               },
+               "required": [
+                "token"
+               ],
+               "type": "object"
+              }
+             ]
+            },
+            "description": "Optional vector index WITH settings. Strings render as quoted YQL literals; vector_kmeans_tree requires vector_dimension, vector_type, distance or similarity, clusters, and levels.",
+            "propertyNames": {
+             "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            },
+            "type": "object"
+           }
+          },
+          "required": [
+           "name",
+           "columns"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "kind": {
+         "const": "createTable",
+         "description": "Generate a CREATE TABLE statement.",
+         "type": "string"
+        },
+        "partitionByHash": {
+         "description": "Optional non-empty PARTITION BY HASH columns for column-oriented tables. Requires store: \"column\" and each partition column must be part of primaryKey.",
+         "items": {
+          "minLength": 1,
+          "type": "string"
+         },
+         "minItems": 1,
+         "type": "array",
+         "uniqueItems": true
+        },
+        "primaryKey": {
+         "description": "Primary key columns, in order. Each must exist in columns.",
+         "items": {
+          "minLength": 1,
+          "type": "string"
+         },
+         "minItems": 1,
+         "type": "array",
+         "uniqueItems": true
+        },
+        "store": {
+         "description": "Optional table storage type rendered as STORE = ROW or STORE = COLUMN.",
+         "enum": [
+          "row",
+          "column"
+         ],
+         "type": "string"
+        },
+        "tableName": {
+         "description": "Table name or relative YDB table path.",
+         "minLength": 1,
+         "type": "string"
+        },
+        "with": {
+         "additionalProperties": {
+          "oneOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "number"
+           },
+           {
+            "type": "boolean"
+           },
+           {
+            "additionalProperties": false,
+            "properties": {
+             "token": {
+              "description": "Bare YQL token value, for settings such as AUTO_PARTITIONING_BY_SIZE = ENABLED.",
+              "minLength": 1,
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+              "type": "string"
+             }
+            },
+            "required": [
+             "token"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "description": "Optional table WITH settings. Strings render as quoted YQL literals; use { token: \"ENABLED\" } for bare tokens. Use store instead of STORE in WITH settings.",
+         "propertyNames": {
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+         },
+         "type": "object"
+        }
+       },
+       "required": [
+        "kind",
+        "tableName",
+        "columns",
+        "primaryKey"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "actions": {
+         "description": "ALTER TABLE actions to render in order. Do not add an index on a column added or dropped in the same alterTable spec; use separate generate/apply cycles.",
+         "items": {
+          "oneOf": [
+           {
+            "additionalProperties": false,
+            "properties": {
+             "column": {
+              "additionalProperties": false,
+              "description": "Column to add with ALTER TABLE. Only name and type are supported; NOT NULL and DEFAULT are rejected.",
+              "not": {
+               "anyOf": [
+                {
+                 "required": [
+                  "notNull"
+                 ]
+                },
+                {
+                 "required": [
+                  "default"
+                 ]
+                }
+               ]
+              },
+              "properties": {
+               "default": {
+                "description": "Optional DEFAULT value. The generator renders type-aware YQL defaults such as Utf8('x'), Uint64('1'), Date('2026-05-27'), or TRUE.",
+                "oneOf": [
+                 {
+                  "type": "string"
+                 },
+                 {
+                  "type": "number"
+                 },
+                 {
+                  "type": "boolean"
+                 }
+                ]
+               },
+               "name": {
+                "description": "Column name. The generator always backtick-quotes and escapes it in YQL.",
+                "minLength": 1,
+                "type": "string"
+               },
+               "notNull": {
+                "description": "Emit NOT NULL for the column. Supported only for columns that are part of the CREATE TABLE primaryKey.",
+                "type": "boolean"
+               },
+               "type": {
+                "description": "YDB primitive column type such as Uint64, Utf8, Timestamp, JsonDocument, or Decimal(precision, scale).",
+                "minLength": 1,
+                "type": "string"
+               }
+              },
+              "required": [
+               "name",
+               "type"
+              ],
+              "type": "object"
+             },
+             "kind": {
+              "const": "addColumn",
+              "type": "string"
+             }
+            },
+            "required": [
+             "kind",
+             "column"
+            ],
+            "type": "object"
+           },
+           {
+            "additionalProperties": false,
+            "properties": {
+             "kind": {
+              "const": "dropColumn",
+              "type": "string"
+             },
+             "name": {
+              "minLength": 1,
+              "type": "string"
+             }
+            },
+            "required": [
+             "kind",
+             "name"
+            ],
+            "type": "object"
+           },
+           {
+            "additionalProperties": false,
+            "properties": {
+             "index": {
+              "additionalProperties": false,
+              "allOf": [
+               {
+                "if": {
+                 "properties": {
+                  "using": {
+                   "const": "vector_kmeans_tree"
+                  }
+                 },
+                 "required": [
+                  "using"
+                 ]
+                },
+                "then": {
+                 "properties": {
+                  "global": {
+                   "const": true
+                  },
+                  "local": {
+                   "const": false
+                  },
+                  "sync": {
+                   "const": "sync"
+                  },
+                  "unique": {
+                   "const": false
+                  }
+                 },
+                 "required": [
+                  "global",
+                  "sync"
+                 ]
+                }
+               },
+               {
+                "if": {
+                 "anyOf": [
+                  {
+                   "not": {
+                    "required": [
+                     "using"
+                    ]
+                   }
+                  },
+                  {
+                   "properties": {
+                    "using": {
+                     "const": "secondary"
+                    }
+                   },
+                   "required": [
+                    "using"
+                   ]
+                  }
+                 ]
+                },
+                "then": {
+                 "not": {
+                  "required": [
+                   "with"
+                  ]
+                 },
+                 "properties": {
+                  "global": {
+                   "const": true
+                  },
+                  "local": {
+                   "const": false
+                  }
+                 },
+                 "required": [
+                  "global"
+                 ]
+                }
+               },
+               {
+                "if": {
+                 "properties": {
+                  "unique": {
+                   "const": true
+                  }
+                 },
+                 "required": [
+                  "unique"
+                 ]
+                },
+                "then": {
+                 "properties": {
+                  "sync": {
+                   "const": "sync"
+                  }
+                 },
+                 "required": [
+                  "sync"
+                 ]
+                }
+               }
+              ],
+              "properties": {
+               "columns": {
+                "description": "Index key columns, in order. For createTable, each must exist in columns.",
+                "items": {
+                 "minLength": 1,
+                 "type": "string"
+                },
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+               },
+               "cover": {
+                "description": "Optional non-empty COVER columns for the index.",
+                "items": {
+                 "minLength": 1,
+                 "type": "string"
+                },
+                "minItems": 1,
+                "type": "array",
+                "uniqueItems": true
+               },
+               "global": {
+                "description": "Emit GLOBAL for the index. Required for secondary and vector indexes.",
+                "type": "boolean"
+               },
+               "local": {
+                "description": "Emit LOCAL for supported index types. Rejected for secondary and vector indexes in v1.",
+                "type": "boolean"
+               },
+               "name": {
+                "description": "Index name. The generator always backtick-quotes and escapes it in YQL.",
+                "minLength": 1,
+                "type": "string"
+               },
+               "sync": {
+                "description": "Emit SYNC or ASYNC for the index. unique and vector_kmeans_tree indexes require sync.",
+                "enum": [
+                 "sync",
+                 "async"
+                ],
+                "type": "string"
+               },
+               "unique": {
+                "description": "Emit UNIQUE for the index. Unique indexes must be sync and are rejected for vector indexes.",
+                "type": "boolean"
+               },
+               "using": {
+                "description": "Optional index type. secondary is the default and is not rendered as USING secondary; vector_kmeans_tree requires a row-oriented GLOBAL SYNC non-unique index and complete vector WITH settings.",
+                "enum": [
+                 "secondary",
+                 "vector_kmeans_tree"
+                ],
+                "type": "string"
+               },
+               "with": {
+                "additionalProperties": {
+                 "oneOf": [
+                  {
+                   "type": "string"
+                  },
+                  {
+                   "type": "number"
+                  },
+                  {
+                   "type": "boolean"
+                  },
+                  {
+                   "additionalProperties": false,
+                   "properties": {
+                    "token": {
+                     "description": "Bare YQL token value, for settings such as AUTO_PARTITIONING_BY_SIZE = ENABLED.",
+                     "minLength": 1,
+                     "pattern": "^[A-Za-z_][A-Za-z0-9_]*$",
+                     "type": "string"
+                    }
+                   },
+                   "required": [
+                    "token"
+                   ],
+                   "type": "object"
+                  }
+                 ]
+                },
+                "description": "Optional vector index WITH settings. Strings render as quoted YQL literals; vector_kmeans_tree requires vector_dimension, vector_type, distance or similarity, clusters, and levels.",
+                "propertyNames": {
+                 "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                },
+                "type": "object"
+               }
+              },
+              "required": [
+               "name",
+               "columns"
+              ],
+              "type": "object"
+             },
+             "kind": {
+              "const": "addIndex",
+              "type": "string"
+             }
+            },
+            "required": [
+             "kind",
+             "index"
+            ],
+            "type": "object"
+           },
+           {
+            "additionalProperties": false,
+            "properties": {
+             "kind": {
+              "const": "dropIndex",
+              "type": "string"
+             },
+             "name": {
+              "minLength": 1,
+              "type": "string"
+             }
+            },
+            "required": [
+             "kind",
+             "name"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "minItems": 1,
+         "type": "array"
+        },
+        "kind": {
+         "const": "alterTable",
+         "description": "Generate an ALTER TABLE statement.",
+         "type": "string"
+        },
+        "tableName": {
+         "description": "Table name or relative YDB table path.",
+         "minLength": 1,
+         "type": "string"
+        }
+       },
+       "required": [
+        "kind",
+        "tableName",
+        "actions"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "kind": {
+         "const": "dropTable",
+         "description": "Generate a DROP TABLE statement.",
+         "type": "string"
+        },
+        "tableName": {
+         "description": "Table name or relative YDB table path.",
+         "minLength": 1,
+         "type": "string"
+        }
+       },
+       "required": [
+        "kind",
+        "tableName"
+       ],
+       "type": "object"
+      }
+     ]
+    },
+    "minItems": 1,
+    "type": "array"
+   },
+   "timeoutMs": {
+    "description": "SDK validation timeout in milliseconds when validate=true. Defaults to 120000.",
+    "maximum": 600000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "validate": {
+    "description": "If true, validate the generated DDL through local_ydb_apply_schema action=validate. This tool never applies DDL.",
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "statements"
+  ],
+  "type": "object"
+ },
+ "name": "local_ydb_generate_schema"
+}
