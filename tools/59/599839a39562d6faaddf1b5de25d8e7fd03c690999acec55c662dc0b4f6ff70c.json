@@ -1,0 +1,619 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Use when you know your token workload but have not selected offers: rank eligible current reviewed offers by USD text-token subtotal and return their exact IDs. Defaults to standard tariffs. Cheapest means within the eligible catalogue and supplied filters, not best quality or the entire market. Equal token counts do not imply tokenizer equivalence. Excludes cache writes, storage, search, tool fees and taxes; reports exclusion counts. Optional capacity filtering uses reviewed pricing input limits, not full context windows.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "expected_dataset_revision": {
+    "description": "Optional consistency check: copy meta.dataset_revision from a prior tool response to require the same current pricing snapshot. Omit to use the current snapshot. A mismatch returns DATASET_CHANGED; refresh pricing and retry. This cannot retrieve a historical snapshot.",
+    "pattern": "^sha256:[a-f0-9]{64}$",
+    "type": "string"
+   },
+   "limit": {
+    "default": 10,
+    "description": "Maximum ranked results to return: 1\u201320; default 10.",
+    "maximum": 20,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "min_input_tokens_per_request": {
+    "description": "Optional minimum reviewed per-request pricing input limit an offer must support. Unknown or smaller limits are excluded. This is not the model context window and does not replace usage.max_input_tokens_per_request.",
+    "maximum": 1000000000000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "pricing_tier": {
+    "default": "standard",
+    "description": "Optional exact tariff name from offer identity, such as standard or peak. Omit to rank standard tariffs.",
+    "maxLength": 200,
+    "minLength": 1,
+    "type": "string"
+   },
+   "provider_id": {
+    "description": "Optional exact provider_id returned by list_providers or offer identity. Use to restrict results to one provider; omit for all providers.",
+    "maxLength": 200,
+    "minLength": 1,
+    "type": "string"
+   },
+   "usage": {
+    "additionalProperties": false,
+    "description": "Token totals for the period or scenario being estimated, not dollars or request counts. Supply input and output separately; cached input is a subset of total input.",
+    "properties": {
+     "cached_input_tokens": {
+      "default": 0,
+      "description": "Number of input_tokens expected to be cached, not additional input. Defaults to 0 and must not exceed input_tokens. Cache-write charges are excluded; an unconfirmed cache discount falls back to ordinary input pricing with a warning.",
+      "maximum": 1000000000000,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "input_tokens": {
+      "description": "Total input tokens across the workload, including cached input. For monthly estimates, sum input over all monthly requests.",
+      "maximum": 1000000000000,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "max_input_tokens_per_request": {
+      "description": "Largest full input in any single request, including cached tokens; not the monthly total or average. Provide when a tariff has an input limit so eligibility can be checked.",
+      "maximum": 1000000000000,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "output_tokens": {
+      "description": "Total billable output tokens across the same workload period, including billed reasoning tokens where applicable.",
+      "maximum": 1000000000000,
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "input_tokens",
+     "output_tokens"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "usage"
+  ],
+  "type": "object"
+ },
+ "name": "find_cheapest_models",
+ "outputSchema": {
+  "$defs": {
+   "calculation": {
+    "additionalProperties": false,
+    "properties": {
+     "applied_rates": {
+      "$ref": "#/$defs/rates"
+     },
+     "costs": {
+      "$ref": "#/$defs/costs"
+     },
+     "estimate_type": {
+      "const": "text_token_subtotal"
+     },
+     "pricing": {
+      "$ref": "#/$defs/pricing"
+     },
+     "scope_check": {
+      "enum": [
+       "within_reviewed_limit",
+       "no_structured_limit"
+      ],
+      "type": "string"
+     },
+     "usage": {
+      "$ref": "#/$defs/usage"
+     },
+     "warnings": {
+      "items": {
+       "$ref": "#/$defs/warning"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "pricing",
+     "usage",
+     "applied_rates",
+     "costs",
+     "estimate_type",
+     "scope_check",
+     "warnings"
+    ],
+    "type": "object"
+   },
+   "costs": {
+    "additionalProperties": false,
+    "properties": {
+     "cached_input_usd": {
+      "pattern": "^\\d+\\.\\d{8}$",
+      "type": "string"
+     },
+     "input_usd": {
+      "pattern": "^\\d+\\.\\d{8}$",
+      "type": "string"
+     },
+     "output_usd": {
+      "pattern": "^\\d+\\.\\d{8}$",
+      "type": "string"
+     },
+     "total_usd": {
+      "pattern": "^\\d+\\.\\d{8}$",
+      "type": "string"
+     },
+     "uncached_input_usd": {
+      "pattern": "^\\d+\\.\\d{8}$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "uncached_input_usd",
+     "cached_input_usd",
+     "input_usd",
+     "output_usd",
+     "total_usd"
+    ],
+    "type": "object"
+   },
+   "error": {
+    "additionalProperties": false,
+    "properties": {
+     "code": {
+      "enum": [
+       "INVALID_ARGUMENT",
+       "MODEL_NOT_FOUND",
+       "PRICE_UNREVIEWED",
+       "PRICE_EXPIRED",
+       "SCOPE_REQUIRED",
+       "SCOPE_EXCEEDED",
+       "UNSUPPORTED_TARIFF",
+       "UNSUPPORTED_CACHE",
+       "CATALOGUE_INCONSISTENT",
+       "INVALID_CURSOR",
+       "CURSOR_EXPIRED",
+       "DATASET_CHANGED",
+       "NO_COMPARABLE_MODELS",
+       "DATASET_UNAVAILABLE",
+       "INTERNAL_ERROR"
+      ],
+      "type": "string"
+     },
+     "field": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "message": {
+      "type": "string"
+     },
+     "model_id": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "resolution": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message",
+     "field",
+     "model_id",
+     "resolution"
+    ],
+    "type": "object"
+   },
+   "evidence": {
+    "additionalProperties": false,
+    "properties": {
+     "checked_at": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "scope": {
+      "type": "string"
+     },
+     "source_urls": {
+      "items": {
+       "format": "uri",
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "status": {
+      "enum": [
+       "current",
+       "expired",
+       "unreviewed"
+      ],
+      "type": "string"
+     },
+     "valid_until": {
+      "anyOf": [
+       {
+        "format": "date-time",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "status",
+     "checked_at",
+     "valid_until",
+     "source_urls",
+     "scope"
+    ],
+    "type": "object"
+   },
+   "identity": {
+    "additionalProperties": false,
+    "properties": {
+     "api_model_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "billing_channel": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "label": {
+      "type": "string"
+     },
+     "model_id": {
+      "maxLength": 200,
+      "minLength": 1,
+      "type": "string"
+     },
+     "pricing_tier": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "provider_id": {
+      "type": "string"
+     },
+     "provider_label": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "model_id",
+     "label",
+     "api_model_id",
+     "provider_id",
+     "provider_label",
+     "billing_channel",
+     "pricing_tier"
+    ],
+    "type": "object"
+   },
+   "meta": {
+    "additionalProperties": false,
+    "properties": {
+     "contract_version": {
+      "const": "1.0"
+     },
+     "dataset_revision": {
+      "pattern": "^sha256:[a-f0-9]{64}$",
+      "type": "string"
+     },
+     "dataset_updated_at": {
+      "type": "string"
+     },
+     "evaluated_at": {
+      "format": "date-time",
+      "type": "string"
+     }
+    },
+    "required": [
+     "contract_version",
+     "dataset_revision",
+     "dataset_updated_at",
+     "evaluated_at"
+    ],
+    "type": "object"
+   },
+   "pricing": {
+    "additionalProperties": false,
+    "properties": {
+     "cache_mode": {
+      "type": "string"
+     },
+     "costing_supported": {
+      "type": "boolean"
+     },
+     "currency": {
+      "const": "USD"
+     },
+     "evidence": {
+      "$ref": "#/$defs/evidence"
+     },
+     "identity": {
+      "$ref": "#/$defs/identity"
+     },
+     "max_input_tokens_per_request": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000,
+        "minimum": 0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "rate_unit": {
+      "const": "per_1000000_tokens"
+     },
+     "rates": {
+      "$ref": "#/$defs/rates"
+     },
+     "unsupported_reason": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "identity",
+     "currency",
+     "rate_unit",
+     "rates",
+     "cache_mode",
+     "evidence",
+     "costing_supported",
+     "unsupported_reason",
+     "max_input_tokens_per_request"
+    ],
+    "type": "object"
+   },
+   "rates": {
+    "additionalProperties": false,
+    "properties": {
+     "cached_input": {
+      "anyOf": [
+       {
+        "minimum": 0,
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "input": {
+      "minimum": 0,
+      "type": "number"
+     },
+     "output": {
+      "minimum": 0,
+      "type": "number"
+     }
+    },
+    "required": [
+     "input",
+     "cached_input",
+     "output"
+    ],
+    "type": "object"
+   },
+   "usage": {
+    "additionalProperties": false,
+    "properties": {
+     "cached_input_tokens": {
+      "maximum": 1000000000000,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "input_tokens": {
+      "maximum": 1000000000000,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "max_input_tokens_per_request": {
+      "anyOf": [
+       {
+        "maximum": 1000000000000,
+        "minimum": 0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "output_tokens": {
+      "maximum": 1000000000000,
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "input_tokens",
+     "output_tokens",
+     "cached_input_tokens",
+     "max_input_tokens_per_request"
+    ],
+    "type": "object"
+   },
+   "warning": {
+    "additionalProperties": false,
+    "properties": {
+     "code": {
+      "type": "string"
+     },
+     "message": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   }
+  },
+  "oneOf": [
+   {
+    "additionalProperties": false,
+    "properties": {
+     "data": {
+      "additionalProperties": false,
+      "properties": {
+       "candidate_count": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "eligible_count": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "excluded": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "code": {
+           "type": "string"
+          },
+          "count": {
+           "minimum": 0,
+           "type": "integer"
+          }
+         },
+         "required": [
+          "code",
+          "count"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "results": {
+        "items": {
+         "$ref": "#/$defs/calculation"
+        },
+        "maxItems": 20,
+        "type": "array"
+       },
+       "warnings": {
+        "items": {
+         "$ref": "#/$defs/warning"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "results",
+       "candidate_count",
+       "eligible_count",
+       "excluded",
+       "warnings"
+      ],
+      "type": "object"
+     },
+     "meta": {
+      "$ref": "#/$defs/meta"
+     },
+     "ok": {
+      "const": true
+     }
+    },
+    "required": [
+     "ok",
+     "meta",
+     "data"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "error": {
+      "$ref": "#/$defs/error"
+     },
+     "errors": {
+      "items": {
+       "$ref": "#/$defs/error"
+      },
+      "maxItems": 20,
+      "type": "array"
+     },
+     "meta": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/meta"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "ok": {
+      "const": false
+     }
+    },
+    "required": [
+     "ok",
+     "meta",
+     "error",
+     "errors"
+    ],
+    "type": "object"
+   }
+  ],
+  "type": "object"
+ }
+}
