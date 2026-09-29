@@ -1,0 +1,962 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Get financials"
+ },
+ "description": "Historique financier detaille d'une entreprise sur plusieurs exercices.\n\nCOUT : 1 appel de quota par societe, reponse de ~10 a 45 Kio selon detail et years. Pour le seul dernier exercice (ca, ebitda, resultat_exploitation, resultat_net, effectif_moyen), search_companies le rend en include_fields, 20 societes par appel.\n\nPour plusieurs entreprises, le parametre sirens sert jusqu'a 10 historiques en une requete (3 en detail=full). Le lot part en compact sauf demande explicite, y compris sur Pro, et ne pagine pas.\n\nNiveau de detail :\n- compact (defaut sur free, ~40 champs par exercice) : compte de resultat complet, bilan abrege PCG, ratios (tresorerie, dette nette, BFR, marges, endettement, CAF, delais de paiement), dividendes, effectif moyen.\n- full (defaut sur Pro, ~140 champs) : tous les postes. Refuse sur free (403).\n- fields : ajoute quelques champs a compact sans gonfler la reponse, ex fields=[\"roe\",\"bfr_jours_ca\",\"autonomie_financiere\"]. Plus de 130 disponibles : ratios, postes detailles, immobilisations brutes, reserves, croissances (cagr_ebitda_3ans...).\n\ntype_bilan : K consolide, C social, S simplifie. Quand la fenetre melange plusieurs types, un seul est garde et type_bilan_mixte l'indique ; type_bilan force un type. Les cotees ont en plus un bloc ifrs.\n\nCompte de resultat confidentiel : estimation_financiere donne fourchette de CA, confiance, marge d'EBE et probabilite de deficit. C'est une ESTIMATION : la presenter comme telle, jamais comme un chiffre depose. dividende_estime aussi (dividendes_verses = depose).\n\nRendu : _layout decrit par section l'ordre PCG des lignes, leur libelle (line.label), leur indentation (level) et leur nature (kind) ; exercices[annee][line.key] porte la valeur, null = poste absent. not_applicable_pcg signale un bilan de banque ou d'assurance. Montants en euros.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "detail": {
+    "description": "compact (~40 champs, defaut sur plan free) ou full (~140 champs, audit exhaustif, defaut sur plan pro). Sans valeur, le serveur applique le defaut du plan de l'utilisateur.",
+    "enum": [
+     "compact",
+     "full"
+    ],
+    "type": "string"
+   },
+   "fields": {
+    "description": "Champs financiers supplementaires a injecter dans chaque exercice. Exemple : ['roe','bfr_jours_ca','autonomie_financiere']. Limite par le plan (3 sur free, illimite sur Pro).",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "siren": {
+    "description": "SIREN a 9 chiffres",
+    "type": "string"
+   },
+   "sirens": {
+    "description": "Plusieurs SIREN en un appel, 10 au maximum, au lieu de repeter l'appel societe par societe. Exclusif avec siren. Le cout de quota est identique (1 par societe), ce qui change est le nombre de requetes. En detail=full le plafond descend a 3 societes.",
+    "items": {
+     "type": "string"
+    },
+    "maxItems": 10,
+    "minItems": 1,
+    "type": "array"
+   },
+   "type_bilan": {
+    "description": "K (consolide), C (complet/social), S (simplifie). Sans filtre : meilleure priorite (K > C > S)",
+    "enum": [
+     "K",
+     "C",
+     "S"
+    ],
+    "type": "string"
+   },
+   "years": {
+    "description": "Nombre d'exercices (defaut 3, max 10)",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "name": "get_financials",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+   {
+    "additionalProperties": {},
+    "properties": {
+     "_layout": {
+      "additionalProperties": {},
+      "properties": {
+       "currency": {
+        "type": "string"
+       },
+       "doc_url": {
+        "type": "string"
+       },
+       "missing_pcg_lines": {
+        "items": {
+         "additionalProperties": {},
+         "properties": {
+          "label": {
+           "type": "string"
+          },
+          "reason": {
+           "type": "string"
+          },
+          "ticket": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "label",
+          "reason"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "not_applicable_pcg": {
+        "type": "boolean"
+       },
+       "note": {
+        "type": "string"
+       },
+       "schema_version": {
+        "type": "string"
+       },
+       "sections": {
+        "additionalProperties": {
+         "additionalProperties": {},
+         "properties": {
+          "lines": {
+           "items": {
+            "additionalProperties": {},
+            "properties": {
+             "formula": {
+              "type": "string"
+             },
+             "formula_note": {
+              "type": "string"
+             },
+             "key": {
+              "type": "string"
+             },
+             "kind": {
+              "enum": [
+               "value",
+               "subtotal",
+               "detail",
+               "total",
+               "meta"
+              ],
+              "type": "string"
+             },
+             "label": {
+              "type": "string"
+             },
+             "level": {
+              "type": "number"
+             }
+            },
+            "required": [
+             "key",
+             "label",
+             "level",
+             "kind"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "title": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "title",
+          "lines"
+         ],
+         "type": "object"
+        },
+        "propertyNames": {
+         "type": "string"
+        },
+        "type": "object"
+       }
+      },
+      "required": [
+       "schema_version",
+       "currency",
+       "sections"
+      ],
+      "type": "object"
+     },
+     "_user_plan": {
+      "type": "string"
+     },
+     "denomination": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "dernier_exercice": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "exercices": {
+      "items": {
+       "additionalProperties": {},
+       "properties": {
+        "annee": {
+         "type": "number"
+        },
+        "autonomie_financiere": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "bfr": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "bfr_exploitation": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "bfr_hors_exploitation": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "bfr_jours_ca": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "bfr_total": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "ca": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "capacite_autofinancement": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "capacite_remboursement": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "capitaux_propres": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "cash": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "chiffre_affaires": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "confidentialite": {
+         "anyOf": [
+          {
+           "type": "boolean"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "date_cloture": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "date_depot": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "delai_paiement_clients_jours": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "delai_paiement_fournisseurs_jours": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "dette_nette": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "dettes_financieres": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "dettes_fournisseurs": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "dividende_confiance": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "dividende_estime": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "dividendes_verses": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "document": {
+         "anyOf": [
+          {
+           "additionalProperties": {},
+           "description": "Le PDF des comptes deposes au greffe pour cet exercice. Couverture partielle : l'absence de cette cle est le cas courant, pas un manque.",
+           "properties": {
+            "date_depot": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "id": {
+             "description": "Identifiant du document. Un client authentifie par cle API le lit par GET /v1/documents/{type}/{id}.",
+             "type": "string"
+            },
+            "nom_document": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "taille_octets": {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "type": {
+             "type": "string"
+            },
+            "url": {
+             "description": "Lien direct vers le PDF, a relayer tel quel. Authentifie par la session du navigateur.",
+             "type": "string"
+            }
+           },
+           "required": [
+            "id"
+           ],
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "duree_exercice_mois": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "ebitda": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "effectif_moyen": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "fonds_roulement_net_global": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "impot_benefices": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "liquidite_generale": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "marge_brute": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "marge_ebitda": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "marge_nette": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "ratio_endettement": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "ratio_stock_ca_jours": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "rentabilite_economique": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "resultat_courant": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "resultat_exceptionnel": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "resultat_exploitation": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "resultat_financier": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "resultat_net": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "roe": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "taux_marge_brute": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "taux_marge_operationnelle": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "taux_valeur_ajoutee_ca": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "total_actif": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "total_dettes": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "total_passif": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "tresorerie": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "type_bilan": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "valeur_ajoutee": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        }
+       },
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "fields_skipped": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "ifrs": {
+      "anyOf": [
+       {
+        "additionalProperties": {},
+        "properties": {
+         "annee": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "bpa": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "capitaux_propres": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "chiffre_affaires": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "dividendes": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "ebitda": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "resultat_net": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "resultat_operationnel": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "total_actif": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "tresorerie": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         }
+        },
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "message": {
+      "type": "string"
+     },
+     "siren": {
+      "type": "string"
+     },
+     "upgrade_hint": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "siren"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": {},
+    "properties": {
+     "_credits_remaining": {
+      "type": "number"
+     },
+     "_quota_remaining_month": {
+      "type": "number"
+     },
+     "_quota_remaining_today": {
+      "type": "number"
+     },
+     "_user_plan": {
+      "type": "string"
+     },
+     "data": {
+      "items": {
+       "additionalProperties": {},
+       "properties": {
+        "siren": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "siren"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "detail": {
+      "type": "string"
+     },
+     "duplicates_ignored": {
+      "type": "number"
+     },
+     "fields_skipped": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "not_found": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "requested": {
+      "type": "number"
+     },
+     "returned": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "data"
+    ],
+    "type": "object"
+   }
+  ],
+  "type": "object"
+ }
+}

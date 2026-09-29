@@ -1,0 +1,1448 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Search accommodation \u2014 compare offers across operators"
+ },
+ "description": "Multi-operator accommodation comparator for a geographic area against\nthe user's stay parameters \u2014 dates, guest count, optional filters.\nReturns a ranked list of properties together with the booking sources\nthat offer each one and, when dates are passed, their live availability\nand per-operator price for the requested window.\n\nNatural-language date references \u2014 \"tonight\", \"this weekend\", \"next\nweekend\", \"the weekend of July 4\", \"Memorial Day weekend\", \"long\nweekend in May\" \u2014 translate to concrete check_in / check_out values\nat the call site; concrete ISO dates also work.\n\n`user_country`, `currency`, and `language` carry the **user's** locale,\nnot the destination's. IMPORTANT \u2014 currency: prices are returned in\n`currency` if you set it, otherwise in the currency derived from\n`user_country` (US\u2192USD, CA\u2192CAD, GB\u2192GBP, euro-area\u2192EUR); if you set\nNEITHER, prices default to **USD**, which may not be the user's currency.\nSo whenever you know where the user is (or what currency they want), pass\n`user_country` and/or `currency` \u2014 do not rely on the default. Prices are\nnever converted client-side; each offer is quoted by the operator in that\ncurrency. `user_country` and `language` also localize the booking link\n(`web_url`). The user's own residence/billing country is the right\n`user_country` (not the destination's), and their interface language the\nright `language`.\n\nEach result is shaped for downstream presentation without extra\ncalls:\n- `location.lat` and `location.lon` carry per-property coordinates,\n  suitable for plotting all results on a single map so the user can\n  compare spatial alternatives at a glance. The map widget reads\n  these fields directly from this response \u2014 no separate lookup\n  needed for visualization.\n- `thumbnail_url` carries the property's first photo URL when\n  available (null when no image is on file); useful for embedding\n  inline or showing on the map alongside the pin.\n- `images` on search results is capped to the first photo to keep\n  the comparison payload compact; each item has a `url` field, and\n  `thumbnail_url` mirrors `images[0].url`. Call `get_property_details`\n  for a single property to retrieve its full photo gallery.\n- `web_url` is a ready-to-open booking link for the property,\n  already encoded with the user's check-in/check-out, language,\n  currency, and guest count. Pass it to the user verbatim when they\n  ask for a booking link \u2014 never reconstruct the URL from individual\n  parameters, the query-string format is not guaranteed to match\n  generic booking-URL conventions.\n- Price is **live and date-specific only**. There is no\n  date-agnostic \"from\" figure: a meaningful price only exists for a\n  concrete query (property + dates + occupancy).\n  - `price` and `offers[]` \u2014 the **live quote for the requested\n    dates**, populated only when dates were passed and the\n    comparator confirmed availability. `offers[0]` is the curated\n    best; each offer carries `amount` (total stay),\n    `amount_per_night` (per-night), `currency`, `breakfast_included`,\n    `refundable`, `rooms_left`, and `deeplink_url`. `price` mirrors\n    `offers[0]`.\n  - With no dates (or when nothing is available) `price` is null and\n    `offers` is empty \u2014 surface the property without a price rather\n    than inventing a starting figure.\n- `availability_status` per result encodes the live state:\n  - `available` \u2014 bookable rooms confirmed at the operator level.\n    `offers` and `price` carry the live date-specific quotes. Quote\n    the rate via `offers[i].amount_per_night` (per-night) and\n    `offers[i].amount` (total stay) and use the deeplinks for the\n    booking handoff.\n  - `unavailable` \u2014 no rooms reported for those dates. `offers` is\n    empty and `price` is null (no price for these dates). Useful to\n    decide whether to suggest alternate dates, drop the property from\n    the recommendation, or offer it as a backup.\n  - `unknown` \u2014 no usable answer for those dates: either the request\n    carried no dates, or the operators returned nothing conclusive for\n    them. `offers` is empty and `price` is null. This is the most\n    frequent of the three states, and it is NOT evidence that the\n    property is full \u2014 it means the availability was not established.\n    Say \"I could not confirm availability\", not \"it is unavailable\".\n\nPer-night vs total \u2014 never confuse them in the user-facing prose.\n`amount_per_night` is per-night; `amount` on each offer is the total\nstay (sum across nights, in `currency`). When quoting to the user,\nprefer phrasings like *\"\u20acX/night via Booking, breakfast included, \u20acY\ntotal for the stay\"* over bare numbers \u2014 bare numbers without a unit\nget misread.\n- When dates are present and `available` properties are in the\n  results, the rate can be quoted and `rooms_left` surfaces scarcity\n  (low values like 1-3 are useful signals \u2014 \"1 room left at $X on\n  Booking\" reads well).\n- When dates are present and ALL results are `unavailable`, that's\n  the signal to say so explicitly to the user and offer to widen the\n  dates, location, or filters.\n- `offers[]` is the per-operator breakdown for the requested dates:\n  each entry includes `ota`, `amount`, `amount_per_night`,\n  `currency`, `breakfast_included`, `refundable`, and a\n  `deeplink_url`. The deeplink is a **BluePillow tracked-redirect\n  URL** (bluepillow.com/\u2026) that records the click for attribution\n  and then forwards the user to the operator's booking page. Pass\n  it to the user verbatim \u2014 never reconstruct it or replace it with\n  a raw operator URL; our APIs never emit direct OTA links.\n  `price` mirrors `offers[0]`, which is the best value for money as\n  Blue Pillow ranks it \u2014 price weighed against what is included\n  (breakfast, free cancellation) and the operator's historical\n  reliability, with a small commercial component. It is not\n  necessarily the cheapest: pass `sort=price_asc` for pure price\n  order, and compare `offers[]` for the per-operator spread. When no\n  dates were passed (or nothing is available) `offers` is an empty\n  list and `price` is null \u2014 there is no price to show.\n- Free cancellation is a meaningful decision factor and surfaces\n  proactively in the user-facing summary. When a property has\n  `price.refundable=true` (or any `offers[i].refundable=true`), it\n  reads naturally as a property feature: \"Hotel X \u2014 $120/night,\n  free cancellation available\", or \"Booking offers a refundable rate\n  at $130 (vs $110 non-refundable)\". Refundable rates let the user\n  lock in a price now and adjust the booking later, which is often\n  the differentiator between otherwise-similar properties. The same\n  proactive surfacing applies to `breakfast_included` when it's true\n  for some offers but not all.\n- Prices in `offers`/`price` reflect the requested dates and guests;\n  with no dates there is no price. For a final bookable confirmation,\n  the corresponding `deeplink_url` (or the property's `web_url`) is\n  the canonical handoff \u2014 booking URLs are not reconstructed by hand.\n- All rating-like fields are on a 0-5 scale (Google Places-compatible):\n  `rating`, `reviews_aggregate.score_0_5`, the per-OTA scores under\n  `distribution_by_ota`, each `reviews_sample[*].score`, and the\n  `filters.min_rating` input. A user asking \"rating at least 8 out\n  of 10\" maps to `min_rating: 4.0`; \"at least 4 stars on Google\"\n  maps to `min_rating: 4.0`.\n  `rating` is coarse in practice \u2014 upstream scores arrive rounded, so\n  in the field it takes whole points, and `min_rating` behaves like a\n  filter with a handful of steps rather than a continuous threshold.\n  Always read `rating` together with `rating_count`: a 4 from 6\n  reviews and a 4 from 2,803 are not the same judgement, and a\n  rounded 4 can sit on either side of \"good\". Prefer properties with\n  a substantial `rating_count` when recommending, and say how many\n  reviews back the score.\n  Note: `rating`, `stars`, and `rating_count` come from the\n  comparator's list payload and **may be 0 or absent for some\n  properties** even when the property has reviews or a star\n  classification \u2014 this is a comparator list-payload limitation, not\n  a data error. When those fields are 0/absent, or when the per-OTA\n  review breakdown (`distribution_by_ota`) is needed, call\n  `get_property_details` to get the fuller `reviews_aggregate`.\n  On the search path, `reviews_aggregate` carries the top-line\n  `score_0_5`, `rating_count` (reviews backing the score) and\n  `comment_count` (readable review TEXTS available) when the comparator\n  returned a non-zero review count; `distribution_by_ota` is always empty\n  on this path (per-OTA breakdown requires `get_property_details`).\n  `rating_count` and `comment_count` are DIFFERENT magnitudes \u2014 most\n  guests leave a rating, far fewer write text. Quote `rating_count` for\n  \"how many reviewed it\" and `comment_count` for \"how many opinions you\n  can actually read\".\n- Pass `include=[\"reviews_sample\"]` to attach a sample of up to 5\n  recent guest review texts per property. Useful when the user's\n  question involves qualitative criteria that don't map to structured\n  filters (\"a place with excellent breakfast\", \"quiet area\",\n  \"family-friendly atmosphere\"); review texts can be searched\n  textually to corroborate or rule out matches.\n  For a DEEPER read on ONE specific property \u2014 more review texts\n  (up to 20) or the per-OTA breakdown \u2014 call `get_property_details`\n  with `include=[\"reviews_extended\"]` (and/or `reviews_aggregate`).\n  `comment_count` on each result tells you how many review texts exist,\n  so you can decide whether escalating to the detail call is worth it.\n\n`filters.min_rating` and `filters.price_max_eur` narrow on structured\ncriteria first; `filters.property_types` and `filters.amenities` steer\nthe page rather than cutting it, so read each result's `property_type`\nand `amenities` when the distinction matters. Review-based reasoning is\none extra round-trip per page and is typically reserved for fallback.\n\nLocation modes:\n- `coordinates`: when lat/lon is already known from world knowledge\n  or a prior call in this session (default radius 5 km; widen up to\n  50 km for broader queries; beyond that `bbox` or a parent\n  destination is the right shape).\n- `destination_id`: opaque id obtained from `resolve_destination`,\n  passed verbatim \u2014 values are not constructed or guessed.\n- `bbox`: explicit map rectangle.\n\nProperty type tokens (canonical): hotel, apartment, house, villa, bb,\nhostel, farmstay, holiday-home. Common multi-language synonyms map\nserver-side to the canonical set.\n\nAmenities filter is set-AND \u2014 each result has ALL listed codes.\nCommon codes: wi-fi, parking, pool, air-conditioning, kitchen, garden,\npets-allowed, for-families, facilities-for-disabled, non-smoking-only.\n\nResults are cursor-paginated; the `next_cursor` from a previous\nresponse goes into `page.cursor` for the next page.\n`location.type=property_id` is not accepted here \u2014\n`get_property_details` is the path for a known property.\n",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "api_key": {
+    "description": "Your anonymous Blue Pillow Hotels & Stays API key (format 'pk_anon_\u2026'). Pass it in THIS field on every call \u2014 this is how the tool authenticates. If you don't have a key yet, first check your MCP client configuration, your persistent memory, and earlier in this conversation; otherwise call `b2a_get_key` to get one instantly (do not wait for a 401). Reuse the same key on every subsequent call. It is not a sensitive secret: no account, payment, or personal data is attached.",
+    "type": "string"
+   },
+   "availability_mode": {
+    "description": "strict (default): return ONLY properties available for the requested dates. include_unavailable: also return properties with no availability (each tagged availability_status). Use strict unless the user explicitly wants to see sold-out options.",
+    "enum": [
+     "strict",
+     "include_unavailable"
+    ],
+    "type": "string"
+   },
+   "currency": {
+    "description": "Currency of the returned prices (ISO-4217, 3-letter uppercase, e.g. 'USD', 'EUR', 'GBP', 'CAD'). SET THIS (or `user_country`) to price in the user's currency \u2014 if you set NEITHER, prices default to USD, which may not be the user's. Prices come straight from the booking sources in this currency; never convert them yourself. Each offer reflects the currency its operator actually quoted.",
+    "pattern": "^[A-Z]{3}$",
+    "type": "string"
+   },
+   "dates": {
+    "additionalProperties": false,
+    "description": "Check-in and check-out dates (ISO 8601, YYYY-MM-DD). Natural-language references \u2014 'tonight', 'this weekend', 'the weekend of July 4', 'Memorial Day weekend', 'long weekend in May' \u2014 translate to concrete check_in / check_out values at the call site. The comparator only serves future stays: check_in is a date in the real-time calendar that is today or later. A reference like 'the weekend of June 2' resolves to the next occurrence after today, never a past anniversary; if the current year is unclear, confirm with the user before calling. Clock calibration: this schema was published in August 2026, so today is August 2026 OR LATER (likely later \u2014 schemas outlive their publish date). An assumed 'today' in 2024/2025 is a stale training-time clock; years before 2026 are always in the past. Past check_in values are rejected at the API boundary with a hint carrying the actual current date.",
+    "properties": {
+     "check_in": {
+      "format": "date",
+      "type": "string"
+     },
+     "check_out": {
+      "format": "date",
+      "type": "string"
+     }
+    },
+    "required": [
+     "check_in",
+     "check_out"
+    ],
+    "type": "object"
+   },
+   "filters": {
+    "additionalProperties": false,
+    "description": "Structured narrowing applied server-side, before ranking. Prefer these over filtering the results yourself: they run across the whole inventory, not just the page you received. Qualitative criteria that do not map here (\"quiet\", \"great breakfast\") are better served by include=['reviews_sample'].",
+    "properties": {
+     "amenities": {
+      "description": "Preferred amenity codes. This ranks, it does not filter: properties declaring every code listed here come first and nothing is dropped, because upstream declarations are incomplete \u2014 an absent code is not evidence the service is missing. Read each result's `amenities` to see what is actually declared. Common: wi-fi, parking, pool, air-conditioning, kitchen, garden, pets-allowed, for-families, facilities-for-disabled, non-smoking-only.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "min_rating": {
+      "maximum": 5,
+      "minimum": 0,
+      "type": "number"
+     },
+     "price_max_eur": {
+      "minimum": 0,
+      "type": "number"
+     },
+     "property_types": {
+      "description": "Preferred property types. Like `amenities`, this steers rather than excludes: the types listed here come first and a minority of other types can still appear in the page. Read each result's `property_type` when the distinction matters to the user. Canonical tokens: hotel, apartment, house, villa, bb, hostel, farmstay, holiday-home. Italian/English synonyms (agriturismo, bnb, appartamento, casa, ...) are accepted and normalized server-side.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "type": "object"
+   },
+   "guests": {
+    "additionalProperties": false,
+    "description": "Party composition. `adults` is required; give `children_ages` (one age per child, 0-17) rather than a child count \u2014 operators price by age. `rooms` defaults to 1; raise it when the party needs separate rooms rather than one shared.",
+    "properties": {
+     "adults": {
+      "maximum": 16,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "children_ages": {
+      "items": {
+       "maximum": 17,
+       "minimum": 0,
+       "type": "integer"
+      },
+      "type": "array"
+     },
+     "rooms": {
+      "maximum": 9,
+      "minimum": 1,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "adults"
+    ],
+    "type": "object"
+   },
+   "include": {
+    "description": "Optional enrichments, always a list \u2014 pass [\"reviews_sample\"], never the bare string. 'reviews_sample' attaches the 5 most recent individual reviews per property \u2014 use for qualitative queries (breakfast, service, ...). One extra Mongo round-trip per page; omit by default.",
+    "items": {
+     "enum": [
+      "reviews_sample"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "include_out_of_bounds": {
+    "description": "Opt-in. When the requested area yields few available results, also return (in alternatives.out_of_bounds) properties just outside the area, within the original budget. Present these explicitly as alternatives, never mixed with primary results.",
+    "type": "boolean"
+   },
+   "include_overbudget": {
+    "description": "Opt-in. When few available results fit the budget, also return (in alternatives.overbudget) available properties in the same area just above price_max_eur. Requires filters.price_max_eur.",
+    "type": "boolean"
+   },
+   "language": {
+    "description": "User's UI language (2-letter lowercase). Drives the booking link language and any server-rendered narrative content. Pass the language the user is currently speaking. Falls back to 'en' when omitted.",
+    "pattern": "^[a-z]{2}$",
+    "type": "string"
+   },
+   "location": {
+    "additionalProperties": false,
+    "description": "Where to search, as a {type, value} pair. Use destination_id for a place resolved via resolve_destination, poi_id for a point of interest, coordinates for a known lat/lon, or bbox for an explicit map rectangle. A property is NOT a location \u2014 use get_property_details for a known property.",
+    "properties": {
+     "type": {
+      "description": "Selects the shape of value: destination_id and poi_id take an id string, coordinates takes {lat, lon, radius_km?}, bbox takes {nw: [lat,lon], se: [lat,lon]}. property_id is NOT supported here; use get_property_details.",
+      "enum": [
+       "destination_id",
+       "poi_id",
+       "coordinates",
+       "bbox"
+      ],
+      "type": "string"
+     },
+     "value": {
+      "anyOf": [
+       {
+        "description": "destination_id/poi_id: opaque id string from resolve_destination or discover_destinations_near (e.g. 'dest_590c54056664cf2c60c5c2f6'). Pass it verbatim \u2014 the 'dest_'/'poi_' prefix is accepted. NEVER pass a free-form name like 'Ancona'; the API rejects bad identifiers with 400 invalid_request.",
+        "type": "string"
+       },
+       {
+        "additionalProperties": false,
+        "description": "coordinates: a known point, searched within radius_km.",
+        "properties": {
+         "lat": {
+          "description": "Latitude in decimal degrees.",
+          "maximum": 90,
+          "minimum": -90,
+          "type": "number"
+         },
+         "lon": {
+          "description": "Longitude in decimal degrees.",
+          "maximum": 180,
+          "minimum": -180,
+          "type": "number"
+         },
+         "radius_km": {
+          "description": "Search radius in km (default 5).",
+          "exclusiveMinimum": 0,
+          "type": "number"
+         }
+        },
+        "required": [
+         "lat",
+         "lon"
+        ],
+        "type": "object"
+       },
+       {
+        "additionalProperties": false,
+        "description": "bbox: an explicit map rectangle, given by its north-west and south-east corners.",
+        "properties": {
+         "nw": {
+          "description": "North-west corner as [lat, lon].",
+          "items": {
+           "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+         },
+         "se": {
+          "description": "South-east corner as [lat, lon].",
+          "items": {
+           "type": "number"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+         }
+        },
+        "required": [
+         "nw",
+         "se"
+        ],
+        "type": "object"
+       }
+      ],
+      "description": "Shape depends on type \u2014 see each option below."
+     }
+    },
+    "required": [
+     "type",
+     "value"
+    ],
+    "type": "object"
+   },
+   "page": {
+    "additionalProperties": false,
+    "description": "Pagination. `limit` caps results per page (1-100). To fetch the next page pass `cursor` with the `next_cursor` value from the previous response \u2014 cursors are opaque and are never constructed by hand.",
+    "properties": {
+     "cursor": {
+      "type": "string"
+     },
+     "limit": {
+      "maximum": 100,
+      "minimum": 1,
+      "type": "integer"
+     }
+    },
+    "type": "object"
+   },
+   "sort": {
+    "description": "Result ordering. score_desc (default) is the balanced relevance ranking and suits most requests; price_asc when the user asked for the cheapest; rating_desc when they asked for the best-reviewed; conversion_desc favours what comparable travellers actually booked.",
+    "enum": [
+     "score_desc",
+     "price_asc",
+     "rating_desc",
+     "conversion_desc"
+    ],
+    "type": "string"
+   },
+   "user_country": {
+    "description": "User's country (ISO-3166 alpha-2 uppercase). Drives the booking-link locale (the landing page rendered when the user clicks `web_url`) AND, when `currency` is not set, the pricing currency (US->USD, CA->CAD, euro-area->EUR). Pass the user's own country, not the destination's. Falls back to 'US' when omitted.",
+    "pattern": "^[A-Z]{2}$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "location",
+   "dates",
+   "guests"
+  ],
+  "type": "object"
+ },
+ "name": "search_stays",
+ "outputSchema": {
+  "properties": {
+   "alternatives": {
+    "properties": {
+     "out_of_bounds": {
+      "items": {
+       "properties": {
+        "amenities": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "availability_status": {
+         "description": "Per the dates passed in the request: available = live bookable quotes in offers (price is the curated best); unavailable = BP reported no rooms for these dates (offers=[], price=null); unknown = no dates considered (no price exists without a dated query).",
+         "enum": [
+          "available",
+          "unavailable",
+          "unknown"
+         ],
+         "type": "string"
+        },
+        "brand": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "chain": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "cluster_id": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "dedup_meta": {
+         "properties": {
+          "confidence": {
+           "type": "number"
+          },
+          "last_reconciled": {
+           "type": "string"
+          },
+          "source_listings": {
+           "type": "integer"
+          }
+         },
+         "type": [
+          "object",
+          "null"
+         ]
+        },
+        "description": {
+         "description": "Free-text property description from the canonical source. Only populated when the endpoint path is active (use_bp_single_property_endpoint=True) and dates are present.",
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "features": {
+         "description": "Structured feature/facility tags (e.g. HouseFacilities, PropertyTypes). Populated alongside description when the endpoint path is active.",
+         "items": {
+          "properties": {
+           "code": {
+            "type": "string"
+           },
+           "name": {
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "type": {
+            "type": [
+             "string",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "code"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "id": {
+         "type": "string"
+        },
+        "images": {
+         "items": {
+          "properties": {
+           "caption": {
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "url": {
+            "type": "string"
+           }
+          },
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "location": {
+         "properties": {
+          "address": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "city": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "country": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "lat": {
+           "type": "number"
+          },
+          "lon": {
+           "type": "number"
+          },
+          "neighborhood": {
+           "type": [
+            "string",
+            "null"
+           ]
+          }
+         },
+         "type": "object"
+        },
+        "name": {
+         "type": "string"
+        },
+        "offers": {
+         "items": {
+          "properties": {
+           "amount": {
+            "description": "TOTAL for the requested stay (sum across nights).",
+            "type": "number"
+           },
+           "amount_per_night": {
+            "description": "Per-night rate; multiply by nights to get amount.",
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "breakfast_included": {
+            "type": "boolean"
+           },
+           "currency": {
+            "type": "string"
+           },
+           "deeplink_url": {
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "discount_percentage": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "is_discounted": {
+            "type": "boolean"
+           },
+           "ota": {
+            "type": "string"
+           },
+           "refundable": {
+            "type": "boolean"
+           },
+           "rooms_left": {
+            "minimum": 0,
+            "type": [
+             "integer",
+             "null"
+            ]
+           }
+          },
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "ota_coverage": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "price": {
+         "properties": {
+          "amount": {
+           "type": "number"
+          },
+          "amount_per_night": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "breakfast_included": {
+           "type": "boolean"
+          },
+          "currency": {
+           "type": "string"
+          },
+          "discount_percentage": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "is_discounted": {
+           "type": "boolean"
+          },
+          "ota": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "refundable": {
+           "type": "boolean"
+          }
+         },
+         "type": [
+          "object",
+          "null"
+         ]
+        },
+        "property_type": {
+         "type": "string"
+        },
+        "rating": {
+         "maximum": 5,
+         "minimum": 0,
+         "type": "number"
+        },
+        "rating_count": {
+         "type": [
+          "integer",
+          "null"
+         ]
+        },
+        "reviews_aggregate": {
+         "description": "rating_count = reviews backing the score (OTA aggregate, e.g. 156). comment_count = readable review TEXTS available (e.g. 53), fetchable via reviews_sample/reviews_extended. They differ: most guests rate, fewer write text \u2014 do not conflate them.",
+         "properties": {
+          "comment_count": {
+           "type": [
+            "integer",
+            "null"
+           ]
+          },
+          "distribution_by_ota": {
+           "type": "object"
+          },
+          "rating_count": {
+           "type": "integer"
+          },
+          "score_0_5": {
+           "maximum": 5,
+           "minimum": 0,
+           "type": "number"
+          }
+         },
+         "type": [
+          "object",
+          "null"
+         ]
+        },
+        "reviews_meta": {
+         "description": "Provenance for reviews_sample on property detail: how many review texts were returned vs available, and that the cap is deliberate (token efficiency). null on search or when reviews were not requested.",
+         "properties": {
+          "cap": {
+           "minimum": 0,
+           "type": "integer"
+          },
+          "capped": {
+           "type": "boolean"
+          },
+          "note": {
+           "type": "string"
+          },
+          "returned": {
+           "minimum": 0,
+           "type": "integer"
+          },
+          "total_available": {
+           "minimum": 0,
+           "type": "integer"
+          }
+         },
+         "type": [
+          "object",
+          "null"
+         ]
+        },
+        "reviews_sample": {
+         "items": {
+          "properties": {
+           "connector_name": {
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "date": {
+            "type": "string"
+           },
+           "description": {
+            "type": "string"
+           },
+           "language": {
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "score": {
+            "maximum": 5,
+            "minimum": 0,
+            "type": "number"
+           }
+          },
+          "type": "object"
+         },
+         "type": [
+          "array",
+          "null"
+         ]
+        },
+        "stars": {
+         "type": [
+          "integer",
+          "null"
+         ]
+        },
+        "thumbnail_url": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "web_url": {
+         "type": [
+          "string",
+          "null"
+         ]
+        }
+       },
+       "required": [
+        "id",
+        "name",
+        "property_type",
+        "rating",
+        "location",
+        "ota_coverage"
+       ],
+       "type": "object"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "overbudget": {
+      "items": {
+       "properties": {
+        "amenities": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "availability_status": {
+         "description": "Per the dates passed in the request: available = live bookable quotes in offers (price is the curated best); unavailable = BP reported no rooms for these dates (offers=[], price=null); unknown = no dates considered (no price exists without a dated query).",
+         "enum": [
+          "available",
+          "unavailable",
+          "unknown"
+         ],
+         "type": "string"
+        },
+        "brand": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "chain": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "cluster_id": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "dedup_meta": {
+         "properties": {
+          "confidence": {
+           "type": "number"
+          },
+          "last_reconciled": {
+           "type": "string"
+          },
+          "source_listings": {
+           "type": "integer"
+          }
+         },
+         "type": [
+          "object",
+          "null"
+         ]
+        },
+        "description": {
+         "description": "Free-text property description from the canonical source. Only populated when the endpoint path is active (use_bp_single_property_endpoint=True) and dates are present.",
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "features": {
+         "description": "Structured feature/facility tags (e.g. HouseFacilities, PropertyTypes). Populated alongside description when the endpoint path is active.",
+         "items": {
+          "properties": {
+           "code": {
+            "type": "string"
+           },
+           "name": {
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "type": {
+            "type": [
+             "string",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "code"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "id": {
+         "type": "string"
+        },
+        "images": {
+         "items": {
+          "properties": {
+           "caption": {
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "url": {
+            "type": "string"
+           }
+          },
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "location": {
+         "properties": {
+          "address": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "city": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "country": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "lat": {
+           "type": "number"
+          },
+          "lon": {
+           "type": "number"
+          },
+          "neighborhood": {
+           "type": [
+            "string",
+            "null"
+           ]
+          }
+         },
+         "type": "object"
+        },
+        "name": {
+         "type": "string"
+        },
+        "offers": {
+         "items": {
+          "properties": {
+           "amount": {
+            "description": "TOTAL for the requested stay (sum across nights).",
+            "type": "number"
+           },
+           "amount_per_night": {
+            "description": "Per-night rate; multiply by nights to get amount.",
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "breakfast_included": {
+            "type": "boolean"
+           },
+           "currency": {
+            "type": "string"
+           },
+           "deeplink_url": {
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "discount_percentage": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "is_discounted": {
+            "type": "boolean"
+           },
+           "ota": {
+            "type": "string"
+           },
+           "refundable": {
+            "type": "boolean"
+           },
+           "rooms_left": {
+            "minimum": 0,
+            "type": [
+             "integer",
+             "null"
+            ]
+           }
+          },
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "ota_coverage": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "price": {
+         "properties": {
+          "amount": {
+           "type": "number"
+          },
+          "amount_per_night": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "breakfast_included": {
+           "type": "boolean"
+          },
+          "currency": {
+           "type": "string"
+          },
+          "discount_percentage": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "is_discounted": {
+           "type": "boolean"
+          },
+          "ota": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "refundable": {
+           "type": "boolean"
+          }
+         },
+         "type": [
+          "object",
+          "null"
+         ]
+        },
+        "property_type": {
+         "type": "string"
+        },
+        "rating": {
+         "maximum": 5,
+         "minimum": 0,
+         "type": "number"
+        },
+        "rating_count": {
+         "type": [
+          "integer",
+          "null"
+         ]
+        },
+        "reviews_aggregate": {
+         "description": "rating_count = reviews backing the score (OTA aggregate, e.g. 156). comment_count = readable review TEXTS available (e.g. 53), fetchable via reviews_sample/reviews_extended. They differ: most guests rate, fewer write text \u2014 do not conflate them.",
+         "properties": {
+          "comment_count": {
+           "type": [
+            "integer",
+            "null"
+           ]
+          },
+          "distribution_by_ota": {
+           "type": "object"
+          },
+          "rating_count": {
+           "type": "integer"
+          },
+          "score_0_5": {
+           "maximum": 5,
+           "minimum": 0,
+           "type": "number"
+          }
+         },
+         "type": [
+          "object",
+          "null"
+         ]
+        },
+        "reviews_meta": {
+         "description": "Provenance for reviews_sample on property detail: how many review texts were returned vs available, and that the cap is deliberate (token efficiency). null on search or when reviews were not requested.",
+         "properties": {
+          "cap": {
+           "minimum": 0,
+           "type": "integer"
+          },
+          "capped": {
+           "type": "boolean"
+          },
+          "note": {
+           "type": "string"
+          },
+          "returned": {
+           "minimum": 0,
+           "type": "integer"
+          },
+          "total_available": {
+           "minimum": 0,
+           "type": "integer"
+          }
+         },
+         "type": [
+          "object",
+          "null"
+         ]
+        },
+        "reviews_sample": {
+         "items": {
+          "properties": {
+           "connector_name": {
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "date": {
+            "type": "string"
+           },
+           "description": {
+            "type": "string"
+           },
+           "language": {
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "score": {
+            "maximum": 5,
+            "minimum": 0,
+            "type": "number"
+           }
+          },
+          "type": "object"
+         },
+         "type": [
+          "array",
+          "null"
+         ]
+        },
+        "stars": {
+         "type": [
+          "integer",
+          "null"
+         ]
+        },
+        "thumbnail_url": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "web_url": {
+         "type": [
+          "string",
+          "null"
+         ]
+        }
+       },
+       "required": [
+        "id",
+        "name",
+        "property_type",
+        "rating",
+        "location",
+        "ota_coverage"
+       ],
+       "type": "object"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   },
+   "metadata": {
+    "properties": {
+     "notes": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "otas_queried": {
+      "type": "integer"
+     },
+     "price_as_of": {
+      "type": "string"
+     },
+     "request_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "otas_queried"
+    ],
+    "type": "object"
+   },
+   "page": {
+    "properties": {
+     "next_cursor": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "total_estimate": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "next_cursor",
+     "total_estimate"
+    ],
+    "type": "object"
+   },
+   "results": {
+    "items": {
+     "properties": {
+      "amenities": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "availability_status": {
+       "description": "Per the dates passed in the request: available = live bookable quotes in offers (price is the curated best); unavailable = BP reported no rooms for these dates (offers=[], price=null); unknown = no dates considered (no price exists without a dated query).",
+       "enum": [
+        "available",
+        "unavailable",
+        "unknown"
+       ],
+       "type": "string"
+      },
+      "brand": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "chain": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "cluster_id": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "dedup_meta": {
+       "properties": {
+        "confidence": {
+         "type": "number"
+        },
+        "last_reconciled": {
+         "type": "string"
+        },
+        "source_listings": {
+         "type": "integer"
+        }
+       },
+       "type": [
+        "object",
+        "null"
+       ]
+      },
+      "description": {
+       "description": "Free-text property description from the canonical source. Only populated when the endpoint path is active (use_bp_single_property_endpoint=True) and dates are present.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "features": {
+       "description": "Structured feature/facility tags (e.g. HouseFacilities, PropertyTypes). Populated alongside description when the endpoint path is active.",
+       "items": {
+        "properties": {
+         "code": {
+          "type": "string"
+         },
+         "name": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "type": {
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "code"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "id": {
+       "type": "string"
+      },
+      "images": {
+       "items": {
+        "properties": {
+         "caption": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "url": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "location": {
+       "properties": {
+        "address": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "city": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "country": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "lat": {
+         "type": "number"
+        },
+        "lon": {
+         "type": "number"
+        },
+        "neighborhood": {
+         "type": [
+          "string",
+          "null"
+         ]
+        }
+       },
+       "type": "object"
+      },
+      "name": {
+       "type": "string"
+      },
+      "offers": {
+       "items": {
+        "properties": {
+         "amount": {
+          "description": "TOTAL for the requested stay (sum across nights).",
+          "type": "number"
+         },
+         "amount_per_night": {
+          "description": "Per-night rate; multiply by nights to get amount.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "breakfast_included": {
+          "type": "boolean"
+         },
+         "currency": {
+          "type": "string"
+         },
+         "deeplink_url": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "discount_percentage": {
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "is_discounted": {
+          "type": "boolean"
+         },
+         "ota": {
+          "type": "string"
+         },
+         "refundable": {
+          "type": "boolean"
+         },
+         "rooms_left": {
+          "minimum": 0,
+          "type": [
+           "integer",
+           "null"
+          ]
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "ota_coverage": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "price": {
+       "properties": {
+        "amount": {
+         "type": "number"
+        },
+        "amount_per_night": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "breakfast_included": {
+         "type": "boolean"
+        },
+        "currency": {
+         "type": "string"
+        },
+        "discount_percentage": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "is_discounted": {
+         "type": "boolean"
+        },
+        "ota": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "refundable": {
+         "type": "boolean"
+        }
+       },
+       "type": [
+        "object",
+        "null"
+       ]
+      },
+      "property_type": {
+       "type": "string"
+      },
+      "rating": {
+       "maximum": 5,
+       "minimum": 0,
+       "type": "number"
+      },
+      "rating_count": {
+       "type": [
+        "integer",
+        "null"
+       ]
+      },
+      "reviews_aggregate": {
+       "description": "rating_count = reviews backing the score (OTA aggregate, e.g. 156). comment_count = readable review TEXTS available (e.g. 53), fetchable via reviews_sample/reviews_extended. They differ: most guests rate, fewer write text \u2014 do not conflate them.",
+       "properties": {
+        "comment_count": {
+         "type": [
+          "integer",
+          "null"
+         ]
+        },
+        "distribution_by_ota": {
+         "type": "object"
+        },
+        "rating_count": {
+         "type": "integer"
+        },
+        "score_0_5": {
+         "maximum": 5,
+         "minimum": 0,
+         "type": "number"
+        }
+       },
+       "type": [
+        "object",
+        "null"
+       ]
+      },
+      "reviews_meta": {
+       "description": "Provenance for reviews_sample on property detail: how many review texts were returned vs available, and that the cap is deliberate (token efficiency). null on search or when reviews were not requested.",
+       "properties": {
+        "cap": {
+         "minimum": 0,
+         "type": "integer"
+        },
+        "capped": {
+         "type": "boolean"
+        },
+        "note": {
+         "type": "string"
+        },
+        "returned": {
+         "minimum": 0,
+         "type": "integer"
+        },
+        "total_available": {
+         "minimum": 0,
+         "type": "integer"
+        }
+       },
+       "type": [
+        "object",
+        "null"
+       ]
+      },
+      "reviews_sample": {
+       "items": {
+        "properties": {
+         "connector_name": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "date": {
+          "type": "string"
+         },
+         "description": {
+          "type": "string"
+         },
+         "language": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "score": {
+          "maximum": 5,
+          "minimum": 0,
+          "type": "number"
+         }
+        },
+        "type": "object"
+       },
+       "type": [
+        "array",
+        "null"
+       ]
+      },
+      "stars": {
+       "type": [
+        "integer",
+        "null"
+       ]
+      },
+      "thumbnail_url": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "web_url": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "id",
+      "name",
+      "property_type",
+      "rating",
+      "location",
+      "ota_coverage"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "results",
+   "page",
+   "metadata"
+  ],
+  "type": "object"
+ },
+ "title": "Search accommodation \u2014 compare offers across operators"
+}

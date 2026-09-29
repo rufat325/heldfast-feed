@@ -1,8 +1,8 @@
 # MCP server tool changes
 
-Last change observed 2026-09-29T10:41:37+00:00. Built by `research/feed/watch.py` on the `main` branch. Watching 9712 npm servers from the official MCP registry (154 daily, the rest weekly) and 19746 hosted endpoints (daily).
+Last change observed 2026-09-29T11:35:50+00:00. Built by `research/feed/watch.py` on the `main` branch. Watching 9712 npm servers from the official MCP registry (154 daily, the rest weekly) and 19746 hosted endpoints (daily).
 
-13130 changes to a tool definition: 382 npm releases (136 observed live, 246 from the [churn study](https://github.com/rufat325/heldfast/blob/main/docs/CHURN.md)) and 12748 readings of hosted servers that found their tools changed; 70 where `heldfast wrap --drift graded` would refuse something. [Per operator, and by kind of change](#per-operator).
+13162 changes to a tool definition: 383 npm releases (137 observed live, 246 from the [churn study](https://github.com/rufat325/heldfast/blob/main/docs/CHURN.md)) and 12779 readings of hosted servers that found their tools changed; 72 where `heldfast wrap --drift graded` would refuse something. [Per operator, and by kind of change](#per-operator).
 
 Licence: this project's own data (measurements, dates, grades, counts, digests, checkpoints) is [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/). The tool definitions recorded here are the servers' own text and remain their authors'; to ask for something to be removed, open an issue.
 
@@ -14,7 +14,39 @@ Each day's commit is anchored in Bitcoin with OpenTimestamps: [checkpoints/](che
 
 | published | server | release | tools | grade |
 |---|---|---|---|---|
+| 2026-09-29 | `remote/se.sistaminuten/travel-search` | 2026-09-29T104139359764 -> 2026-09-29T113551744770 | 1 changed | quiet |
+| 2026-09-29 | `remote/za.co.simcloud/simcloud` | 2026-09-23T160751503559 -> 2026-09-29T113510770718 | 1 changed | quiet |
+| 2026-09-29 | `remote/fi.akkilahdot/travel-search` | 2026-09-29T104015178677 -> 2026-09-29T113456639943 | 1 changed | quiet |
+| 2026-09-29 | `remote/no.restplass/travel-search` | 2026-09-29T103957856704 -> 2026-09-29T113446824575 | 1 changed | quiet |
+| 2026-09-29 | `remote/io.github.Schoasch/backtesting-arena` | 2026-09-28T055533461379 -> 2026-09-29T113434075189 | 4 changed | quiet |
+| 2026-09-29 | `remote/dk.afbudsrejser/travel-search` | 2026-09-29T103928230868 -> 2026-09-29T113428746182 | 1 changed | quiet |
+| 2026-09-29 | `remote/io.github.socialloopai/socialloop-mcp.1` | 2026-09-29T103919941929 -> 2026-09-29T113414037706 | 1 changed | quiet |
+| 2026-09-29 | `remote/io.github.rccola990-cloud/x402-agent-store` | 2026-09-29T101223131313 -> 2026-09-29T113337292549 | 15 changed | review |
+| 2026-09-29 | `remote/com.remoshift/jobs` | 2026-09-29T101802364283 -> 2026-09-29T113332718299 | 1 changed | quiet |
+| 2026-09-29 | `remote/net.clickwise/product-catalog` | 2026-09-28T142428179211 -> 2026-09-29T113303117731 | 5 added | quiet |
+| 2026-09-29 | `remote/es.cesaryague/paki-curator` | 2026-09-29T101118147251 -> 2026-09-29T113236137946 | 1 changed | quiet |
+| 2026-09-29 | `remote/uk.ucode/sms` | 2026-09-23T160804723491 -> 2026-09-29T113211937845 | 2 changed, 8 added | quiet |
+| 2026-09-29 | `remote/com.shipstatic/mcp` | 2026-09-28T142329433120 -> 2026-09-29T113209248163 | 1 changed | quiet |
+| 2026-09-29 | `remote/com.sednasystem/genesis` | 2026-09-29T101612415656 -> 2026-09-29T113206668064 | 1 changed | quiet |
+| 2026-09-29 | `remote/com.bluepillow/hotels` | 2026-09-23T160519658734 -> 2026-09-29T113119146800 | 1 changed | quiet |
+| 2026-09-29 | `remote/io.insourcia/insourcia` | 2026-09-28T072906166501 -> 2026-09-29T113107916818 | 1 changed | quiet |
+| 2026-09-29 | `remote/io.github.kylehawke-stack/locationlists` | 2026-09-29T072716087030 -> 2026-09-29T113049878992 | 5 changed | quiet |
+| 2026-09-29 | `remote/io.cortexplus/cortexplus` | 2026-09-28T072833207520 -> 2026-09-29T113039625057 | 1 changed | quiet |
+| 2026-09-29 | `remote/ai.humanproblems/humanproblems` | 2026-09-28T170329059926 -> 2026-09-29T113016604081 | 5 changed, 1 added | quiet |
+| 2026-09-29 | `remote/com.greenlitbooks/catalog` | 2026-09-23T160435538148 -> 2026-09-29T113004880866 | 9 changed, 2 added (every tool) | quiet |
+| 2026-09-29 | `remote/io.github.Youjg25/maison-de-talents` | 2026-09-23T160625797629 -> 2026-09-29T113003491844 | 3 changed (every tool) | quiet |
+| 2026-09-29 | `remote/cz.suorigo.konfigurator/server` | 2026-09-24T202222607360 -> 2026-09-29T112955900903 | 2 changed | quiet |
+| 2026-09-29 | `remote/io.github.tettertotter/fundinglandscape` | 2026-09-29T100608892016 -> 2026-09-29T112822000464 | 2 changed | quiet |
+| 2026-09-29 | `remote/cloud.dchub/mcp-server` | 2026-09-29T100540237742 -> 2026-09-29T112749193134 | 1 changed | quiet |
+| 2026-09-29 | `remote/xyz.getvia.app/via-network` | 2026-09-29T100623534894 -> 2026-09-29T112637678309 | 1 changed | quiet |
+| 2026-09-29 | `remote/io.github.gosadu/loophole-tape` | 2026-09-29T100427705309 -> 2026-09-29T112453221981 | 32 changed, 1 added (every tool) | review |
+| 2026-09-29 | `remote/com.hookdetector/hookdetector` | 2026-09-28T140938766409 -> 2026-09-29T112448428901 | 2 changed | quiet |
+| 2026-09-29 | `remote/io.github.TWolf01/agentsgather` | 2026-09-28T140854251631 -> 2026-09-29T112425200257 | 13 added | quiet |
+| 2026-09-29 | `remote/app.agentbit/mcp` | 2026-09-29T102850938294 -> 2026-09-29T112421201032 | 1 changed | quiet |
+| 2026-09-29 | `remote/io.github.belegante-byte/aetherx-mcp` | 2026-09-29T102753043115 -> 2026-09-29T112310726619 | 5 changed, 5 added | quiet |
+| 2026-09-29 | `remote/at.aamio/aamio` | 2026-09-26T113246566969 -> 2026-09-29T112301105753 | 1 changed | quiet |
 | 2026-09-29 | `remote/se.sistaminuten/travel-search` | 2026-09-29T101250350114 -> 2026-09-29T104139359764 | 1 changed | quiet |
+| 2026-09-29 | `@shipstatic/mcp` | 2.3.0 -> 2.3.1 | 1 changed | quiet |
 | 2026-09-29 | `remote/fi.akkilahdot/travel-search` | 2026-09-29T101949386626 -> 2026-09-29T104015178677 | 1 changed | quiet |
 | 2026-09-29 | `remote/no.restplass/travel-search` | 2026-09-29T101335944951 -> 2026-09-29T103957856704 | 1 changed | quiet |
 | 2026-09-29 | `remote/dk.afbudsrejser/travel-search` | 2026-09-29T101311693931 -> 2026-09-29T103928230868 | 1 changed | quiet |
@@ -42,42 +74,10 @@ Each day's commit is anchored in Bitcoin with OpenTimestamps: [checkpoints/](che
 | 2026-09-29 | `remote/ai.switchapp/switch` | 2026-09-29T061633442025 -> 2026-09-29T101620640090 | 1 changed, 1 added | quiet |
 | 2026-09-29 | `remote/com.sednasystem/genesis` | 2026-09-29T073448599010 -> 2026-09-29T101612415656 | 1 changed | quiet |
 | 2026-09-29 | `remote/travel.ourway/camino-de-santiago` | 2026-09-23T162717210598 -> 2026-09-29T101554567317 | 1 changed | quiet |
-| 2026-09-29 | `remote/com.handsforagents/hands` | 2026-09-29T003554078870 -> 2026-09-29T101509366088 | 4 changed | quiet |
-| 2026-09-29 | `remote/io.github.digitalmentes7-maker/gobuy-product-trust` | 2026-09-29T003553473908 -> 2026-09-29T101504403041 | 1 added | quiet |
-| 2026-09-29 | `remote/no.restplass/travel-search` | 2026-09-29T083035637477 -> 2026-09-29T101335944951 | 1 changed | quiet |
-| 2026-09-29 | `remote/dk.afbudsrejser/travel-search` | 2026-09-29T083015874935 -> 2026-09-29T101311693931 | 1 changed | quiet |
-| 2026-09-29 | `remote/se.sistaminuten/travel-search` | 2026-09-29T083025377391 -> 2026-09-29T101250350114 | 1 changed | quiet |
-| 2026-09-29 | `remote/io.github.rccola990-cloud/x402-agent-store` | 2026-09-29T073400857436 -> 2026-09-29T101223131313 | 15 changed | review |
-| 2026-09-29 | `remote/xyz.signomy/civitae` | 2026-09-29T082920984536 -> 2026-09-29T101212674002 | 1 changed, 2 added | quiet |
-| 2026-09-29 | `remote/games.moddable.tools/moddable-games-tools` | 2026-09-29T073314905743 -> 2026-09-29T101147876438 | 1 changed | quiet |
-| 2026-09-29 | `remote/io.github.steffanricardo/the-dutch-directory` | 2026-09-29T073306620345 -> 2026-09-29T101139866576 | 1 added | quiet |
-| 2026-09-29 | `remote/io.github.Project-Gifted1/pg1-threat-intel` | 2026-09-27T124817890221 -> 2026-09-29T101121400254 | 7 changed | quiet |
-| 2026-09-29 | `remote/es.cesaryague/paki-curator` | 2026-09-29T082825602947 -> 2026-09-29T101118147251 | 1 changed | quiet |
-| 2026-09-29 | `remote/site.chatgpt.lorh89.the-knowledge-commons/evidence` | 2026-09-28T142250130796 -> 2026-09-29T101108748558 | 1 added | quiet |
-| 2026-09-29 | `remote/com.talval/research` | 2026-09-29T082958904772 -> 2026-09-29T101103472496 | 2 changed | quiet |
-| 2026-09-29 | `remote/app.saber.mcp/saber` | 2026-09-23T162803834025 -> 2026-09-29T101011640007 | 2 changed | quiet |
-| 2026-09-29 | `remote/dev.benys/the-pit` | 2026-09-28T142119993154 -> 2026-09-29T101005423641 | 2 changed | quiet |
-| 2026-09-29 | `remote/cheap.doc/mcp` | 2026-09-28T141831679171 -> 2026-09-29T100923036525 | 3 added | quiet |
-| 2026-09-29 | `remote/io.github.toshihiroshishido/revenuescope-mcp` | 2026-09-28T104014835257 -> 2026-09-29T100911395934 | 1 changed | quiet |
-| 2026-09-29 | `remote/co.marketmayhem/mcp` | 2026-09-28T170317566620 -> 2026-09-29T100841016284 | 1 changed | quiet |
-| 2026-09-29 | `remote/com.movingplace/mcp` | 2026-09-29T082654798181 -> 2026-09-29T100829159435 | 16 removed | quiet |
-| 2026-09-29 | `remote/estate.guthmann/mcp` | 2026-09-23T160714207240 -> 2026-09-29T100829431533 | 1 changed | quiet |
-| 2026-09-29 | `remote/co.fastgpu/fastgpu` | 2026-09-28T072553827272 -> 2026-09-29T100827664981 | 1 changed | quiet |
-| 2026-09-29 | `remote/app.apiguru/amazon-data` | 2026-09-27T134852961420 -> 2026-09-29T100750759506 | 4 changed | quiet |
-| 2026-09-29 | `remote/com.focxle/b2b-agent-negotiation-governance` | 2026-09-28T141551264622 -> 2026-09-29T100652391674 | 1 changed | quiet |
-| 2026-09-29 | `remote/xyz.getvia.app/via-network` | 2026-09-29T072622785567 -> 2026-09-29T100623534894 | 1 changed | quiet |
-| 2026-09-29 | `remote/io.github.whiteknightonhorse/apibase` | 2026-09-29T082245665677 -> 2026-09-29T100609836687 | 4 added | quiet |
-| 2026-09-29 | `remote/io.github.tettertotter/fundinglandscape` | 2026-09-29T082342730881 -> 2026-09-29T100608892016 | 2 changed | quiet |
-| 2026-09-29 | `remote/com.focxle/afos` | 2026-09-27T065616767145 -> 2026-09-29T100606310295 | 1 changed | quiet |
-| 2026-09-29 | `remote/de.nomado24/jobs` | 2026-09-23T162250587934 -> 2026-09-29T100547898691 | 1 changed | quiet |
-| 2026-09-29 | `remote/io.github.JunHwan-Kwon/deepbom` | 2026-09-29T072636297804 -> 2026-09-29T100539904269 | 3 added | quiet |
-| 2026-09-29 | `remote/cloud.dchub/mcp-server` | 2026-09-29T061615077258 -> 2026-09-29T100540237742 | 1 changed | quiet |
-| 2026-09-29 | `remote/io.github.WellApp-ai/well-mcp` | 2026-09-29T003542328438 -> 2026-09-29T100510313102 | 4 changed | quiet |
-| 2026-09-29 | `remote/net.aginx/aginxbrowser` | 2026-09-27T232540884284 -> 2026-09-29T100508795249 | 1 added | quiet |
 
 ## Per operator
 
-A few operators account for most of the changes, and many changes move only a number or an order: 9808 substantive, 3157 that changed only numbers (a catalogue counter ticking, a date), 165 that only reordered a list. A number can still matter -- a price is one -- so this sorts the count, it excuses nothing. Grouped by hosted servers by registrable domain under the Public Suffix List (2026-09-24_13-26-36_UTC), private section included; npm servers by package. Approximate: it merges different customers of one host the list does not name, and splits an operator who uses several domains. Every event: [stats.json](stats.json).
+A few operators account for most of the changes, and many changes move only a number or an order: 9834 substantive, 3159 that changed only numbers (a catalogue counter ticking, a date), 169 that only reordered a list. A number can still matter -- a price is one -- so this sorts the count, it excuses nothing. Grouped by hosted servers by registrable domain under the Public Suffix List (2026-09-24_13-26-36_UTC), private section included; npm servers by package. Approximate: it merges different customers of one host the list does not name, and splits an operator who uses several domains. Every event: [stats.json](stats.json).
 
 | operator | changes | substantive | numbers only | reordered only |
 |---|---|---|---|---|
@@ -86,11 +86,11 @@ A few operators account for most of the changes, and many changes move only a nu
 | `a2awire.com` | 424 | 424 | 0 | 0 |
 | `caseyjhand.com` | 56 | 56 | 0 | 0 |
 | `daedalmap.com` | 51 | 51 | 0 | 0 |
-| `sistaminuten.se` | 42 | 2 | 0 | 40 |
-| `afbudsrejser.dk` | 41 | 2 | 0 | 39 |
-| `akkilahdot.fi` | 41 | 2 | 0 | 39 |
-| `restplass.no` | 41 | 2 | 0 | 39 |
-| `socialloop.ai` | 41 | 41 | 0 | 0 |
+| `sistaminuten.se` | 43 | 2 | 0 | 41 |
+| `afbudsrejser.dk` | 42 | 2 | 0 | 40 |
+| `akkilahdot.fi` | 42 | 2 | 0 | 40 |
+| `restplass.no` | 42 | 2 | 0 | 40 |
+| `socialloop.ai` | 42 | 42 | 0 | 0 |
 | `fastmcp.app` | 29 | 29 | 0 | 0 |
 | `dayze.com` | 28 | 28 | 0 | 0 |
-| 1266 other operators | 2972 | 2782 | 182 | 8 |
+| 1274 other operators | 2999 | 2807 | 184 | 8 |
