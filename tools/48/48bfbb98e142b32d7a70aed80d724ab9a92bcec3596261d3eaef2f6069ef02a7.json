@@ -1,0 +1,489 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": false,
+  "title": "Write a canvas"
+ },
+ "description": "Write one canvas: create a board, or replace the arrangement of a board that already exists.\n\nWrites an ARRANGEMENT \u2014 the blocks a canvas holds and where they sit. It never computes a figure and never stores one: a figure block names a data feed and stores the question rather than the answer, and a note carries its own words.\n\nCREATE \u2014 omit canvas_view_id. name, layout_mode and tiles are required, and layout_mode is \"free\": every board is drawn on the infinite board.\n\nUPDATE \u2014 pass canvas_view_id AND the version well_show_canvas returned for it. The write is compare-and-set on that version: if the canvas moved since you read it, the call is refused and comes back carrying the canvas as stored now, so you re-apply your one change instead of overwriting somebody else's. Never guess a version and never resend a rejected one \u2014 re-read with well_show_canvas first.\n\nSTORE CARD ANSWERS \u2014 pass canvas_view_id, the version you hold, and store_card_answers, and nothing else. Each entry names a block by tile_id and a card: \"exemptions\" or \"cash_scope\". The server reads the reader's answer to that card in this conversation, and every option that card offered. It writes both into the block's binding.scope and changes no other key of any block. The write is compare-and-set on the version and returns the new version. It is refused when the reader has not answered that card in this conversation, or when a newer card is on screen than the one the reader answered.\n\nTILES \u2014 place them yourself. h is whole cells, and x, y and w may carry a fraction of a cell, to a hundredth; send back the position and width well_show_canvas returned. A figure block may send a size instead of w and h: \"S\" (4 \u00d7 3), \"M\" (7 \u00d7 6), \"L\" (11 \u00d7 8), the smallest rectangle that draws that size on the board a conversation draws. S draws the figure, M and L its chart. When the user asks for a size, send it rather than guessing a rectangle. A canvas takes any non-overlapping layout at or above each block's minimum size, negative coordinates included. A layout that is not already legal is REPORTED, never repaired \u2014 nothing here moves a block whose position you stated. Use the geometry helpers in @wellapp/shared/canvas-tiles to compute the rectangles. Every block that names a feed is type \"figure\" with mark null: the feed decides which chart it draws. A figure block stores no params. Params sent on one are dropped, not stored, because a stored figure would stop being true the day after it is written, and the board is measured again each time it is opened. A note (type \"text\") carries its words as params { content }.\n\nDo NOT use this to answer a question about a figure (ask well_render_cash_position, well_render_burn, well_render_runway), to read a board (well_show_canvas), or to change a canvas's origin template \u2014 create a new canvas for that.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "canvas_view_id": {
+    "description": "The canvas to write. Omit to create one; pass it with `version` to change one that exists.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   },
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "idempotency_key": {
+    "description": "Optional client-supplied key. A retried write with the same key returns the original result instead of re-applying the operation.",
+    "maxLength": 255,
+    "minLength": 1,
+    "type": "string"
+   },
+   "layout_mode": {
+    "const": "free",
+    "description": "Create only: \"free\", which places blocks anywhere on the infinite board.",
+    "type": "string"
+   },
+   "name": {
+    "description": "The canvas's label. Required on create.",
+    "type": "string"
+   },
+   "origin_template_id": {
+    "anyOf": [
+     {
+      "enum": [
+       "investor-report"
+      ],
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Create only: which template this canvas came from. Provenance, not identity."
+   },
+   "parameters": {
+    "additionalProperties": {},
+    "description": "Canvas-wide values stored beside the blocks. No block reads them: what a block asks its feed is its own `binding`, and a window named here reaches nothing.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "store_card_answers": {
+    "description": "Update only, with no tiles, name or parameters: the blocks that took a card answer the reader gave in this conversation, and the card each one took. The server writes the answer and the options that card offered into each block's binding.scope.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "card": {
+       "description": "The choice card the reader answered.",
+       "enum": [
+        "exemptions",
+        "cash_scope"
+       ],
+       "type": "string"
+      },
+      "tile_id": {
+       "description": "The block that took the reader's answer.",
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "required": [
+      "tile_id",
+      "card"
+     ],
+     "type": "object"
+    },
+    "maxItems": 120,
+    "minItems": 1,
+    "type": "array"
+   },
+   "tiles": {
+    "description": "The blocks the canvas holds, in full. Required on create; on update it REPLACES the stored set.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "binding": {
+       "anyOf": [
+        {
+         "additionalProperties": {},
+         "properties": {
+          "period": {
+           "description": "The window this block reads. Omit it for a block that reads as of now; a \"mrr\", \"runway\" or \"cash-forecast\" block takes no period, and a \"cost-structure\" block takes one whole month, first day to last day.",
+           "properties": {
+            "from": {
+             "description": "First day of the window, YYYY-MM-DD.",
+             "type": "string"
+            },
+            "to": {
+             "description": "Last day of the window, inclusive, YYYY-MM-DD.",
+             "type": "string"
+            }
+           },
+           "required": [
+            "from",
+            "to"
+           ],
+           "type": "object"
+          },
+          "scope": {
+           "additionalProperties": {},
+           "description": "The reader's answers to this block's choice cards, each beside the options its card offered, so a later run of the block reuses them. Never a figure. Send it back as well_show_canvas returned it, or leave it out: a block that keeps its tile_id and its feed keeps the answers it holds. A new answer is stored with store_card_answers, not written here.",
+           "properties": {
+            "counted_account_types": {
+             "description": "The account types the reader counted as cash on the cash-scope card.",
+             "items": {
+              "maxLength": 200,
+              "type": "string"
+             },
+             "maxItems": 200,
+             "type": "array"
+            },
+            "exempt_categories": {
+             "description": "The category keys the reader exempted from burn on the exemption card.",
+             "items": {
+              "maxLength": 200,
+              "type": "string"
+             },
+             "maxItems": 200,
+             "type": "array"
+            },
+            "offered_account_types": {
+             "description": "Every account type that card offered when the reader answered.",
+             "items": {
+              "maxLength": 200,
+              "type": "string"
+             },
+             "maxItems": 200,
+             "type": "array"
+            },
+            "offered_categories": {
+             "description": "Every category key that card offered when the reader answered.",
+             "items": {
+              "maxLength": 200,
+              "type": "string"
+             },
+             "maxItems": 200,
+             "type": "array"
+            }
+           },
+           "type": "object"
+          }
+         },
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "What this block asks its feed for. This is what tells two blocks on the same feed apart, so a board showing July burn beside August burn carries a different binding on each."
+      },
+      "layout": {
+       "description": "The block's rectangle in cells: top-left corner and spans. h is whole cells; x, y and w may carry a fraction of a cell, to a hundredth. w and h come from `size` when the block sends one, and are required otherwise.",
+       "properties": {
+        "h": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "w": {
+         "exclusiveMinimum": 0,
+         "multipleOf": 0.01,
+         "type": "number"
+        },
+        "x": {
+         "multipleOf": 0.01,
+         "type": "number"
+        },
+        "y": {
+         "multipleOf": 0.01,
+         "type": "number"
+        }
+       },
+       "required": [
+        "x",
+        "y"
+       ],
+       "type": "object"
+      },
+      "mark": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "null. A figure block's chart comes from its feed, and a mark sent on one is dropped; a note draws no mark."
+      },
+      "params": {
+       "additionalProperties": {},
+       "description": "A note's words, as { content }. Send nothing on a figure block: its figures are measured when the board is opened, and params sent on one are dropped.",
+       "propertyNames": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "size": {
+       "description": "A figure block's size: \"S\" is 4 \u00d7 3, \"M\" is 7 \u00d7 6, \"L\" is 11 \u00d7 8. S draws the figure, M and L its chart. The write takes the block's w and h from it; a w or h you also send wins.",
+       "enum": [
+        "S",
+        "M",
+        "L"
+       ],
+       "type": "string"
+      },
+      "source": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "The data feed this block draws (\"cash-position\", \"avg-burn\", \"mrr\", \"runway\", \"cost-structure\", \"cash-forecast\", \"cash-flow-waterfall\"). Required on a figure block and refused on a note."
+      },
+      "tile_id": {
+       "description": "Stable id for this block, unique within the canvas.",
+       "minLength": 1,
+       "type": "string"
+      },
+      "title": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Label override. null keeps the renderer's default."
+      },
+      "type": {
+       "description": "\"figure\" for every block that names a feed; \"text\" for a note. \"kpi\", \"composition\", \"trend\", \"flow-waterfall\" are older names for a figure block and are stored as \"figure\".",
+       "enum": [
+        "figure",
+        "kpi",
+        "composition",
+        "trend",
+        "flow-waterfall",
+        "text"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "tile_id",
+      "type",
+      "layout"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "version": {
+    "description": "The version well_show_canvas returned. Required when canvas_view_id is set; refused without it.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several \u2014 a write lands in exactly one workspace and this call would not say which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "well_upsert_canvas",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "canvas_view_id": {
+    "type": "string"
+   },
+   "card": {
+    "enum": [
+     "exemptions",
+     "cash_scope"
+    ],
+    "type": "string"
+   },
+   "conflict": {
+    "type": "boolean"
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "created": {
+    "type": "boolean"
+   },
+   "error": {
+    "type": "string"
+   },
+   "grid_columns": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "layout_mode": {
+    "type": "string"
+   },
+   "name": {
+    "type": "string"
+   },
+   "origin_template_id": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "parameters": {
+    "additionalProperties": {},
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "refusal": {
+    "enum": [
+     "no_conversation",
+     "no_answer",
+     "card_unanswered",
+     "other_workspace",
+     "unstorable_answer"
+    ],
+    "type": "string"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "tiles": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "binding": {
+       "anyOf": [
+        {
+         "additionalProperties": {},
+         "propertyNames": {
+          "type": "string"
+         },
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "layout": {
+       "additionalProperties": false,
+       "properties": {
+        "h": {
+         "type": "number"
+        },
+        "w": {
+         "type": "number"
+        },
+        "x": {
+         "type": "number"
+        },
+        "y": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "x",
+        "y",
+        "w",
+        "h"
+       ],
+       "type": "object"
+      },
+      "mark": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "params": {
+       "additionalProperties": {},
+       "propertyNames": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "source": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "tile_id": {
+       "type": "string"
+      },
+      "title": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "type": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "tile_id",
+      "type",
+      "source",
+      "mark",
+      "title",
+      "binding",
+      "params",
+      "layout"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "version": {
+    "type": "number"
+   }
+  },
+  "required": [
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Write a canvas"
+}

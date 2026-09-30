@@ -1,0 +1,493 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Get session digest"
+ },
+ "description": "Get everything a returning person's first answer needs, in one call: what happened in the workspace since they last looked, where the workspace stands now, and the Well skills that can take it forward.\n\nWhen the person asks what happened since last time, asks to be caught up, or opens a session, do not call this first: load the `signing-back` skill with well_get_skill and follow it. That procedure greets, reads this digest, and proposes the next steps; calling this tool alone skips the greeting and the proposals. Call this tool directly only when a loaded Well skill says to, or when the person asks for the raw counts and nothing else.\n\nReturns `records` (one entry per record type with its created / updated / deleted counts and the connectors those creations came from), `errors` (the pipeline failures worth acting on), `skills_run` (the Well skills this person already ran recently, so you do not propose one they just finished), and `boundary` + `since_at` saying where the window starts. `is_first_session` true means there is no earlier moment to report from: greet the person and skip the recap. `truncated` true means the window stopped at 5000 events and the counts cover part of the tail only.\n\nAlso returns `situation`, the state behind the recap, so no follow-up read is needed: `connectors` (the tools this workspace connected, each with its `connection_status` and `last_successful_sync_at`, beside `connected_count`; the size of Well's catalog is not carried, because it is never a figure to tell the person), `open_period` (the month Well opens the close on, with its `label`, `is_complete` and `selectable`), and `missing_invoices` (that month's `row_count` of counterparties with settled spend and no invoice, plus its `hints`). Each part is null when its read refused or had nothing to read. A null says the part is UNKNOWN: never report it as an empty connector list, a workspace with no open month, or a month owing nothing.\n\nAnd `skills`: the whole Well skill roster, one line per skill, so a step a click names is loaded with well_get_skill rather than searched for again. The entry of each skill in `suggested_steps` carries the full description that well_search_skill returns, with its quoted utterances. `roster_readable` false says the roster could not be read at all, so `skills` is empty because nothing loaded: propose no next step in that turn, because every slug would be invented.\n\nAnd `suggested_steps`: the five next steps Well ranked for this workspace, each a `skill` from the roster and the `reason` it ranks there. The rubric runs on the server: open gaps first (no bank, a month owing invoices, no accounting tool, a stale sync), then the open month's close, then the analysis skills, and never a skill served in the last day. Hand these five to well_propose_next_steps in this order and rank nothing yourself. The sentence each one is offered as is yours to write, in the language the person is using, from that skill's own quoted utterances in `skills` and the figures above. When the list is empty, nothing was offerable: call no render tool and write no five of your own, say so in one line.\n\nPass `mark: true` to advance this person's read cursor to the end of the window, so the next digest starts where this one ended. That cursor is shared with the app, so marking here also clears what the app shows as unread. Pass `mark: false` (or omit it) to inspect the digest without moving anything.\n\nThe figures are computed by Well. State them as returned: do not re-count, round, or total them yourself.\n\nWhen the token authorizes one workspace, call this directly \u2014 no other tool call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "mark": {
+    "description": "Advance this person's read cursor to the end of the window, so the next digest starts where this one ended. Pass true when you are about to report the digest to the person, false when you are only inspecting it.",
+    "type": "boolean"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several: this read reports one workspace's own figures and will not choose which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "well_get_session_digest",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "boundary": {
+    "anyOf": [
+     {
+      "enum": [
+       "watermark",
+       "previous_session",
+       "first_session"
+      ],
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Where the window starts: the person's read cursor, their previous sign-in, or neither. Null on a refusal."
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "error": {
+    "type": "string"
+   },
+   "errors": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "count": {
+       "type": "number"
+      },
+      "label": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "label",
+      "count"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "is_first_session": {
+    "type": "boolean"
+   },
+   "reason": {
+    "anyOf": [
+     {
+      "enum": [
+       "no_request_context",
+       "no_person",
+       "no_workspace",
+       "digest_unreadable"
+      ],
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "records": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "created": {
+       "type": "number"
+      },
+      "deleted": {
+       "type": "number"
+      },
+      "record_type": {
+       "type": "string"
+      },
+      "sources": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "created": {
+          "type": "number"
+         },
+         "provider_name": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "provider_name",
+         "created"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "updated": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "record_type",
+      "created",
+      "updated",
+      "deleted",
+      "sources"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "roster_readable": {
+    "description": "False when the roster could not be read at all, so `skills` is empty because nothing was readable rather than because the build ships no skill. Propose no next step on false: every slug would be invented and refused.",
+    "type": "boolean"
+   },
+   "since_at": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "The instant the window starts from, set only when a previous sign-in bounded it."
+   },
+   "since_at_label": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "The same instant written in the workspace's own time zone, such as \"Tuesday 8 September at 09:50\", ready to quote in the greeting."
+   },
+   "situation": {
+    "additionalProperties": false,
+    "description": "Where the workspace stands now: its connected tools, its open month, and what that month still owes.",
+    "properties": {
+     "connectors": {
+      "anyOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "connected": {
+          "description": "The tools this workspace has connected, read from its own connection rows. A row still waiting on its handshake, and one torn down, are not carried.",
+          "items": {
+           "additionalProperties": false,
+           "properties": {
+            "connection_status": {
+             "anyOf": [
+              {
+               "enum": [
+                "enabled",
+                "processing",
+                "error",
+                "need_reconnect",
+                "to_configure",
+                "disabled"
+               ],
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "is_connected": {
+             "type": "boolean"
+            },
+            "kinds": {
+             "description": "The data domains this tool serves (bank, accounting, invoicing), as the connect card classifies it.",
+             "items": {
+              "enum": [
+               "bank",
+               "accounting",
+               "invoicing"
+              ],
+              "type": "string"
+             },
+             "type": "array"
+            },
+            "last_successful_sync_at": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "name": {
+             "type": "string"
+            }
+           },
+           "required": [
+            "name",
+            "kinds",
+            "is_connected",
+            "connection_status",
+            "last_successful_sync_at"
+           ],
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "connected_count": {
+          "description": "Connected tools, which is the length of `connected`.",
+          "type": "number"
+         },
+         "has_ai_client": {
+          "description": "Whether at least one AI app (Claude, Codex, the Well CLI and the like) is connected to Well over MCP. AI apps are not listed in `connected`.",
+          "type": "boolean"
+         }
+        },
+        "required": [
+         "connected",
+         "connected_count",
+         "has_ai_client"
+        ],
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Null when the connector read refused, which is not a claim that nothing is connected."
+     },
+     "missing_invoices": {
+      "anyOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "hints": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "row_count": {
+          "description": "Counterparties with settled spend and no invoice, in the open period.",
+          "type": "number"
+         }
+        },
+        "required": [
+         "row_count",
+         "hints"
+        ],
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Null when no month was open to read, or when the read refused. Not a claim that nothing is missing."
+     },
+     "open_period": {
+      "anyOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "calendar_month": {
+          "type": "number"
+         },
+         "calendar_year": {
+          "type": "number"
+         },
+         "is_complete": {
+          "type": "boolean"
+         },
+         "label": {
+          "type": "string"
+         },
+         "selectable": {
+          "type": "boolean"
+         }
+        },
+        "required": [
+         "calendar_year",
+         "calendar_month",
+         "label",
+         "is_complete",
+         "selectable"
+        ],
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The month Well opens the close on. Null when no month is ready, or when the period read refused."
+     }
+    },
+    "required": [
+     "connectors",
+     "open_period",
+     "missing_invoices"
+    ],
+    "type": "object"
+   },
+   "skills": {
+    "description": "The whole Well skill roster: every skill id with one line that says what it does. The entry of each skill in `suggested_steps` carries its full description instead, with the quoted trigger utterances its offer sentence is written from. The step a click names is loaded from it with well_get_skill.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "description": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "id",
+      "description"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "skills_run": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "count": {
+       "type": "number"
+      },
+      "last_run_at": {
+       "type": "string"
+      },
+      "skill_slug": {
+       "type": "string"
+      },
+      "surface": {
+       "enum": [
+        "web",
+        "mcp"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "skill_slug",
+      "surface",
+      "count",
+      "last_run_at"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "suggested_steps": {
+    "description": "The five next steps Well ranked for this workspace, in card order, from its gaps, its open month and the skills already run. Hand these five to well_propose_next_steps in this order, never reordered or replaced. You write the sentence each one is offered as, in the language the person is using, from that skill's own quoted trigger utterances in `skills` and the figures this digest returned. Empty means nothing was offerable: draw no card and write no five of your own.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "reason": {
+       "description": "Why it ranks here: an open gap, the open month's continuation, or analysis.",
+       "enum": [
+        "open_gap",
+        "continuation",
+        "analysis"
+       ],
+       "type": "string"
+      },
+      "skill": {
+       "description": "A skill id from `skills`.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "skill",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "time_zone": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "The IANA time zone the label was written in, from the workspace's settings."
+   },
+   "truncated": {
+    "description": "True when events sit past the read cap of 5000, so the counts cover part of the tail only.",
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "success",
+   "reason",
+   "boundary",
+   "since_at",
+   "since_at_label",
+   "time_zone",
+   "is_first_session",
+   "truncated",
+   "errors",
+   "records",
+   "skills_run",
+   "situation",
+   "skills",
+   "roster_readable",
+   "suggested_steps"
+  ],
+  "type": "object"
+ },
+ "title": "Get session digest"
+}
