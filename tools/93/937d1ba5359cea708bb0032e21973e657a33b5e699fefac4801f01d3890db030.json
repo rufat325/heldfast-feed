@@ -1,0 +1,363 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Get a RAVN swap quote"
+ },
+ "description": "Get a swap quote from RAVN \u2014 same-chain or cross-chain, across 17 chains including native (non-wrapped) Bitcoin and Solana as source or destination. Free, no API key or payment required. Returns a quoteToken; pass it to ravn_execute to get a signable/broadcastable execution payload.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "apiKey": {
+    "description": "Your RAVN API key, if you have one \u2014 raises your rate limit",
+    "type": "string"
+   },
+   "confidential": {
+    "description": "Settle privately via NEAR Intents' Confidential Intents so the deposit and payout can't be linked on-chain. Through this MCP server only NEAR quotes it (NO_LIQUIDITY if it can't, never a public fallback): RAVN's second private venue, Houdini Swap, needs the end user's IP, user-agent and country for its compliance rules, which an MCP call doesn't carry \u2014 use POST /api/v1/quote for it. ~0.3 bps extra on EVM-to-EVM, ~5-8 bps extra when Bitcoin or Solana is a leg, and it can settle slower than a public swap (Bitcoin-source: 13 min public vs 43 min confidential) \u2014 read estimatedTimeSeconds before executing",
+    "type": "boolean"
+   },
+   "destinationAddress": {
+    "description": "Where output should land, if different from userAddress. Required here, at quote time, to get an executable quote from Relay (Bitcoin as the source), THORChain (Bitcoin either direction), Across (a Solana-touching route), or Eco (a cross-ecosystem route) \u2014 omit it there and you get back a priced-but-unexecutable preview instead (see ravn_quote's executable), not an error. A malformed address, one from the wrong ecosystem, or a known non-wallet address (a RAVN-listed token's mint/contract, this swap's own tokens, the native-coin sentinel, burn addresses, Solana core programs, and via an on-chain lookup a Solana token account or program \u2014 the token-account error names the owning wallet, which is the address to use) IS an error here \u2014 funds sent there are unrecoverable. Omit the field rather than passing an empty string; an empty string is treated as omitted",
+    "type": "string"
+   },
+   "excludeVenues": {
+    "description": "Drop specific venues from this race, e.g. a risk objection to one of them or ravn_health showing it degraded. Naming a venue that was never eligible for this pair is a no-op, not an error",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "inputAmount": {
+    "description": "Positive integer string, in the input token's smallest unit (no decimals)",
+    "type": "string"
+   },
+   "inputChainId": {
+    "description": "Numeric chain id, e.g. 1=Ethereum, 8453=Base, -1=Bitcoin, -2=Solana \u2014 see ravn_chains for the full list, or ravn_health for live venue status",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "inputToken": {
+    "description": "Token contract address, or 0xEeeeeEeeeEeEeeEeEeEeeeEEeeeeEeeeeeeeEEeE for the chain's native coin",
+    "type": "string"
+   },
+   "outputChainId": {
+    "description": "Numeric chain id, e.g. 1=Ethereum, 8453=Base, -1=Bitcoin, -2=Solana \u2014 see ravn_chains for the full list, or ravn_health for live venue status",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "outputToken": {
+    "description": "Token contract address, or 0xEeeeeEeeeEeEeeEeEeEeeeEEeeeeEeeeeeeeEEeE for the chain's native coin",
+    "type": "string"
+   },
+   "rankingMode": {
+    "description": "best_output (default) picks the highest net output; fastest picks the quickest-settling quote within slippageBps",
+    "enum": [
+     "best_output",
+     "fastest"
+    ],
+    "type": "string"
+   },
+   "refundAddress": {
+    "description": "Where to refund the input asset if the swap fails. Required here, at quote time, for a Bitcoin-source Relay or THORChain quote \u2014 neither has an execute-time re-bind, so omitting it returns a priced-but-unexecutable preview and supplying it later on ravn_execute has no effect. Other BTC-source venues (Garden, Chainflip, Rift) support binding this at execute time instead. Validated against the INPUT chain (refunds are paid back on the origin), with the same non-wallet-address check as destinationAddress",
+    "type": "string"
+   },
+   "slippageBps": {
+    "description": "Max acceptable slippage in basis points",
+    "maximum": 5000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "userAddress": {
+    "description": "Address the input asset will be sent from",
+    "type": "string"
+   }
+  },
+  "required": [
+   "inputChainId",
+   "outputChainId",
+   "inputToken",
+   "outputToken",
+   "inputAmount",
+   "userAddress"
+  ],
+  "type": "object"
+ },
+ "name": "ravn_quote",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+   {
+    "additionalProperties": false,
+    "properties": {
+     "data": {
+      "additionalProperties": false,
+      "properties": {
+       "alternatives": {
+        "description": "Every other venue that raced and produced a usable quote, best output first. Each has its own quoteToken to pass to ravn_execute instead. Empty when no other venue could serve this pair, or when a route was excluded via excludeVenues",
+        "items": {
+         "additionalProperties": {},
+         "propertyNames": {
+          "type": "string"
+         },
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "estimatedTimeIsGuess": {
+        "description": "True when the time is RAVN's estimate, not the venue's own figure",
+        "type": "boolean"
+       },
+       "estimatedTimeSeconds": {
+        "type": "number"
+       },
+       "executable": {
+        "description": "False = preview-only price, priced against a placeholder destination/refund address. ravn_execute will fail with QUOTE_NOT_EXECUTABLE \u2014 request a fresh quote with destinationAddress/refundAddress supplied instead",
+        "type": "boolean"
+       },
+       "expiresAt": {
+        "type": "number"
+       },
+       "fee": {
+        "additionalProperties": {},
+        "propertyNames": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       "gas": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "estimated": {
+            "type": "boolean"
+           },
+           "native": {
+            "type": "string"
+           },
+           "nativeSymbol": {
+            "type": "string"
+           },
+           "usd": {
+            "anyOf": [
+             {
+              "type": "string"
+             },
+             {
+              "type": "null"
+             }
+            ]
+           }
+          },
+          "required": [
+           "native",
+           "nativeSymbol",
+           "usd",
+           "estimated"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "The native gas the user must hold; null on gasless venues"
+       },
+       "hops": {
+        "description": "2-hop / dest-call: the venues actually used. Sign hop 1; hop 2 is a unique deposit",
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "id": {
+           "type": "string"
+          },
+          "name": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "id",
+          "name"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "input": {
+        "additionalProperties": {},
+        "propertyNames": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       "inputUsd": {
+        "anyOf": [
+         {
+          "type": "string"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "USD value of the input amount, same price source as gas.usd. Null when the token can't be priced"
+       },
+       "output": {
+        "additionalProperties": {},
+        "propertyNames": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       "outputUsd": {
+        "anyOf": [
+         {
+          "type": "string"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "USD value of the output amount. Compare against inputUsd for price impact"
+       },
+       "quoteToken": {
+        "description": "Opaque token \u2014 pass to ravn_execute",
+        "type": "string"
+       },
+       "routeType": {
+        "type": "string"
+       },
+       "slippage": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "bps": {
+            "type": "number"
+           },
+           "guaranteedMin": {
+            "anyOf": [
+             {
+              "type": "string"
+             },
+             {
+              "type": "null"
+             }
+            ]
+           },
+           "isFirm": {
+            "type": "boolean"
+           }
+          },
+          "required": [
+           "bps",
+           "isFirm",
+           "guaranteedMin"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "Null when the venue reports no slippage bound"
+       },
+       "venue": {
+        "additionalProperties": {},
+        "propertyNames": {
+         "type": "string"
+        },
+        "type": "object"
+       }
+      },
+      "required": [
+       "quoteToken",
+       "venue",
+       "routeType",
+       "input",
+       "output",
+       "fee",
+       "executable",
+       "slippage",
+       "gas",
+       "inputUsd",
+       "outputUsd",
+       "estimatedTimeSeconds",
+       "estimatedTimeIsGuess",
+       "expiresAt",
+       "alternatives"
+      ],
+      "type": "object"
+     },
+     "meta": {
+      "additionalProperties": false,
+      "properties": {
+       "requestId": {
+        "type": "string"
+       },
+       "version": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "requestId",
+       "version"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "data",
+     "meta"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "error": {
+      "additionalProperties": false,
+      "properties": {
+       "code": {
+        "type": "string"
+       },
+       "details": {},
+       "message": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "code",
+       "message"
+      ],
+      "type": "object"
+     },
+     "meta": {
+      "additionalProperties": false,
+      "properties": {
+       "requestId": {
+        "type": "string"
+       },
+       "version": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "requestId",
+       "version"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "error",
+     "meta"
+    ],
+    "type": "object"
+   }
+  ],
+  "type": "object"
+ },
+ "title": "Get a RAVN swap quote"
+}

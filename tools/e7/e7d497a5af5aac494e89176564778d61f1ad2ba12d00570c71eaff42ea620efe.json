@@ -1,0 +1,2174 @@
+{
+ "_meta": {
+  "securitySchemes": [
+   {
+    "type": "noauth"
+   }
+  ]
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Instant insurance quote estimates"
+ },
+ "description": "Purpose: generate instant, itemized quote estimates from the carriers\n    Foresee supports, across the lines and states Foresee currently serves,\n    in one call \u2014 the LIVE TODAY line at the end of this description names\n    today's set.\n\n    `lines` is REQUIRED and is ONE map: each key names a line to price (e.g.\n    \"auto\", \"renters\", \"home\" \u2014 plain words are fine), each value is that\n    line's coverage ask as actual numbers. A line Foresee doesn't quote in\n    the user's state comes back under `skipped`: `lines` names each one and\n    `message` is one sentence, written to be relayed to the user as-is,\n    naming what Foresee does quote in that state. For auto\n    the ask has four axes \u2014 `bi` (bodily-injury liability, per-person/\n    per-accident in $000s, e.g. \"100/300\"), `pd` (property-damage liability in\n    $000s, e.g. 100), `coll_deductible` (collision deductible in dollars, e.g.\n    500) and `comp_deductible` (comprehensive deductible in dollars, e.g.\n    500); `um` and `medpay` are optional. A renters ask has four axes \u2014\n    `coverage_c` (personal-property/contents limit in dollars, e.g. 30000),\n    `coverage_e` (personal liability in dollars, e.g. 100000), `coverage_f`\n    (guest medical in dollars, e.g. 1000) and `deductible` (all-perils, in\n    dollars, e.g. 500); `coverage_d` is optional. A home ask: `coverage_a`\n    (the dwelling's replacement cost in dollars), `coverage_e` (e.g. 300000),\n    `coverage_f` (e.g. 1000) and `aop_deductible` (all-other-perils\n    deductible in dollars, e.g. 1000). There are no named coverage levels\n    and the server never defaults: pass exact numbers. An omitted OPTIONAL\n    axis (`um`, `medpay`, `coverage_d`) keeps each carrier's own\n    default \u2014 the quote's per-coverage lines show what was rated. Any\n    numbers at or above the state's legal minimum work as the ask (an auto\n    `bi`/`pd` below it prices nothing \u2014 no carrier may sell that policy \u2014 and\n    comes back under `coverage_required` naming the minimum); each carrier's\n    `price_ladder` prices every other rung, so a starting\n    selection is easy to refine after the fact. An incomplete ask on a\n    live line prices nothing and answers with `coverage_required` naming that\n    line's own axes; an axis supplied with a value no carrier offers (`bi`\n    \"banana\", a negative deductible) is refused the same way, naming the bad\n    value and the format the axis takes. Each supported carrier is priced at\n    the selection given; a carrier that doesn't offer an asked rung is priced\n    at its nearest offered one and says so: its entry carries\n    `rated_vs_asked` (per axis: `asked`, `rated`, and `coverage` \"less\"/\"more\"\n    than asked; the dense text puts it on the `C` row as `rated`). That price is NOT\n    like-for-like \u2014 state the rated limits next to it every time you show it\n    (e.g. \"$255/mo \u2014 30/60 BI / $25k PD, the most this carrier offers, not\n    the 100/300 / $100k you asked for\"), and never let it headline or anchor\n    a cheapest/spread claim without saying so. A carrier Foresee can't price\n    appears in `failures` with the reason, as does one Foresee can't price\n    for a line it was asked on (no program served there yet, or the carrier\n    doesn't sell that line in the state) \u2014 a carrier never silently vanishes\n    from a line's results. Priced results come back per line under\n    `by_line`.\n\n    Profile requirements: ZIP code, age (or dob) and \u2014 for auto \u2014 each\n    vehicle's year/make/model are REQUIRED; they have no server-side\n    fallback. A missing or mistyped one errors at the schema with guidance;\n    a value that fits the schema but cannot rate (\"not-a-zip\", a negative\n    age) comes back in `profile_required` naming it, with guidance on what\n    the field takes. Use the profile schema's exact field names: a key the\n    schema doesn't name is carried but never rated. A complete call \u2014 a\n    25-year-old in Oakland with a 2021 Civic, a January 2025 speeding ticket\n    and a 2023 at-fault accident, asking for 100/300 BI, $100k PD and $500\n    collision/comprehensive deductibles:\n    {\"profile\": {\"zip_code\": \"94621\", \"age\": 25, \"auto\": {\"drivers\": [{\"violations\": [{\"on\": \"2025-01\", \"kind\": \"speeding\"}], \"accidents\": [{\"on\": \"2023-06-15\", \"at_fault\": true, \"amount\": 4200}]}], \"vehicles\": [{\"year\": 2021, \"make\": \"Honda\", \"model\": \"Civic\"}]}}, \"lines\": {\"auto\": {\"bi\": \"100/300\", \"pd\": 100, \"coll_deductible\": 500, \"comp_deductible\": 500}}}\n    Every violation needs `kind` and `on`, every accident `on`; an\n    incomplete entry is refused naming its path, never assumed away.\n\n    Each carrier returns a **point estimate**\n    (`monthly`) plus a `confidence_interval` that reflects only what's genuinely\n    unresolvable (irreducible), NOT missing profile fields. A field the caller\n    omits is filled with ONE declared value and reported in `assumptions` /\n    `tighten_by` (the reducible \"tell us X and we sharpen\" gap) \u2014 the response\n    is built to be presented early and refined, never widened into\n    a vague range. Each entry's `field` is the exact profile path to send\n    the user's real answer under (e.g. `auto.drivers[].violations`), and\n    `tighten_by` lists those same paths. The one exception is\n    `incident_details`: it is answered by completing the incident entries\n    already sent (dates, fault, BI split), not under a fresh key.\n\n    Each carrier's `quote` carries every sub-coverage line (BI/PD/collision/\n    comprehensive/UM\u2026) with its monthly price, at the selection you passed (echoed\n    as `coverage_selection`). Most carriers also carry a `price_ladder`: for each\n    coverage lever of the line (auto: BI limit, PD limit, collision/comprehensive\n    deductible; renters: deductible and the C/E/F limits; home: AOP deductible\n    and the A/E/F limits) the exact\n    price at every rung, one lever moved at a time with everything else\n    held at the user's selection \u2014 the ladder is anchored at the selection you\n    passed, so its `anchor.monthly` is the carrier's `monthly`. It answers\n    limit/deductible what-ifs with real marginal prices.\n    Every ladder number IS an exact re-rate; a combined change or an unlisted\n    rung has no derivable price (rating is not linear), so those price only\n    through a re-call with the new `coverage_selection`. A profile what-if\n    (a cleaner record, another vehicle, a different ZIP) prices the same way:\n    re-call with the changed profile.\n    \n\nRESULT FORMAT: compact machine text on `dense`, one section per line. Each section opens Q <state> <line> sel=<the coverage_selection priced, as JSON>. assumptions:, tighten_by:, input_flags: and not_rated: carry those fields; each entry's `field` (and each tighten_by item) is the profile path to send the user's answer under, and `incident_details` is answered by completing the incident entries already sent. not_priced: <carrier>,\u2026:<reason> ; \u2026 is the line's `failures`, grouped by reason. skipped <line>,\u2026: <message> names the lines not quoted in this state. Row types \u2014 C: carrier|entity|monthly|ci lo-hi, then |rated <axis>=<rung>(asked <X>,less|more);\u2026 when the price is for a rung other than the ask (`rated_vs_asked`). W: a warning on the carrier above. L: monthly $ per coverage line (already monthly, every carrier), under codes that mean the same coverage at every carrier: BI PD UMBI UIMBI UMPD MEDPAY PIP COLL COMP RENTAL TOWING GAP; A+B is one premium covering both (BI+PD); FEE is a flat fee; any other code is a coverage only that carrier sells. D <lever> <selected>=option:\u00b1$: the change in the carrier's monthly for each option of that lever, everything else held at the selection; <selected>(asked <X>) means X is not an option and the price sits at the selected rung \u2014 answer deductible/limit what-ifs from D without another call (new monthly = monthly + delta). Only state numbers that appear in the result or follow from monthly + a D delta; if a rung is not in D for a carrier, say the carrier has no such option rather than guessing.\n\nWhen the user wants firm numbers straight from the carriers, offer live carrier quotes: Foresee agents complete the carriers' real quote flows via live_carrier_quotes (which explains the required disclosure + consent affirmation; no sign-in is needed). Instant quotes stay the first answer; live quotes are the follow-up.\n\nLIVE TODAY: Foresee quotes auto in CA today.",
+ "inputSchema": {
+  "$defs": {
+   "AccidentInput": {
+    "additionalProperties": true,
+    "properties": {
+     "amount": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Damage paid out, dollars",
+      "title": "Amount"
+     },
+     "at_fault": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "At Fault"
+     },
+     "on": {
+      "description": "When it happened: YYYY, YYYY-MM or YYYY-MM-DD",
+      "pattern": "^\\d{4}(?:-\\d{2}){0,2}$",
+      "title": "On",
+      "type": "string"
+     }
+    },
+    "required": [
+     "on"
+    ],
+    "title": "AccidentInput",
+    "type": "object"
+   },
+   "AutoAsk": {
+    "additionalProperties": true,
+    "properties": {
+     "bi": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Bodily-injury liability limit, per-person/per-accident in $000s, e.g. \"100/300\"",
+      "title": "Bi"
+     },
+     "coll_deductible": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Collision deductible in dollars, e.g. 500",
+      "title": "Coll Deductible"
+     },
+     "comp_deductible": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Comprehensive deductible in dollars, e.g. 500",
+      "title": "Comp Deductible"
+     },
+     "medpay": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Medical-payments limit in dollars, e.g. 5000",
+      "title": "Medpay"
+     },
+     "pd": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Property-damage liability limit in $000s, e.g. 100",
+      "title": "Pd"
+     },
+     "um": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Uninsured/underinsured-motorist BI limit in $000s, e.g. \"100/300\"",
+      "title": "Um"
+     }
+    },
+    "title": "AutoAsk",
+    "type": "object"
+   },
+   "AutoBlock": {
+    "additionalProperties": true,
+    "description": "Omit it for a household without a car.",
+    "properties": {
+     "drivers": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/$defs/DriverInput"
+        },
+        "maxItems": 10,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Drivers"
+     },
+     "vehicles": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/$defs/VehicleInput"
+        },
+        "maxItems": 10,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Vehicles"
+     }
+    },
+    "title": "AutoBlock",
+    "type": "object"
+   },
+   "DriverInput": {
+    "additionalProperties": true,
+    "description": "One driver on the policy. The applicant is the driver with relation\n\"self\"; any of their details restated here must match the profile's top\nlevel.",
+    "properties": {
+     "accidents": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/$defs/AccidentInput"
+        },
+        "maxItems": 20,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Accidents, one entry each, e.g. [{\"on\": \"2023-06-15\", \"at_fault\": true, \"amount\": 4200}] \u2014 every entry needs `on`. An empty list means none.",
+      "title": "Accidents"
+     },
+     "age_first_licensed": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Age when first licensed",
+      "title": "Age First Licensed"
+     },
+     "date_first_licensed": {
+      "anyOf": [
+       {
+        "format": "date",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "YYYY-MM-DD; alternative to age_first_licensed",
+      "title": "Date First Licensed"
+     },
+     "defensive_driving_course": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Completed a defensive-driving course in the last 3 years",
+      "title": "Defensive Driving Course"
+     },
+     "dob": {
+      "anyOf": [
+       {
+        "format": "date",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "YYYY-MM-DD",
+      "title": "Dob"
+     },
+     "education": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Highest education level: 'No High School' / 'High School' / 'Vocational' / 'Some College' / 'Associate' / 'Bachelors' / 'Masters' / 'Doctorate'",
+      "title": "Education"
+     },
+     "employment_status": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'Employed' / 'Self-Employed' / 'Retired' / 'Student' / 'Unemployed'",
+      "title": "Employment Status"
+     },
+     "exclusion_reason": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Exclusion Reason"
+     },
+     "gender": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Gender"
+     },
+     "industry": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Industry"
+     },
+     "marital_status": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Marital Status"
+     },
+     "occupation": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Occupation"
+     },
+     "relation": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "\"self\" / \"spouse\" / \"child\" / \"parent\" / \"other\"",
+      "title": "Relation"
+     },
+     "rideshare_use": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Drives for ride-share or delivery",
+      "title": "Rideshare Use"
+     },
+     "sr22_required": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Sr22 Required"
+     },
+     "status": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'licensed' (default) / 'permit' / 'not licensed' / 'excluded'",
+      "title": "Status"
+     },
+     "violations": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/$defs/ViolationInput"
+        },
+        "maxItems": 20,
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Moving violations, one entry each, e.g. [{\"on\": \"2025-01\", \"kind\": \"speeding\"}] \u2014 every entry needs `kind` and `on`. An empty list means a clean record.",
+      "title": "Violations"
+     },
+     "years_licensed": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Years since first licensed",
+      "title": "Years Licensed"
+     }
+    },
+    "title": "DriverInput",
+    "type": "object"
+   },
+   "HeldPolicyInput": {
+    "additionalProperties": true,
+    "description": "A policy the household already holds.",
+    "properties": {
+     "carrier": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Who writes it, e.g. \"State Farm\"",
+      "title": "Carrier"
+     },
+     "in_force": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "In Force"
+     },
+     "line": {
+      "description": "What the policy insures: \"home\", \"renters\", \"condo\", \"auto\", \"life\", \"umbrella\"\u2026",
+      "maxLength": 200,
+      "title": "Line",
+      "type": "string"
+     }
+    },
+    "required": [
+     "line"
+    ],
+    "title": "HeldPolicyInput",
+    "type": "object"
+   },
+   "HomeAsk": {
+    "additionalProperties": true,
+    "properties": {
+     "aop_deductible": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "All-other-perils deductible in dollars, e.g. 1000",
+      "title": "Aop Deductible"
+     },
+     "coverage_a": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Dwelling limit in dollars \u2014 the dwelling's replacement cost",
+      "title": "Coverage A"
+     },
+     "coverage_e": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Personal liability limit in dollars, e.g. 300000",
+      "title": "Coverage E"
+     },
+     "coverage_f": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Guest medical (medical payments to others) limit in dollars, e.g. 1000",
+      "title": "Coverage F"
+     }
+    },
+    "title": "HomeAsk",
+    "type": "object"
+   },
+   "LinesInput": {
+    "additionalProperties": true,
+    "description": "The coverage to price, one entry per line.",
+    "properties": {
+     "auto": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/AutoAsk"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "home": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/HomeAsk"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "renters": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/RentersAsk"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "title": "LinesInput",
+    "type": "object"
+   },
+   "LossInput": {
+    "additionalProperties": true,
+    "description": "One prior property loss.",
+    "properties": {
+     "amount": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Paid out, dollars",
+      "title": "Amount"
+     },
+     "kind": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "\"water\", \"fire\", \"theft\", \"wind/hail\", \"liability\"\u2026",
+      "title": "Kind"
+     },
+     "on": {
+      "anyOf": [
+       {
+        "pattern": "^\\d{4}(?:-\\d{2}){0,2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "When it happened: YYYY, YYYY-MM or YYYY-MM-DD",
+      "title": "On"
+     }
+    },
+    "title": "LossInput",
+    "type": "object"
+   },
+   "PriorInsuranceInput": {
+    "additionalProperties": true,
+    "description": "The insurance carried now.",
+    "properties": {
+     "carrier": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Carrier"
+     },
+     "insured": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Insured"
+     },
+     "since": {
+      "anyOf": [
+       {
+        "pattern": "^\\d{4}(?:-\\d{2}){0,2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Start date: YYYY, YYYY-MM or YYYY-MM-DD",
+      "title": "Since"
+     },
+     "until": {
+      "anyOf": [
+       {
+        "pattern": "^\\d{4}(?:-\\d{2}){0,2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "End date: YYYY, YYYY-MM or YYYY-MM-DD; omit while in force",
+      "title": "Until"
+     }
+    },
+    "title": "PriorInsuranceInput",
+    "type": "object"
+   },
+   "PropertyBlock": {
+    "additionalProperties": true,
+    "description": "The dwelling, for home and renters.",
+    "properties": {
+     "bathrooms": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Bathrooms"
+     },
+     "construction_type": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'frame' / 'masonry' / 'masonry veneer'\u2026",
+      "title": "Construction Type"
+     },
+     "devices": {
+      "anyOf": [
+       {
+        "items": {
+         "maxLength": 200,
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Protective devices in the home: 'smoke alarm', 'deadbolts', 'fire extinguisher', 'central burglar alarm', 'sprinklers'\u2026 ['None'] means asked-and-none; omit the field if never asked",
+      "title": "Devices"
+     },
+     "foundation": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'slab' / 'raised' / 'basement' / 'crawlspace'\u2026",
+      "title": "Foundation"
+     },
+     "garage": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'attached 2 car' / 'detached 1 car' / 'carport' / 'none'\u2026",
+      "title": "Garage"
+     },
+     "household": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Number of people living in the home",
+      "title": "Household"
+     },
+     "losses": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/$defs/LossInput"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Prior property losses, each dated. [] means none; omit if unknown",
+      "title": "Losses"
+     },
+     "miles_to_fire_station": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Miles To Fire Station"
+     },
+     "occupancy": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'owner occupied' / 'tenant occupied' / 'seasonal' / 'vacant'",
+      "title": "Occupancy"
+     },
+     "protection_class": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "ISO fire protection class, 1-10",
+      "title": "Protection Class"
+     },
+     "purchased": {
+      "anyOf": [
+       {
+        "pattern": "^\\d{4}(?:-\\d{2}){0,2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "When the home was bought: YYYY, YYYY-MM or YYYY-MM-DD",
+      "title": "Purchased"
+     },
+     "renovation_permit_year": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Year of the last permitted plumbing, electrical, heating or roof work",
+      "title": "Renovation Permit Year"
+     },
+     "replacement_cost": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Dwelling replacement cost estimate, dollars",
+      "title": "Replacement Cost"
+     },
+     "roof_layers": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Roof Layers"
+     },
+     "roof_type": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'composition shingle' / 'tile' / 'metal'\u2026",
+      "title": "Roof Type"
+     },
+     "roof_year": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Year the roof was last replaced",
+      "title": "Roof Year"
+     },
+     "seismic_retrofit": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Whether the home has been seismically retrofitted",
+      "title": "Seismic Retrofit"
+     },
+     "square_feet": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Square Feet"
+     },
+     "stories": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Stories"
+     },
+     "swimming_pool": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Swimming Pool"
+     },
+     "units": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Number of families the building holds",
+      "title": "Units"
+     },
+     "year_built": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Year Built"
+     }
+    },
+    "title": "PropertyBlock",
+    "type": "object"
+   },
+   "QuoteProfile": {
+    "additionalProperties": true,
+    "description": "The household being quoted: the people and where they live, plus an\n`auto` block (drivers and vehicles) and a `property` block (the\ndwelling). REQUIRED: the ZIP, the applicant's age (or dob) and, for auto,\neach vehicle's year/make/model \u2014 when the user was vague, pass a concrete\nvalue and tell them. Everything else is optional; omissions come back as\n`assumptions`.",
+    "properties": {
+     "age": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "REQUIRED unless dob is passed. If the user was vague ('mid-20s'), pass a concrete age and present it as your assumption.",
+      "title": "Age"
+     },
+     "auto": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/AutoBlock"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "city": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "City"
+     },
+     "companion_policies": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/$defs/HeldPolicyInput"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Policies the household already holds, e.g. [{\"line\": \"home\", \"carrier\": \"State Farm\"}]",
+      "title": "Companion Policies"
+     },
+     "credit_range": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'Excellent' / 'Good' / 'Fair' / 'Poor' \u2014 omit it in CA, HI, MA and MI",
+      "title": "Credit Range"
+     },
+     "dob": {
+      "anyOf": [
+       {
+        "format": "date",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "YYYY-MM-DD; alternative to age",
+      "title": "Dob"
+     },
+     "education": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Highest education level: 'No High School' / 'High School' / 'Vocational' / 'Some College' / 'Associate' / 'Bachelors' / 'Masters' / 'Doctorate'",
+      "title": "Education"
+     },
+     "effective_date": {
+      "anyOf": [
+       {
+        "format": "date",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Policy start date, YYYY-MM-DD",
+      "title": "Effective Date"
+     },
+     "employment_status": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'Employed' / 'Self-Employed' / 'Retired' / 'Student' / 'Unemployed'",
+      "title": "Employment Status"
+     },
+     "gender": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Gender"
+     },
+     "home_ownership_status": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'rent' / 'own with mortgage' / 'own outright' \u2014 bare 'own' is accepted",
+      "title": "Home Ownership Status"
+     },
+     "industry": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Industry"
+     },
+     "marital_status": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'Single' / 'Married' / \u2026",
+      "title": "Marital Status"
+     },
+     "memberships": {
+      "anyOf": [
+       {
+        "items": {
+         "maxLength": 200,
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Organizations the applicant belongs to, e.g. ['Costco', 'AAA']",
+      "title": "Memberships"
+     },
+     "military_affiliation": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'active' / 'veteran' / 'family' / 'none'",
+      "title": "Military Affiliation"
+     },
+     "months_at_residence": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Months At Residence"
+     },
+     "occupation": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Occupation"
+     },
+     "prior_insurance": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/PriorInsuranceInput"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "property": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/PropertyBlock"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "residence_type": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'House' / 'Apartment' / 'Condominium' / 'Manufactured Home' / \u2026",
+      "title": "Residence Type"
+     },
+     "state": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Two-letter code; derived from zip_code when omitted",
+      "title": "State"
+     },
+     "street_address": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Street Address"
+     },
+     "unit": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Unit"
+     },
+     "zip_code": {
+      "description": "REQUIRED \u2014 5-digit garaging/home ZIP. ALWAYS pass the ZIP here, never under another key. If the user named only a city, pass that city's best-known ZIP and tell them the assumption.",
+      "maxLength": 200,
+      "title": "Zip Code",
+      "type": "string"
+     }
+    },
+    "required": [
+     "zip_code"
+    ],
+    "title": "QuoteProfile",
+    "type": "object"
+   },
+   "RentersAsk": {
+    "additionalProperties": true,
+    "properties": {
+     "coverage_c": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Personal-property (contents) limit in dollars, e.g. 30000",
+      "title": "Coverage C"
+     },
+     "coverage_d": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Loss-of-use limit in dollars",
+      "title": "Coverage D"
+     },
+     "coverage_e": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Personal liability limit in dollars, e.g. 100000",
+      "title": "Coverage E"
+     },
+     "coverage_f": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Guest medical (medical payments to others) limit in dollars, e.g. 1000",
+      "title": "Coverage F"
+     },
+     "deductible": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "All-perils deductible in dollars, e.g. 500",
+      "title": "Deductible"
+     }
+    },
+    "title": "RentersAsk",
+    "type": "object"
+   },
+   "VehicleInput": {
+    "additionalProperties": true,
+    "description": "One vehicle on the policy.",
+    "properties": {
+     "annual_mileage": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Annual Mileage"
+     },
+     "anti_lock_brakes": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Anti Lock Brakes"
+     },
+     "anti_theft": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'alarm' / 'active_disable' / 'passive_disable' / 'recovery_device'",
+      "title": "Anti Theft"
+     },
+     "body_style": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Trim / body style, e.g. \"XLT AWD 4D GAS\"",
+      "title": "Body Style"
+     },
+     "bought_new": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Bought New"
+     },
+     "commute_days": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Commute days per week",
+      "title": "Commute Days"
+     },
+     "cost": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "Cost new, whole dollars",
+      "title": "Cost"
+     },
+     "daytime_running_lights": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Daytime Running Lights"
+     },
+     "garaging_zip": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "ZIP where this vehicle is kept, when different from zip_code",
+      "title": "Garaging Zip"
+     },
+     "make": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Make"
+     },
+     "model": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Model"
+     },
+     "one_way_miles": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "One-way commute distance, miles",
+      "title": "One Way Miles"
+     },
+     "ownership": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'owned' / 'financed' / 'leased'",
+      "title": "Ownership"
+     },
+     "primary_use": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "'Personal' / 'Commute' / 'Business'",
+      "title": "Primary Use"
+     },
+     "purchase_date": {
+      "anyOf": [
+       {
+        "pattern": "^\\d{4}(?:-\\d{2}){0,2}$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "When bought: YYYY, YYYY-MM or YYYY-MM-DD",
+      "title": "Purchase Date"
+     },
+     "trim": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Trim"
+     },
+     "vin": {
+      "anyOf": [
+       {
+        "maxLength": 200,
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Vin"
+     },
+     "year": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Year"
+     }
+    },
+    "title": "VehicleInput",
+    "type": "object"
+   },
+   "ViolationInput": {
+    "additionalProperties": true,
+    "description": "One moving violation.",
+    "properties": {
+     "kind": {
+      "description": "The violation in plain words: \"speeding\", \"DUI\", \"reckless driving\", \"running a red light\"\u2026",
+      "maxLength": 200,
+      "minLength": 1,
+      "title": "Kind",
+      "type": "string"
+     },
+     "on": {
+      "description": "When it happened: YYYY, YYYY-MM or YYYY-MM-DD",
+      "pattern": "^\\d{4}(?:-\\d{2}){0,2}$",
+      "title": "On",
+      "type": "string"
+     }
+    },
+    "required": [
+     "on",
+     "kind"
+    ],
+    "title": "ViolationInput",
+    "type": "object"
+   }
+  },
+  "properties": {
+   "carriers": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Price only these carriers, named by the `carrier_key` results carry (e.g. [\"geico\", \"statefarm\"]). Omit to price every carrier Foresee supports; a named carrier Foresee can't price comes back in `failures`.",
+    "title": "Carriers"
+   },
+   "include_failures": {
+    "default": true,
+    "description": "Report each carrier Foresee couldn't price under `failures`, with the reason. Leave true unless the user asked to see priced carriers only.",
+    "title": "Include Failures",
+    "type": "boolean"
+   },
+   "lines": {
+    "$ref": "#/$defs/LinesInput",
+    "type": "object"
+   },
+   "profile": {
+    "$ref": "#/$defs/QuoteProfile",
+    "type": "object"
+   }
+  },
+  "required": [
+   "profile",
+   "lines"
+  ],
+  "title": "quote_insuranceArguments",
+  "type": "object"
+ },
+ "name": "quote_insurance",
+ "outputSchema": {
+  "$defs": {
+   "BundleSummary": {
+    "additionalProperties": true,
+    "properties": {
+     "bundle_total": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Bundle Total"
+     },
+     "lines": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Lines"
+     },
+     "savings": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Savings"
+     },
+     "standalone_total": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Standalone Total"
+     }
+    },
+    "title": "BundleSummary",
+    "type": "object"
+   },
+   "CarrierQuoteSummary": {
+    "additionalProperties": true,
+    "properties": {
+     "carrier": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Carrier"
+     },
+     "carrier_key": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Carrier Key"
+     },
+     "carrier_quote_url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Carrier Quote Url"
+     },
+     "confidence_interval": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Confidence Interval"
+     },
+     "monthly": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Monthly"
+     },
+     "rated_vs_asked": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Rated Vs Asked"
+     },
+     "warnings": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Warnings"
+     }
+    },
+    "title": "CarrierQuoteSummary",
+    "type": "object"
+   },
+   "LineQuoteSummary": {
+    "additionalProperties": true,
+    "properties": {
+     "assumptions": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Assumptions"
+     },
+     "carriers": {
+      "anyOf": [
+       {
+        "items": {
+         "$ref": "#/$defs/CarrierQuoteSummary"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Carriers"
+     },
+     "coverage_selection": {
+      "anyOf": [
+       {
+        "additionalProperties": true,
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Coverage Selection"
+     },
+     "failures": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Failures"
+     },
+     "input_flags": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Input Flags"
+     },
+     "not_rated": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Not Rated"
+     },
+     "tighten_by": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Tighten By"
+     }
+    },
+    "title": "LineQuoteSummary",
+    "type": "object"
+   },
+   "SkippedLines": {
+    "additionalProperties": true,
+    "properties": {
+     "lines": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Lines",
+      "type": "array"
+     },
+     "message": {
+      "title": "Message",
+      "type": "string"
+     }
+    },
+    "required": [
+     "lines",
+     "message"
+    ],
+    "title": "SkippedLines",
+    "type": "object"
+   }
+  },
+  "additionalProperties": true,
+  "properties": {
+   "bundle": {
+    "anyOf": [
+     {
+      "additionalProperties": {
+       "$ref": "#/$defs/BundleSummary"
+      },
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Bundle"
+   },
+   "by_line": {
+    "anyOf": [
+     {
+      "additionalProperties": {
+       "$ref": "#/$defs/LineQuoteSummary"
+      },
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "By Line"
+   },
+   "coverage_required": {
+    "anyOf": [
+     {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Coverage Required"
+   },
+   "dense": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Dense"
+   },
+   "detail": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Detail"
+   },
+   "error": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Error"
+   },
+   "example_arguments": {
+    "anyOf": [
+     {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Example Arguments"
+   },
+   "message": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Message"
+   },
+   "presentation": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Presentation"
+   },
+   "profile_required": {
+    "anyOf": [
+     {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Profile Required"
+   },
+   "serviceable": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Serviceable"
+   },
+   "skipped": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/SkippedLines"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "state": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "State"
+   }
+  },
+  "title": "QuoteToolResult",
+  "type": "object"
+ },
+ "securitySchemes": [
+  {
+   "type": "noauth"
+  }
+ ],
+ "title": "Instant insurance quote estimates"
+}
