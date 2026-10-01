@@ -1,0 +1,277 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "List every gnomAD variant in a gene, transcript, or region with allele frequencies and predicted consequences, optionally filtered to one consequence class (lof, missense, synonymous, other) and/or a maximum allele frequency. A result too large to inline is staged on a DataCanvas table named gene_variants, returned as canvas_id and table_name beside an inline preview \u2014 call gnomad_dataframe_describe for its columns, then gnomad_dataframe_query to rank by AF, count by consequence, or group across every row rather than the preview. A result that fits inline stages no table unless canvas_id is supplied. When the canvas is disabled (CANVAS_PROVIDER_TYPE != duckdb) the tool returns a capped inline preview and the SQL path is unavailable. Supply exactly one of gene, transcript_id, or region. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) \u2014 https://gnomad.broadinstitute.org/",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "canvas_id": {
+    "description": "Optional canvas ID from a prior call, to reuse the same canvas. When supplied, this call always writes its result to the gene_variants table on that canvas, replacing (not appending to) the previous one \u2014 even when the result fits inline; a result with no variants removes the table. Omit to stage on a fresh canvas only when the result is too large to inline.",
+    "pattern": "^[A-Za-z0-9_-]{10}$",
+    "type": "string"
+   },
+   "consequence_class": {
+    "description": "Keep only variants in this consequence class. Omit to return all classes.",
+    "enum": [
+     "lof",
+     "missense",
+     "synonymous",
+     "other"
+    ],
+    "type": "string"
+   },
+   "dataset": {
+    "description": "gnomAD dataset: gnomad_r4 (GRCh38, default), gnomad_r3 (GRCh38), gnomad_r2_1 (GRCh37), exac (GRCh37). Echoed in output.",
+    "enum": [
+     "gnomad_r4",
+     "gnomad_r3",
+     "gnomad_r2_1",
+     "exac"
+    ],
+    "type": "string"
+   },
+   "gene": {
+    "anyOf": [
+     {
+      "description": "Gene \u2014 HGNC symbol (e.g. PCSK9) or Ensembl gene ID (e.g. ENSG00000169174). Obtain a stable ID from ensembl_lookup_gene.",
+      "minLength": 2,
+      "type": "string"
+     },
+     {
+      "description": "Blank \u2014 the gene is treated as omitted.",
+      "maxLength": 0,
+      "type": "string"
+     }
+    ],
+    "description": "Gene \u2014 HGNC symbol (e.g. PCSK9) or Ensembl gene ID (e.g. ENSG00000169174). Obtain a stable ID from ensembl_lookup_gene. Mitochondrial genes (e.g. MT-TL1) are not served. Mutually exclusive with transcript_id and region; blank means omitted."
+   },
+   "max_af": {
+    "description": "Keep only variants with allele frequency \u2264 this value (0\u20131). Variants with null AF are always kept.",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "reference_genome": {
+    "description": "Reference build. Derived from dataset when omitted (v4/v3=GRCh38, v2.1/ExAC=GRCh37). If supplied it must match the dataset, or the call is rejected. Keep aligned with ensembl coordinates.",
+    "enum": [
+     "GRCh38",
+     "GRCh37"
+    ],
+    "type": "string"
+   },
+   "region": {
+    "anyOf": [
+     {
+      "const": "",
+      "type": "string"
+     },
+     {
+      "description": "Genomic region chrom-start-stop (1-based inclusive, e.g. 13-32315474-32400266) on chromosome 1\u201322, X, or Y, optional chr prefix.",
+      "pattern": "^(?:chr)?[0-9A-Z]+-\\d+-\\d+$",
+      "type": "string"
+     }
+    ],
+    "description": "Genomic region chrom-start-stop (1-based inclusive, e.g. 13-32315474-32400266): chromosome 1\u201322, X, or Y with an optional chr prefix (mitochondrial regions are not served), a span (stop \u2212 start) under 2,500,000 bp, and at most ~30,000 variants. Mutually exclusive with gene and transcript_id."
+   },
+   "transcript_id": {
+    "description": "Ensembl transcript ID (e.g. ENST00000302118). Mutually exclusive with gene and region; blank means omitted.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "gnomad_list_gene_variants",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "preview",
+     "canvas_id",
+     "table_name",
+     "spilled",
+     "total",
+     "dataset",
+     "reference_genome"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "canvas_id": {
+    "description": "Canvas holding table_name (or the canvas_id you supplied) \u2014 pass it to gnomad_dataframe_describe, then gnomad_dataframe_query. Empty when this call used no canvas: the result fit inline and no canvas_id was supplied, or the canvas is disabled.",
+    "type": "string"
+   },
+   "dataset": {
+    "description": "Effective gnomAD dataset.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_target`: Not exactly one of gene, transcript_id, or region was supplied. `incoherent_build`: reference_genome was supplied but does not match the dataset. `invalid_region`: The region names a chromosome outside 1\u201322, X, Y, or breaks the coordinate bounds. `region_too_large`: The region spans 2,500,000 bp or more, or holds more variants (~30,000) than gnomAD lists at once. `mitochondrial_unsupported`: The gene, transcript, or region is on the mitochondrial chromosome (M or MT). `graphql_error`: gnomAD rejected the variant-list query with a GraphQL error. `upstream_unavailable`: gnomAD stayed unavailable or throttled through every retry. `upstream_timeout`: Every attempt to reach gnomAD timed out. `upstream_access`: gnomAD refused the request (access denied). `invalid_upstream_response`: gnomAD kept answering with a response that failed validation. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_target",
+         "incoherent_build",
+         "invalid_region",
+         "region_too_large",
+         "mitochondrial_unsupported",
+         "graphql_error",
+         "upstream_unavailable",
+         "upstream_timeout",
+         "upstream_access",
+         "invalid_upstream_response"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Guidance when no variants matched, when the canvas is disabled and the preview is capped, and \u2014 when a table was staged \u2014 its name with the next steps: gnomad_dataframe_describe, then gnomad_dataframe_query.",
+    "type": "string"
+   },
+   "preview": {
+    "description": "Inline preview rows \u2014 the immediate answer; every matching variant unless spilled.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One gene-variant row \u2014 also the canvas table column set.",
+     "properties": {
+      "ac": {
+       "description": "Allele count (joint across carried callsets).",
+       "type": "number"
+      },
+      "af": {
+       "description": "Allele frequency computed from joint allele counts; null when uncomputable.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "an": {
+       "description": "Allele number (joint sum across carried callsets).",
+       "type": "number"
+      },
+      "consequence": {
+       "description": "VEP consequence term; null when none.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "consequence_class": {
+       "description": "Bucketed consequence class.",
+       "enum": [
+        "lof",
+        "missense",
+        "synonymous",
+        "other"
+       ],
+       "type": "string"
+      },
+      "flags": {
+       "description": "Quality flags, pipe-joined (empty when none).",
+       "type": "string"
+      },
+      "homozygote_count": {
+       "description": "Homozygote count (joint across callsets).",
+       "type": "number"
+      },
+      "source": {
+       "description": "Carried callset(s), pipe-joined (e.g. exome|genome).",
+       "type": "string"
+      },
+      "variant_id": {
+       "description": "chrom-pos-ref-alt variant ID.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "variant_id",
+      "af",
+      "ac",
+      "an",
+      "consequence",
+      "consequence_class",
+      "homozygote_count",
+      "source",
+      "flags"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "reference_genome": {
+    "description": "Effective reference build.",
+    "type": "string"
+   },
+   "spilled": {
+    "description": "True when the result exceeded the inline preview budget, so the preview holds only the first rows and table_name holds them all.",
+    "type": "boolean"
+   },
+   "table_name": {
+    "description": "Canvas table this call staged (gene_variants), holding every matching variant \u2014 inspect it with gnomad_dataframe_describe, then query it with gnomad_dataframe_query. Empty when this call staged no table.",
+    "type": "string"
+   },
+   "total": {
+    "description": "Total matching variants, including any beyond the preview.",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "gnomad-genetics-mcp-server: list gene variants"
+}

@@ -1,0 +1,418 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Read the legislation.gov.uk Publication Log for a date window of up to 31 days: new items, new revised versions, newly recorded effects, and withdrawals, newest first \u2014 the compliance-monitoring view of \"what changed\". Filter by content type, effect direction, category, an item or type/year, first-time items only, or event. With a full item path it reads that item's own log, usually in one call; otherwise it walks the window day by day, newest first, so a broad window may need several calls. A changes event carries no effect detail \u2014 uklaw_get_amendments with that item has it. Continue with next_cursor.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "category": {
+    "description": "Item category: primary, secondary, or eu-origin. With content_type legislation or associated-documents only.",
+    "enum": [
+     "primary",
+     "secondary",
+     "eu-origin"
+    ],
+    "type": "string"
+   },
+   "content_type": {
+    "description": "legislation (documents published), changes (effects recorded), draft, or associated-documents. Omit for all.",
+    "enum": [
+     "legislation",
+     "changes",
+     "draft",
+     "associated-documents"
+    ],
+    "type": "string"
+   },
+   "cursor": {
+    "description": "next_cursor from the previous call, passed with the other inputs unchanged; omit to start from end_date.",
+    "maxLength": 500,
+    "pattern": "^[A-Za-z0-9_-]+$",
+    "type": "string"
+   },
+   "direction": {
+    "description": "With content_type changes only: effects recorded against (affected) or made by (affecting) the item.",
+    "enum": [
+     "affected",
+     "affecting"
+    ],
+    "type": "string"
+   },
+   "end_date": {
+    "description": "Last event date, YYYY-MM-DD; defaults to start_date. The window is at most 31 days.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   },
+   "event": {
+    "description": "Only published or only withdrawn events. Omit for both.",
+    "enum": [
+     "published",
+     "withdrawn"
+    ],
+    "type": "string"
+   },
+   "item": {
+    "description": "A full item path (ukpga/2018/12) or legislation.gov.uk URI reads that item's own log; a type (uksi) or type and year (uksi/2026) narrows the day walk. Get a full path from uklaw_lookup_citation or uklaw_search_legislation.",
+    "maxLength": 500,
+    "minLength": 1,
+    "pattern": "^\\S+$",
+    "type": "string"
+   },
+   "limit": {
+    "default": 40,
+    "description": "Most events returned by this call (1\u201380).",
+    "maximum": 80,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "new_only": {
+    "default": false,
+    "description": "true: only events for items appearing on legislation.gov.uk for the first time.",
+    "type": "boolean"
+   },
+   "start_date": {
+    "description": "First event date of the window, YYYY-MM-DD (UK local time).",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "start_date"
+  ],
+  "type": "object"
+ },
+ "name": "uklaw_track_changes",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "events",
+     "window",
+     "filters",
+     "mode",
+     "days",
+     "has_more",
+     "attribution"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "attribution": {
+    "description": "Attribution lines the returned content requires (OGL always; EU and Westlaw credits when applicable).",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "cap": {
+    "description": "The limit applied.",
+    "type": "number"
+   },
+   "days": {
+    "description": "Days touched by a day walk (empty in item-log mode).",
+    "items": {
+     "additionalProperties": false,
+     "description": "One day read.",
+     "properties": {
+      "date": {
+       "description": "Day read (YYYY-MM-DD).",
+       "type": "string"
+      },
+      "pages_read": {
+       "description": "Pages of 20 events read for that day by this call.",
+       "type": "number"
+      },
+      "total": {
+       "description": "Events legislation.gov.uk holds for that day and filter set; absent when not reported.",
+       "type": "number"
+      }
+     },
+     "required": [
+      "date",
+      "pages_read"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_date`: start_date or end_date is shaped YYYY-MM-DD but is not a real calendar date. `invalid_window`: end_date is before start_date, or the window is over 31 days. `direction_needs_changes`: direction is set without content_type changes. `category_needs_content_type`: category is set without content_type legislation or associated-documents. `invalid_item`: item is not a (partial) item path or legislation.gov.uk URI, its type code is unknown, or it carries a provision. `invalid_cursor`: cursor does not decode, belongs to a different window, or holds a position no call over that window reaches (a day outside the window or after today, a day in item-log mode, a page past 10,000, or an offset past the end of its page). `filter_refused`: legislation.gov.uk answered the Publication Log feed with 404 or 400: a filter combination it does not accept. `upstream_refused`: legislation.gov.uk answered 403 or 429 (its fair use rate limit or a block). `pacer_shed`: The shared request queue cannot start this call within its deadline. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_date",
+         "invalid_window",
+         "direction_needs_changes",
+         "category_needs_content_type",
+         "invalid_item",
+         "invalid_cursor",
+         "filter_refused",
+         "upstream_refused",
+         "pacer_shed"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "events": {
+    "description": "Events, newest first.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One Publication Log event.",
+     "properties": {
+      "category": {
+       "description": "Item category as legislation.gov.uk reports it; absent when not reported.",
+       "type": "string"
+      },
+      "content_type": {
+       "description": "Content type: legislation, changes, draft, or associated-documents.",
+       "type": "string"
+      },
+      "direction": {
+       "description": "Changes events only: affected or affecting.",
+       "type": "string"
+      },
+      "document_uri": {
+       "description": "URI of the document version published; absent when the event names none.",
+       "type": "string"
+      },
+      "event": {
+       "description": "Event: published or withdrawn.",
+       "type": "string"
+      },
+      "format": {
+       "description": "Format published, e.g. xml or pdf; each format is its own event.",
+       "type": "string"
+      },
+      "item": {
+       "additionalProperties": false,
+       "description": "The item the event concerns.",
+       "properties": {
+        "id_uri": {
+         "description": "Identifier URI.",
+         "type": "string"
+        },
+        "path": {
+         "description": "Item path.",
+         "type": "string"
+        },
+        "title": {
+         "description": "Title.",
+         "type": "string"
+        },
+        "title_cy": {
+         "description": "Welsh title, for bilingual items.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "path",
+        "id_uri",
+        "title"
+       ],
+       "type": "object"
+      },
+      "language": {
+       "description": "Language of the published resource.",
+       "type": "string"
+      },
+      "new": {
+       "description": "True when the item is new to legislation.gov.uk; absent when not reported.",
+       "type": "boolean"
+      },
+      "newly_issued": {
+       "description": "True for a newly issued item; absent when not reported.",
+       "type": "boolean"
+      },
+      "number": {
+       "description": "Item number; absent when not reported.",
+       "type": "string"
+      },
+      "publisher": {
+       "description": "Who published the event, as legislation.gov.uk names them.",
+       "type": "string"
+      },
+      "republished": {
+       "description": "True when a document was published again; absent when not reported.",
+       "type": "boolean"
+      },
+      "resource_uri": {
+       "description": "The published resource (a document format, or the changes feed).",
+       "type": "string"
+      },
+      "type": {
+       "description": "Type code of the item, e.g. uksi.",
+       "type": "string"
+      },
+      "updated": {
+       "description": "Event time as legislation.gov.uk writes it (UK local time with offset, ISO 8601).",
+       "type": "string"
+      },
+      "year": {
+       "description": "Calendar year of the item; absent when not reported.",
+       "type": "number"
+      }
+     },
+     "required": [
+      "updated",
+      "item",
+      "content_type",
+      "event",
+      "type",
+      "resource_uri",
+      "publisher"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "filters": {
+    "additionalProperties": false,
+    "description": "Filters applied.",
+    "properties": {
+     "category": {
+      "description": "Category filter.",
+      "type": "string"
+     },
+     "content_type": {
+      "description": "Content type filter.",
+      "type": "string"
+     },
+     "direction": {
+      "description": "Direction filter.",
+      "type": "string"
+     },
+     "event": {
+      "description": "Event filter.",
+      "type": "string"
+     },
+     "item": {
+      "description": "Item or type/year filter.",
+      "type": "string"
+     },
+     "new_only": {
+      "description": "New-items filter.",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "new_only"
+    ],
+    "type": "object"
+   },
+   "has_more": {
+    "description": "True when more events remain in the window \u2014 call again with next_cursor.",
+    "type": "boolean"
+   },
+   "item_log_total": {
+    "description": "Events in the item's whole log, all dates; present in item-log mode when reported.",
+    "type": "number"
+   },
+   "mode": {
+    "description": "day_walk: per-day pages; item_log: one item's undated log.",
+    "enum": [
+     "day_walk",
+     "item_log"
+    ],
+    "type": "string"
+   },
+   "next_cursor": {
+    "description": "Pass as cursor to continue; present only when has_more is true.",
+    "type": "string"
+   },
+   "notice": {
+    "description": "Guidance when the window is quiet or the list continues.",
+    "type": "string"
+   },
+   "read_back_to": {
+    "description": "Item-log mode: date (YYYY-MM-DD) of the oldest event this call read from the item's log, which is read newest first. While it is after end_date, the read has not reached the window yet. Absent in a day walk and when no event read carries a calendar date.",
+    "type": "string"
+   },
+   "shown": {
+    "description": "Events returned.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when the list was capped at limit.",
+    "type": "boolean"
+   },
+   "window": {
+    "additionalProperties": false,
+    "description": "The window read.",
+    "properties": {
+     "end_date": {
+      "description": "Window end (YYYY-MM-DD), start_date when none was given.",
+      "type": "string"
+     },
+     "start_date": {
+      "description": "Window start (YYYY-MM-DD).",
+      "type": "string"
+     }
+    },
+    "required": [
+     "start_date",
+     "end_date"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Track legislation.gov.uk publications"
+}

@@ -1,0 +1,328 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Fetch time-series data for 1\u201350 BLS series by SeriesID in a single API request (one query against the 500/day limit). Supports optional year range (up to 20 years per request) and BLS-computed period-over-period calculations (net change and percent change; a survey returns whichever it supports and silently omits the rest \u2014 CPI and PPI return percent change only, the inflation rate). BLS can publish a '-' missing-value sentinel; check observation.available before arithmetic. Set annual_average to add each year's annual-average row, which is that year's mean rather than an additional period. When the total observation count would exceed the inline context budget, results spill to a canvas dataframe and the response includes a dataset.name handle. Call bls_dataframe_describe with that name to inspect the dataframe schema, then use the name in bls_dataframe_query SQL. Use bls_search_series first if you need to resolve a concept to a SeriesID.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "annual_average": {
+    "default": false,
+    "description": "When true, add each year's annual-average row to the observations. An annual average is the mean of that year's real periods, returned as an extra row named \"Annual\" with period M13 (monthly series), Q05 (quarterly) or S03 (semiannual) \u2014 not an additional month or quarter, so it must be excluded from any sum or average over observations. Defaults to false, which returns real periods only; check available before aggregating. Independent of start_year/end_year. Surveys that publish no annual averages return the same rows either way; enrichment.annualAverageRows reports how many rows were actually added.",
+    "type": "boolean"
+   },
+   "calculations": {
+    "description": "When true, request BLS-computed period-over-period calculations. The flag is a single boolean (you cannot select an individual calculation type), but the API returns whichever the survey supports and omits the rest \u2014 CPI and PPI return percent change only (the inflation rate), and a survey that supports neither simply returns its observations without calculation fields. Requesting calculations never fails, so it is always safe to set; consult bls_list_surveys (allowsNetChange / allowsPercentChange) only to predict which fields will come back. Monthly-cadence series return each supported change type over 1, 3, 6, and 12-month intervals; other cadences return a subset. A series served from the local observation mirror, when the server runs one, carries no calculation fields; enrichment.calculationsApplied is then false and notice names it.",
+    "type": "boolean"
+   },
+   "end_year": {
+    "description": "End year for the data range (inclusive). Supplying it without start_year is rejected before the request \u2014 BLS applies no default start year alongside an explicit end year. Pair it with start_year, or omit both for the API default window.",
+    "maximum": 2100,
+    "minimum": 1900,
+    "type": "integer"
+   },
+   "series_ids": {
+    "description": "One or more BLS SeriesIDs (1\u201350). The entire batch counts as one API query. Use bls_search_series to resolve concepts to SeriesIDs.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 50,
+    "minItems": 1,
+    "type": "array"
+   },
+   "start_year": {
+    "description": "Start year for the data range (inclusive). The BLS API allows up to 20 years per request and requires both bounds or neither: supplying start_year alone resolves end_year to the current year, capped at start_year + 19 so the window stays inside the 20-year limit. Omit both for the API default (typically 3\u201320 years depending on survey).",
+    "maximum": 2100,
+    "minimum": 1900,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "series_ids"
+  ],
+  "type": "object"
+ },
+ "name": "bls_get_series",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "series",
+     "spilled",
+     "totalObservations",
+     "availableObservations",
+     "unavailableObservations",
+     "seriesRequested",
+     "annualAverageApplied"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "annualAverageApplied": {
+    "description": "Whether annual-average rows were requested. When false, observations hold real periods only; filter on available before aggregation.",
+    "type": "boolean"
+   },
+   "annualAverageRows": {
+    "description": "How many observations across all series are annual-average rows (period M13/Q05/S03). Present only when annual_average is true; 0 means none of the requested surveys publish annual averages.",
+    "type": "number"
+   },
+   "availableObservations": {
+    "description": "Rows with a published numeric value.",
+    "type": "number"
+   },
+   "calculationsApplied": {
+    "description": "Whether BLS net/percent-change calculations were applied. True when calculations=true reached BLS for every returned series; false when calculations=false, or when the local observation mirror served a series, whose rows carry no calculations \u2014 notice then names those series. Absent when calculations was omitted.",
+    "type": "boolean"
+   },
+   "dataset": {
+    "additionalProperties": false,
+    "description": "Canvas dataframe handle \u2014 present when the observation volume exceeded the inline budget. Call bls_dataframe_describe with dataset.name to inspect column_schema, then use that table name in bls_dataframe_query SQL across the full data.",
+    "properties": {
+     "expires_at": {
+      "description": "ISO 8601 expiry timestamp (sliding 24h window).",
+      "type": "string"
+     },
+     "name": {
+      "description": "Canvas table name (df_XXXXX_XXXXX). Pass to bls_dataframe_describe first to inspect column_schema, then use it in bls_dataframe_query SQL.",
+      "type": "string"
+     },
+     "row_count": {
+      "description": "Total rows in the canvas table.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "name",
+     "row_count",
+     "expires_at"
+    ],
+    "type": "object"
+   },
+   "endYearApplied": {
+    "description": "End year applied to the query. Resolved from start_year when end_year was omitted, so it can differ from the requested range; notice names the cap when the 20-year window decided it. Absent when no year range was in effect.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_api_key`: BLS rejected the configured BLS_API_KEY as invalid. `quota_exceeded`: The BLS API 500 query/day limit has been reached. `request_rejected`: BLS returned a non-success status with a message matching no known failure mode, both for the request and for its automatic re-issue without catalog metadata \u2014 e.g. a rejected combination of request parameters. `series_not_found`: No requested series returned data and at least one SeriesID does not exist. A batch mixing an invalid SeriesID with one BLS has no data for lands here too, and names both in the message and recovery hint. `series_locked`: The BLS database is temporarily locked for the requested series. `no_data_for_period`: The requested year range is unusable before the request \u2014 start_year after end_year, a span of 20 years or more, or end_year without start_year \u2014 or BLS returned data for none of the requested series over the range. `calculations_not_supported`: calculations=true was requested for a survey that does not support it. `canvas_unavailable`: The result set exceeds the inline budget and canvas (DuckDB) is not configured. `canvas_registration_failed`: The result set exceeds the inline budget and canvas is configured, but registering the dataframe failed. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_api_key",
+         "quota_exceeded",
+         "request_rejected",
+         "series_not_found",
+         "series_locked",
+         "no_data_for_period",
+         "calculations_not_supported",
+         "canvas_unavailable",
+         "canvas_registration_failed"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Guidance for agents \u2014 names any SeriesID that returned zero observations with its reason (including a failed live fallback's reason and recovery for a SeriesID the local observation mirror does not hold), names mirror-served series that lack requested calculations, reports a resolved end_year the 20-year window capped, and reports the bls_dataframe_describe then bls_dataframe_query workflow when results spill to canvas. Absent when every requested series returned data over the window as asked and it all fit inline.",
+    "type": "string"
+   },
+   "series": {
+    "description": "Series data, in request order.",
+    "items": {
+     "additionalProperties": false,
+     "description": "Time-series data for one BLS series.",
+     "properties": {
+      "area": {
+       "description": "Geographic area when returned by the API.",
+       "type": "string"
+      },
+      "availableObservationCount": {
+       "description": "Rows with a published numeric value, excluding the BLS \"-\" sentinel.",
+       "type": "number"
+      },
+      "item": {
+       "description": "Item/subject when returned by the API.",
+       "type": "string"
+      },
+      "observationCount": {
+       "description": "Total period rows for this series, including unavailable BLS placeholder rows. When spilled to canvas, all rows are on the dataframe; inline only shows a preview.",
+       "type": "number"
+      },
+      "observations": {
+       "description": "Inline observations. All observations when no spillover; preview rows when spilled to canvas.",
+       "items": {
+        "additionalProperties": false,
+        "description": "One observation data point.",
+        "properties": {
+         "available": {
+          "description": "False when BLS published the \"-\" missing-value sentinel for this period.",
+          "type": "boolean"
+         },
+         "footnotes": {
+          "description": "Footnote codes and text, when present.",
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "netChange12Month": {
+          "description": "12-month net change (when calculations=true).",
+          "type": "string"
+         },
+         "netChange1Month": {
+          "description": "1-month net change (when calculations=true).",
+          "type": "string"
+         },
+         "netChange3Month": {
+          "description": "3-month net change (when calculations=true).",
+          "type": "string"
+         },
+         "netChange6Month": {
+          "description": "6-month net change (when calculations=true).",
+          "type": "string"
+         },
+         "pctChange12Month": {
+          "description": "12-month percent change (when calculations=true).",
+          "type": "string"
+         },
+         "pctChange1Month": {
+          "description": "1-month percent change (when calculations=true).",
+          "type": "string"
+         },
+         "pctChange3Month": {
+          "description": "3-month percent change (when calculations=true).",
+          "type": "string"
+         },
+         "pctChange6Month": {
+          "description": "6-month percent change (when calculations=true).",
+          "type": "string"
+         },
+         "period": {
+          "description": "BLS period code: M01\u2013M12 are months, Q01\u2013Q04 quarters, S01\u2013S02 semiannual halves. M13, Q05 and S03 are not further periods \u2014 each is the mean of that year's real observations, named \"Annual\", and appears only when annual_average is true. Exclude them from any sum or average over observations.",
+          "type": "string"
+         },
+         "periodName": {
+          "description": "Human-readable period name.",
+          "type": "string"
+         },
+         "value": {
+          "description": "Raw observation value from BLS. The literal \"-\" means unavailable; check available before arithmetic and read footnotes for the reason.",
+          "type": "string"
+         },
+         "year": {
+          "description": "Observation year.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "year",
+         "period",
+         "value",
+         "available"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "seasonal": {
+       "description": "Seasonality indicator when returned by the API.",
+       "type": "string"
+      },
+      "seriesId": {
+       "description": "BLS SeriesID.",
+       "type": "string"
+      },
+      "title": {
+       "description": "Series name when returned by the API.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "seriesId",
+      "observationCount",
+      "availableObservationCount",
+      "observations"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "seriesRequested": {
+    "description": "Number of SeriesIDs requested. Do not compare it against series[] length to find empty series \u2014 a SeriesID that returned no data is still listed in series[] with observationCount 0. Check observationCount per entry, or read notice, which names every SeriesID that came back empty.",
+    "type": "number"
+   },
+   "spilled": {
+    "description": "True when results spilled to canvas due to inline budget overflow.",
+    "type": "boolean"
+   },
+   "startYearApplied": {
+    "description": "Start year applied to the query, whether it was served live or from the local observation mirror. Absent when no year range was in effect.",
+    "type": "number"
+   },
+   "totalObservations": {
+    "description": "Total observation rows across all requested series.",
+    "type": "number"
+   },
+   "unavailableObservations": {
+    "description": "Rows carrying the BLS \"-\" missing-value sentinel.",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Get BLS Time-Series Data"
+}

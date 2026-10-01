@@ -1,0 +1,461 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Fetch the full gnomAD population record for one or more variants \u2014 allele count/number/frequency overall and broken down per genetic-ancestry group, homozygote and hemizygote counts, quality flags, transcript consequence, in-silico predictor scores, and joined ClinVar clinical significance. The \"how common, is it benign\" answer in one call. Accepts a batch of up to 25 IDs (chrom-pos-ref-alt or rsID) with per-item partial success: a malformed or absent ID lands in failed[] \u2014 with its reason and a recovery hint \u2014 without failing the others. An empty found[] for a well-formed ID means the variant is not in the chosen dataset \u2014 pair with gnomad_get_coverage to confirm the position is callable before concluding true absence.\nData source: gnomAD (Broad Institute) \u2014 https://gnomad.broadinstitute.org/",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "dataset": {
+    "description": "gnomAD dataset: gnomad_r4 (GRCh38, default), gnomad_r3 (GRCh38), gnomad_r2_1 (GRCh37), exac (GRCh37). Echoed in output.",
+    "enum": [
+     "gnomad_r4",
+     "gnomad_r3",
+     "gnomad_r2_1",
+     "exac"
+    ],
+    "type": "string"
+   },
+   "reference_genome": {
+    "description": "Reference build. Derived from dataset when omitted (v4/v3=GRCh38, v2.1/ExAC=GRCh37). If supplied it must match the dataset, or the call is rejected. Keep aligned with ensembl coordinates.",
+    "enum": [
+     "GRCh38",
+     "GRCh37"
+    ],
+    "type": "string"
+   },
+   "variants": {
+    "description": "1\u201325 variant IDs (chrom-pos-ref-alt or rsID) to look up in one batched call.",
+    "items": {
+     "description": "Variant ID \u2014 chrom-pos-ref-alt (1-based, e.g. 1-55051215-G-GA) on chromosome 1\u201322, X, or Y with an optional chr prefix, or an rsID (rs11591147). Mitochondrial IDs (M, MT, chrM) are not served. Obtain a variantId from ensembl_predict_variant or a VCF. Malformed IDs are reported per-item in failed[], not rejected wholesale.",
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 25,
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "required": [
+   "variants"
+  ],
+  "type": "object"
+ },
+ "name": "gnomad_get_variant",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "found",
+     "failed",
+     "dataset",
+     "reference_genome"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "dataset": {
+    "description": "Effective gnomAD dataset used for the batch.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `incoherent_build`: reference_genome was supplied but does not match the dataset. `invalid_variant_id`: A variant ID is outside the chrom-pos-ref-alt or rsID grammar; reported per item in failed[]. `variant_not_found`: A well-formed ID is absent from the requested dataset; reported per item in failed[]. `mitochondrial_unsupported`: A variant ID names the mitochondrial chromosome (M, MT, or chrM); reported per item in failed[]. `ambiguous_rsid`: An rsID maps to more than one variant in the dataset; reported per item in failed[]. `graphql_error`: gnomAD rejected the lookup for one ID with a GraphQL error; reported per item in failed[]. `upstream_build_mismatch`: gnomAD answered one ID with a variant on a different reference build; reported per item in failed[]. `upstream_unavailable`: gnomAD stayed unavailable or throttled through every retry for one ID; reported per item in failed[]. `upstream_timeout`: Every attempt to reach gnomAD for one ID timed out; reported per item in failed[]. `upstream_access`: gnomAD refused the request for one ID (access denied); reported per item in failed[]. `invalid_upstream_response`: gnomAD kept answering one ID with a response that failed validation; reported per item in failed[]. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "incoherent_build",
+         "invalid_variant_id",
+         "variant_not_found",
+         "mitochondrial_unsupported",
+         "ambiguous_rsid",
+         "graphql_error",
+         "upstream_build_mismatch",
+         "upstream_unavailable",
+         "upstream_timeout",
+         "upstream_access",
+         "invalid_upstream_response"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "failed": {
+    "description": "Per-item failures, in input order: malformed IDs, variants absent from the dataset, or upstream errors \u2014 each with its reason and recovery hint.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One failed input ID, why it failed, and what to do next.",
+     "properties": {
+      "candidates": {
+       "description": "Concrete variant IDs to retry when an rsID is ambiguous.",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "error": {
+       "description": "What went wrong for this ID.",
+       "type": "string"
+      },
+      "reason": {
+       "description": "Why this ID failed \u2014 a reason declared in this tool's error contract. Branch on it rather than on the message.",
+       "enum": [
+        "invalid_variant_id",
+        "variant_not_found",
+        "mitochondrial_unsupported",
+        "ambiguous_rsid",
+        "graphql_error",
+        "upstream_build_mismatch",
+        "upstream_unavailable",
+        "upstream_timeout",
+        "upstream_access",
+        "invalid_upstream_response"
+       ],
+       "type": "string"
+      },
+      "recovery": {
+       "description": "The next step for this ID \u2014 the recovery hint declared for its reason.",
+       "type": "string"
+      },
+      "variant": {
+       "description": "The input ID that failed to resolve.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "variant",
+      "error",
+      "reason",
+      "recovery"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "found": {
+    "description": "Variants resolved to a population record.",
+    "items": {
+     "additionalProperties": false,
+     "description": "Full population record for one variant.",
+     "properties": {
+      "ac": {
+       "description": "Overall allele count across carried callset(s).",
+       "type": "number"
+      },
+      "af": {
+       "description": "Overall allele frequency; null when an is 0.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "an": {
+       "description": "Overall allele number across carried callset(s).",
+       "type": "number"
+      },
+      "clinvar": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "description": "Joined ClinVar significance from gnomAD. Null when the variant has no ClinVar entry.",
+         "properties": {
+          "clinical_significance": {
+           "description": "ClinVar clinical significance (e.g. Pathogenic, Likely benign); null when no entry.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "clinvar_variation_id": {
+           "description": "ClinVar VariationID.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "gold_stars": {
+           "description": "ClinVar 0\u20134 star review rating.",
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "review_status": {
+           "description": "ClinVar review status text.",
+           "type": [
+            "string",
+            "null"
+           ]
+          }
+         },
+         "required": [
+          "clinical_significance",
+          "review_status",
+          "gold_stars",
+          "clinvar_variation_id"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "ClinVar annotation, or null when no entry exists."
+      },
+      "clinvar_unavailable": {
+       "description": "True when the optional ClinVar resolver failed; false when no entry exists.",
+       "type": "boolean"
+      },
+      "consequence": {
+       "description": "Worst/transcript VEP consequence term; null when none.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "dataset": {
+       "description": "Effective gnomAD dataset.",
+       "type": "string"
+      },
+      "flags": {
+       "description": "Quality flags (e.g. lcr, segdup, lc_lof).",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "gene_symbol": {
+       "description": "Gene symbol for the reported consequence; null when none.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "hemizygote_count": {
+       "description": "Overall hemizygote count (X/Y only); null otherwise.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "homozygote_count": {
+       "description": "Overall homozygote count.",
+       "type": "number"
+      },
+      "in_silico": {
+       "description": "In-silico predictor scores present for this variant.",
+       "items": {
+        "additionalProperties": false,
+        "description": "One in-silico predictor score.",
+        "properties": {
+         "annotation": {
+          "description": "Text gnomAD attaches to the score \u2014 on gnomad_r3, the SpliceAI event (e.g. acceptor_gain, no_consequence). Holds the raw text when value is null for lack of a number; null for a plain score.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "id": {
+          "description": "Predictor name. Ids vary by dataset \u2014 gnomad_r4: cadd, revel_max, spliceai_ds_max, pangolin_largest_ds, phylop, sift_max, polyphen_max; gnomad_r3: cadd, revel, splice_ai, primate_ai; gnomad_r2_1 and exac carry none.",
+          "type": "string"
+         },
+         "value": {
+          "description": "Predictor score; null when not provided for this variant, or when gnomAD gave text with no number (the text is then in annotation).",
+          "type": [
+           "number",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "id",
+         "value",
+         "annotation"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "populations": {
+       "description": "Per-ancestry frequency vector \u2014 never collapsed to a single global AF.",
+       "items": {
+        "additionalProperties": false,
+        "description": "One genetic-ancestry group AC/AN/AF vector.",
+        "properties": {
+         "ac": {
+          "description": "Allele count in this group.",
+          "type": "number"
+         },
+         "af": {
+          "description": "Allele frequency (ac/an); null when an is 0.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "an": {
+          "description": "Allele number (called chromosomes) in this group.",
+          "type": "number"
+         },
+         "hemizygote_count": {
+          "description": "Hemizygote count (X/Y only); null otherwise.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "homozygote_count": {
+          "description": "Homozygote count in this group.",
+          "type": "number"
+         },
+         "id": {
+          "description": "Genetic-ancestry group: afr, amr, asj, eas, fin, mid, nfe, sas, remaining, or ami (genomes only).",
+          "type": "string"
+         },
+         "source": {
+          "description": "Which gnomAD callset this group vector came from.",
+          "enum": [
+           "exome",
+           "genome"
+          ],
+          "type": "string"
+         }
+        },
+        "required": [
+         "id",
+         "source",
+         "ac",
+         "an",
+         "af",
+         "homozygote_count",
+         "hemizygote_count"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "reference_genome": {
+       "description": "Reference build the record is on (GRCh38 or GRCh37).",
+       "type": "string"
+      },
+      "rsids": {
+       "description": "dbSNP rsIDs for this variant.",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "source": {
+       "description": "Which gnomAD callset(s) carry this variant.",
+       "items": {
+        "enum": [
+         "exome",
+         "genome"
+        ],
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "transcript_id": {
+       "description": "Transcript the consequence is on; null when none.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "variant_id": {
+       "description": "Resolved chrom-pos-ref-alt variant ID.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "variant_id",
+      "rsids",
+      "reference_genome",
+      "dataset",
+      "ac",
+      "an",
+      "af",
+      "homozygote_count",
+      "hemizygote_count",
+      "populations",
+      "source",
+      "flags",
+      "consequence",
+      "transcript_id",
+      "gene_symbol",
+      "in_silico",
+      "clinvar",
+      "clinvar_unavailable"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "notice": {
+    "description": "Non-fatal notice when optional ClinVar annotation was unavailable.",
+    "type": "string"
+   },
+   "reference_genome": {
+    "description": "Effective reference build used for the batch.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "title": "gnomad-genetics-mcp-server: get variant"
+}

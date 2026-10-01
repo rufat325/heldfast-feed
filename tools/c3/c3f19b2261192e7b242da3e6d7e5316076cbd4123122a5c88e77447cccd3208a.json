@@ -1,0 +1,304 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Fetch gnomAD sequencing-coverage summary across a gene, transcript, or region \u2014 mean and median read depth, plus the mean fraction of samples covered at each depth threshold (1\u00d7 through 100\u00d7), separated by exome and genome track. Use this to disambiguate a true absent variant from an uncallable position: a variant missing from a well-covered region is informative, while one missing from a poorly-covered region is not. Supply exactly one of gene, transcript_id, or region. The optional coverage_source narrows to one track; by default both available tracks are returned. Echoes the effective dataset and build.\nData source: gnomAD (Broad Institute) \u2014 https://gnomad.broadinstitute.org/",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "coverage_source": {
+    "description": "Restrict to one coverage track. Omit to return every available track.",
+    "enum": [
+     "exome",
+     "genome"
+    ],
+    "type": "string"
+   },
+   "dataset": {
+    "description": "gnomAD dataset: gnomad_r4 (GRCh38, default), gnomad_r3 (GRCh38), gnomad_r2_1 (GRCh37), exac (GRCh37). Echoed in output.",
+    "enum": [
+     "gnomad_r4",
+     "gnomad_r3",
+     "gnomad_r2_1",
+     "exac"
+    ],
+    "type": "string"
+   },
+   "gene": {
+    "anyOf": [
+     {
+      "description": "Gene \u2014 HGNC symbol (e.g. PCSK9) or Ensembl gene ID (e.g. ENSG00000169174). Obtain a stable ID from ensembl_lookup_gene.",
+      "minLength": 2,
+      "type": "string"
+     },
+     {
+      "description": "Blank \u2014 the gene is treated as omitted.",
+      "maxLength": 0,
+      "type": "string"
+     }
+    ],
+    "description": "Gene \u2014 HGNC symbol (e.g. PCSK9) or Ensembl gene ID (e.g. ENSG00000169174). Obtain a stable ID from ensembl_lookup_gene. Mitochondrial genes (e.g. MT-TL1) are not served. Mutually exclusive with transcript_id and region; blank means omitted."
+   },
+   "reference_genome": {
+    "description": "Reference build. Derived from dataset when omitted (v4/v3=GRCh38, v2.1/ExAC=GRCh37). If supplied it must match the dataset, or the call is rejected. Keep aligned with ensembl coordinates.",
+    "enum": [
+     "GRCh38",
+     "GRCh37"
+    ],
+    "type": "string"
+   },
+   "region": {
+    "anyOf": [
+     {
+      "const": "",
+      "type": "string"
+     },
+     {
+      "description": "Genomic region chrom-start-stop (1-based inclusive, e.g. 1-55039447-55064852) on chromosome 1\u201322, X, or Y, optional chr prefix.",
+      "pattern": "^(?:chr)?[0-9A-Z]+-\\d+-\\d+$",
+      "type": "string"
+     }
+    ],
+    "description": "Genomic region chrom-start-stop (1-based inclusive, e.g. 1-55039447-55064852): chromosome 1\u201322, X, or Y with an optional chr prefix (mitochondrial regions are not served) and a span (stop \u2212 start) under 2,500,000 bp. Mutually exclusive with gene and transcript_id."
+   },
+   "transcript_id": {
+    "description": "Ensembl transcript ID (e.g. ENST00000302118). Mutually exclusive with gene and region; blank means omitted.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "gnomad_get_coverage",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "target",
+     "target_kind",
+     "summaries",
+     "dataset",
+     "reference_genome"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "dataset": {
+    "description": "Effective gnomAD dataset.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_target`: Not exactly one of gene, transcript_id, or region was supplied. `incoherent_build`: reference_genome was supplied but does not match the dataset. `invalid_region`: The region names a chromosome outside 1\u201322, X, Y, or breaks the coordinate bounds. `region_too_large`: The region spans 2,500,000 bp or more, beyond what gnomAD summarizes at once. `mitochondrial_unsupported`: The gene, transcript, or region is on the mitochondrial chromosome (M or MT). `graphql_error`: gnomAD rejected the coverage query with a GraphQL error. `upstream_unavailable`: gnomAD stayed unavailable or throttled through every retry. `upstream_timeout`: Every attempt to reach gnomAD timed out. `upstream_access`: gnomAD refused the request (access denied). `invalid_upstream_response`: gnomAD kept answering with a response that failed validation. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_target",
+         "incoherent_build",
+         "invalid_region",
+         "region_too_large",
+         "mitochondrial_unsupported",
+         "graphql_error",
+         "upstream_unavailable",
+         "upstream_timeout",
+         "upstream_access",
+         "invalid_upstream_response"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Guidance when no coverage data is available for the target.",
+    "type": "string"
+   },
+   "reference_genome": {
+    "description": "Effective reference build.",
+    "type": "string"
+   },
+   "summaries": {
+    "description": "Per-track coverage summaries (exome and/or genome).",
+    "items": {
+     "additionalProperties": false,
+     "description": "Aggregate coverage for one callset track over the target.",
+     "properties": {
+      "fraction_over_1": {
+       "description": "Mean fraction of samples covered at \u22651\u00d7; null when no data.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "fraction_over_10": {
+       "description": "Mean fraction of samples covered at \u226510\u00d7; null when no data.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "fraction_over_100": {
+       "description": "Mean fraction of samples covered at \u2265100\u00d7; null when no data.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "fraction_over_15": {
+       "description": "Mean fraction of samples covered at \u226515\u00d7; null when no data.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "fraction_over_20": {
+       "description": "Mean fraction of samples covered at \u226520\u00d7; null when no data.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "fraction_over_25": {
+       "description": "Mean fraction of samples covered at \u226525\u00d7; null when no data.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "fraction_over_30": {
+       "description": "Mean fraction of samples covered at \u226530\u00d7; null when no data.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "fraction_over_5": {
+       "description": "Mean fraction of samples covered at \u22655\u00d7; null when no data.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "fraction_over_50": {
+       "description": "Mean fraction of samples covered at \u226550\u00d7; null when no data.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "mean_depth": {
+       "description": "Mean read depth averaged across positions; null when no data.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "median_depth": {
+       "description": "Median read depth across positions; null when no data.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "positions": {
+       "description": "Number of base positions summarized across the target.",
+       "type": "number"
+      },
+      "source": {
+       "description": "Which gnomAD coverage track this summary covers.",
+       "enum": [
+        "exome",
+        "genome"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "source",
+      "positions",
+      "mean_depth",
+      "median_depth",
+      "fraction_over_1",
+      "fraction_over_5",
+      "fraction_over_10",
+      "fraction_over_15",
+      "fraction_over_20",
+      "fraction_over_25",
+      "fraction_over_30",
+      "fraction_over_50",
+      "fraction_over_100"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "target": {
+    "description": "The resolved target (gene symbol/ID, transcript ID, or region) the coverage describes.",
+    "type": "string"
+   },
+   "target_kind": {
+    "description": "Which target type was queried.",
+    "enum": [
+     "gene",
+     "transcript",
+     "region"
+    ],
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "title": "gnomad-genetics-mcp-server: get coverage"
+}

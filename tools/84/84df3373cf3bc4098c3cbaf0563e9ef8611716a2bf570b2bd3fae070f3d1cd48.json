@@ -1,0 +1,1024 @@
+{
+ "_meta": {
+  "openai/outputTemplate": "ui://mapmap/route-map-v1.html",
+  "openai/toolInvocation/invoked": "Route ready",
+  "openai/toolInvocation/invoking": "Computing the route\u2026",
+  "ui": {
+   "resourceUri": "ui://mapmap/route-map-v1.html"
+  }
+ },
+ "description": "Compute a turn-by-turn route between origin and destination (optionally via waypoints). Costing \"auto\" = car, \"truck\" = lorry, \"bicycle\", \"pedestrian\" = walking, \"motor_scooter\" = moped. Pass `truck` {height_m, width_m, length_m, gross_weight_t, hazmat, tunnel_code} to apply dimensional limits and the ADR dangerous-goods tunnel matrix to the search; `pedestrian` {use_lit 0-1, type \"wheelchair\"|\"blind\", max_hiking_difficulty 1-6} for lit-street walking, accessibility and trail limits; `bicycle` {bicycle_type, use_roads 0-1, use_living_streets 0-1, avoid_bad_surfaces 0-1, use_hills 0-1} for quiet-ride and surface preferences. Returns distance (m), duration (s), maneuvers, polyline6 geometry and the ADR costing that was applied. Any of truck, auto, bicycle, pedestrian or motor_scooter routes may set `rationale: true` (opt-in, costs up to 1 + N extra routing calls) to learn which declared truck constraints or avoidance-side preferences (hills, surfaces, tolls, unlit streets, \u2026) actually changed the route (`rationale.avoided[]`, basis route_divergence \u2014 it proves a field was binding, it does not identify the physical restriction or feature, and no live traffic or incident data is ever attributed). ADR honesty: `applied_adr.forbidden_tunnel_categories` describes the LOAD, not the returned route, and `applied_adr.tunnel_enforcement` states the boundary: roads are excluded only where the routing graph records an ADR tunnel category, so an unchanged route is not a clearance. Set `landmarks: true` for turn instructions anchored to recognisable places \u2014 each manoeuvre that passes one gains a `landmark_instruction` like \"Turn right just after the Shell garage\" beside the engine's own street-name `instruction`, which is never replaced. Prefer reading it aloud: it is how a passenger gives directions. Nothing is named unless it is recognisable from the road, within 40 m of the junction and not tagged as closed, so many routes return none and a `landmarks.annotated` of 0 with no `note` means this route genuinely passes nothing recognisable. Needs the MapMap gateway (GATEWAY_URL + GATEWAY_API_KEY), whose place index does the lookup. Optional `exclude_polygons` for what-if scenarios (\"close this bridge and re-route\"): an array of polygons, each an array of [lon, lat] pairs forming one ring \u2014 longitude FIRST \u2014 whose intersecting roads are excluded from the search. Applies to the Valhalla engine; unsupported on the GraphHopper engine, where it is ignored. Optional `avoid` and `exclude` name road features to keep off, and the difference between them is not cosmetic. `avoid` (\"tolls\", \"highways\", \"ferries\") is a PREFERENCE: it sets the costing's willingness to zero, and the engine's own reference says that is not guaranteed to avoid the feature \u2014 measured, avoiding tolls across the Dartford Crossing returns the same tolled route, because the untolled alternative is fifty kilometres further. `exclude` (\"tolls\", \"highways\", \"ferries\", \"bridges\", \"tunnels\") is a hard exclusion: it can answer NO ROUTE rather than a detour, and it depends on the routing engine's own hard-exclusion setting, which the engine does not report and this server cannot read \u2014 so it is requested, never promised. \"tolls\" and \"highways\" under `avoid` exist only on motorised costings; asking for one on a bicycle is refused rather than silently ignored. Whatever is applied comes back in `avoidance`, with the caveats \u2014 relay them, because \"avoid tolls\" read as a guarantee is the failure mode here. Each location also takes a kerbside approach: `preferred_side` \"same\" (alias \"curb\") stops on the door's side of the road, resolved against the locale's driving side \u2014 the left kerb in the UK, the right in Germany \u2014 with \"opposite\" and \"either\" (alias \"unrestricted\") for the rest. It is a snapping preference, not a manoeuvre guarantee, and it needs a coordinate genuinely offset from the road centreline; `street_side_tolerance_m` and `street_side_max_distance_m` bound the window in which it applies, and a pair leaving no window is refused rather than answered with the preference silently inert. Pass `emissions` {vehicle_category, fuel, euro_standard} for UK clean-air-zone assessment: the response's `zones` block then names every zone the route enters and what THIS vehicle pays there, with the publishing authority cited. Without it a zone can only be named, never priced. Needs the gateway, which holds the curated zone dataset; the whole dataset \u2014 every scheme, charge, boundary and provenance record \u2014 is readable at `GET /v1/zones` on the HTTP API when an agent needs to audit a figure or list zones without routing. Set `scenic: true` (auto costing only) to ask whether there is a prettier way. It is a PEER OFFER, never a substitution: the route in `geometry_polyline6` is byte-for-byte what the same request returns without the flag, and the prettier way, when there is one, arrives beside it in `scenic`, with its own geometry in `scenic.alternative_geometry_polyline6` and what it costs in `scenic.spoken` (\"About seven minutes longer than the quick way\"). EVERY OFFER STATES ITS REASON OR THERE IS NO OFFER: a route that scores well but cannot support a plain sentence is dropped rather than dressed up, so a `scenic.reason` of null means nothing here measured above the floor. That is an ANSWER, not a failure, and it is the one to relay. A REJECTION IS ALSO AN ANSWER: every candidate that lost says why in `scenic.rejections[]` (`same_route`, `no_scenic_gain`, `not_scenic_enough`, `over_time_budget` with the minutes it would have cost, `nothing_to_say`), so \"no prettier way\" is always attributable and raising the budget is an informed choice. It is a re-ranking of routes the engine already proposed, not a scenic search: a beautiful road the engine never offered was never considered, and `scenic.caveats` says so. Like `rationale`, IT COSTS EXTRA METERED COMPUTATIONS, at most two, which is why it is opt-in and never on by default. `available: false` with a `note` means this deployment could not look, which is not the same claim as nothing being there. Needs the gateway, whose basemap archive the scoring is measured against.",
+ "inputSchema": {
+  "$defs": {
+   "AvoidFeature": {
+    "description": "A road feature to avoid as a PREFERENCE, not a ban. \"tolls\" and \"highways\" apply to motorised costings only (auto, truck, bus, motor_scooter, motorcycle); \"ferries\" applies to every costing. Asking for one on a costing whose engine table has no field for it is refused rather than silently ignored.",
+    "enum": [
+     "tolls",
+     "highways",
+     "ferries"
+    ],
+    "type": "string"
+   },
+   "BicycleSpec": {
+    "description": "Bicycle options for costing \"bicycle\": the bicycle type plus road,\nsurface and hill preference weights, mapped onto Valhalla\n`costing_options.bicycle`.",
+    "properties": {
+     "avoid_bad_surfaces": {
+      "description": "Avoidance of surfaces unsuited to the bicycle type, 0.0\u20131.0\n(1.0 = strictly avoid bad surfaces).",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "bicycle_type": {
+      "description": "Bicycle type: \"road\", \"hybrid\" (default), \"city\", \"cross\" or\n\"mountain\". Sets default speed and surface tolerance.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "use_hills": {
+      "description": "Willingness to take hills, 0.0\u20131.0 (0.0 = avoid climbs even at the\ncost of longer routes).",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "use_living_streets": {
+      "description": "Preference for living/shared streets, 0.0\u20131.0.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "use_roads": {
+      "description": "Willingness to ride roads alongside motor traffic, 0.0\u20131.0\n(0.0 = prefer cycleways and quiet streets \u2014 the quiet-ride slider).",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   },
+   "CostingKind": {
+    "description": "Costing models exposed by the MCP tools (a deliberate subset of the\nValhalla costing list), serialised in snake_case exactly as Valhalla\nnames them.",
+    "oneOf": [
+     {
+      "const": "auto",
+      "description": "Standard car costing.",
+      "type": "string"
+     },
+     {
+      "const": "truck",
+      "description": "Truck costing; honours dimensional limits and, when a `truck`\nprofile is supplied, ADR dangerous-goods restrictions.",
+      "type": "string"
+     },
+     {
+      "const": "bicycle",
+      "description": "Bicycle costing; tune it with a `bicycle` options object.",
+      "type": "string"
+     },
+     {
+      "const": "pedestrian",
+      "description": "Pedestrian (walking) costing; tune it with a `pedestrian` options\nobject (lit streets, wheelchair/blind, hiking difficulty).",
+      "type": "string"
+     },
+     {
+      "const": "motor_scooter",
+      "description": "Motor scooter (moped) costing: like auto but prefers lower-speed\nroads and may use ways closed to larger motor vehicles.",
+      "type": "string"
+     }
+    ]
+   },
+   "EmissionsFuel": {
+    "description": "What a vehicle burns, in clean-air-zone scheme terms.",
+    "oneOf": [
+     {
+      "const": "petrol",
+      "description": "Petrol, including petrol hybrids (schemes rate a hybrid by its\ncombustion engine's approval).",
+      "type": "string"
+     },
+     {
+      "const": "diesel",
+      "description": "Diesel, including diesel hybrids.",
+      "type": "string"
+     },
+     {
+      "const": "electric",
+      "description": "Battery-electric.",
+      "type": "string"
+     },
+     {
+      "const": "hydrogen",
+      "description": "Hydrogen fuel cell.",
+      "type": "string"
+     },
+     {
+      "const": "gas",
+      "description": "LPG or CNG; rated as petrol by every scheme in the dataset.",
+      "type": "string"
+     }
+    ]
+   },
+   "EmissionsSpec": {
+    "description": "A vehicle's emission declaration, for clean-air / low-emission zone\nassessment.",
+    "properties": {
+     "euro_standard": {
+      "description": "Its Euro emission standard, 1\u20136. Heavy-duty approvals are written\nin Roman numerals (Euro VI); declare Euro VI as `6`. Required for\nany combustion fuel \u2014 without it no zone can be resolved, and a\nhalf-declared vehicle is indistinguishable from an undeclared one.\nOptional only for `electric` or `hydrogen`.",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "fuel": {
+      "$ref": "#/$defs/EmissionsFuel",
+      "description": "What it burns."
+     },
+     "vehicle_category": {
+      "$ref": "#/$defs/EmissionsVehicleCategory",
+      "description": "What kind of vehicle this is, in scheme terms."
+     }
+    },
+    "required": [
+     "vehicle_category",
+     "fuel"
+    ],
+    "type": "object"
+   },
+   "EmissionsVehicleCategory": {
+    "description": "What a vehicle is, in clean-air-zone scheme terms.\n\nDeclaring this turns \"charge depends on vehicle emissions\" into an\nanswer. Without it a zone can only be named, never priced.",
+    "oneOf": [
+     {
+      "const": "car",
+      "description": "A private car.",
+      "type": "string"
+     },
+     {
+      "const": "van",
+      "description": "A van or light goods vehicle up to 3.5 tonnes.",
+      "type": "string"
+     },
+     {
+      "const": "minibus",
+      "description": "A minibus (typically 8+ passenger seats, up to 5 tonnes).",
+      "type": "string"
+     },
+     {
+      "const": "hgv",
+      "description": "A heavy goods vehicle over 3.5 tonnes.",
+      "type": "string"
+     },
+     {
+      "const": "bus",
+      "description": "A bus over 5 tonnes.",
+      "type": "string"
+     },
+     {
+      "const": "coach",
+      "description": "A coach over 5 tonnes.",
+      "type": "string"
+     },
+     {
+      "const": "taxi",
+      "description": "A licensed hackney carriage.",
+      "type": "string"
+     },
+     {
+      "const": "phv",
+      "description": "A private hire vehicle.",
+      "type": "string"
+     },
+     {
+      "const": "motorcycle",
+      "description": "A motorcycle, moped or tricycle.",
+      "type": "string"
+     },
+     {
+      "const": "motorhome",
+      "description": "A motor caravan or campervan.",
+      "type": "string"
+     }
+    ]
+   },
+   "ExcludeFeature": {
+    "description": "A road feature to exclude outright. A hard exclusion can leave a request with no path at all \u2014 that is the honest answer, not a failure \u2014 and it depends on the routing engine's own hard-exclusion setting, which nothing here can read.",
+    "enum": [
+     "tolls",
+     "highways",
+     "ferries",
+     "bridges",
+     "tunnels"
+    ],
+    "type": "string"
+   },
+   "PedestrianSpec": {
+    "description": "Pedestrian options for costing \"pedestrian\": lit-street preference,\naccessibility type and hiking difficulty, mapped onto Valhalla\n`costing_options.pedestrian`. All preferences, never guarantees \u2014 the\nrouter prefers matching ways where the map data supports it.",
+    "properties": {
+     "max_hiking_difficulty": {
+      "description": "Maximum hiking-trail difficulty the route may use, as OSM\n`sac_scale` 1\u20136 (1 = well-cleared, mostly flat trails; 6 =\ndemanding alpine terrain). Default 1.",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "type": {
+      "description": "Pedestrian type: \"wheelchair\" (avoids steps, kerbs and steep\ngrades where mapped) or \"blind\" (richer guidance detail). Omit for\nthe default on-foot profile.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "use_lit": {
+      "description": "Preference for lit streets, 0.0\u20131.0 (1.0 = prefer lit paths as\nstrongly as possible \u2014 the \"walk me home on lit streets\" option).\nUnlit ways are still used when no lit alternative exists.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   },
+   "PreferredSideKind": {
+    "description": "Side-of-street preference for arriving at or departing from a location.\n\nCarries both vocabularies: MapMap's own `same`/`opposite`/`either` and\nthe OSRM/Mapbox `approaches` words `curb`/`unrestricted`, which are\naliases for `same` and `either`. Both spell the same request, on this\nsurface and on the HTTP API.",
+    "oneOf": [
+     {
+      "const": "same",
+      "description": "The side the location itself projects to \u2014 the kerb, resolved\nagainst the locale's driving side (the left kerb in the UK, the\nright in Germany).",
+      "type": "string"
+     },
+     {
+      "const": "opposite",
+      "description": "The far side of the road from the location.",
+      "type": "string"
+     },
+     {
+      "const": "either",
+      "description": "No side preference.",
+      "type": "string"
+     },
+     {
+      "const": "curb",
+      "description": "Alias for `same`, from the OSRM/Mapbox `approaches` vocabulary.",
+      "type": "string"
+     },
+     {
+      "const": "unrestricted",
+      "description": "Alias for `either`, from the OSRM/Mapbox `approaches` vocabulary.",
+      "type": "string"
+     }
+    ]
+   },
+   "RouteLocation": {
+    "anyOf": [
+     {
+      "properties": {
+       "lat": {
+        "description": "Latitude in decimal degrees (\u221290 to 90).",
+        "format": "double",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude in decimal degrees (\u2212180 to 180).",
+        "format": "double",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "GeoJSON position [lon, lat]: longitude FIRST.",
+      "items": {
+       "format": "double",
+       "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     }
+    ],
+    "description": "One location of a `route` request: a coordinate, plus the optional\nkerbside approach for arriving at it.\n\nA bare `{lat, lon}` is still a complete location \u2014 every kerbside field\nis optional and omitting all of them is exactly the request that was\nmade before they existed.",
+    "properties": {
+     "preferred_side": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/PreferredSideKind"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Which side of the street to arrive on (or depart from). `same` (or\n`curb`) puts the vehicle on the door's side of the road, resolved\nagainst the locale's driving side. Two honest limits: this is a\n**snapping preference**, not a manoeuvre guarantee \u2014 the engine\nprefers an edge on that side, it does not promise the driver never\ncrosses \u2014 and it needs a coordinate genuinely offset from the road\ncentreline, because a point on the centreline has no side."
+     },
+     "street_side_max_distance_m": {
+      "description": "Metres: further than this from the road centreline, the side of\nstreet is treated as `none` and `preferred_side` does nothing.\nEngine default 1000 m. Together with `street_side_tolerance_m` this\nis a WINDOW: a pair that leaves no window (tolerance at or above\nmax distance) is refused here rather than answered with a route on\nwhich the kerbside preference was silently inert.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "street_side_tolerance_m": {
+      "description": "Metres: nearer than this to the road centreline, the side of street\nis treated as `none` and `preferred_side` does nothing. Engine\ndefault 5 m.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   },
+   "TruckSpec": {
+    "description": "Truck profile for routing: physical dimensions plus the ADR\ndangerous-goods declaration. Omitted dimensions default to the EU\nmaximum authorised dimensions of Council Directive 96/53/EC (4.0 m\nheight, 2.55 m width, 16.5 m length, 40 t gross weight).",
+    "properties": {
+     "gross_weight_t": {
+      "description": "Gross combination weight in metric tonnes.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "hazmat": {
+      "default": false,
+      "description": "Whether the vehicle carries dangerous goods (ADR). Defaults to\nfalse.",
+      "type": "boolean"
+     },
+     "height_m": {
+      "description": "Vehicle height in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "length_m": {
+      "description": "Vehicle length in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "tunnel_code": {
+      "description": "ADR 8.6.4 tunnel restriction code of the load, e.g. \"B\", \"C5000D\",\n\"B/D\", or \"(\u2014)\"/\"none\" for explicitly unrestricted. Leave unset if\nunknown: a hazmat load without a code is conservatively treated as\ncode B (allowed only through category-A tunnels).",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "width_m": {
+      "description": "Vehicle width in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "avoid": {
+    "description": "Road features to avoid as a PREFERENCE. Rendered as the costing's\nwillingness factor set to zero \u2014 a thumb on the scale, not a ban.\nThe engine's own reference is explicit that a value of zero is not\nguaranteed to avoid the feature entirely, and it does not: asking\nto avoid tolls across the Dartford Crossing returns the same tolled\nroute, because the untolled alternative is fifty kilometres\nfurther. Use `exclude` when you mean a ban.",
+    "items": {
+     "$ref": "#/$defs/AvoidFeature"
+    },
+    "type": [
+     "array",
+     "null"
+    ]
+   },
+   "bicycle": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/BicycleSpec"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Bicycle options (bicycle type, road/surface/hill preferences).\nRequires costing \"bicycle\"."
+   },
+   "costing": {
+    "$ref": "#/$defs/CostingKind",
+    "default": "auto",
+    "description": "Costing model: \"auto\" (default), \"truck\", \"bicycle\", \"pedestrian\"\nor \"motor_scooter\"."
+   },
+   "destination": {
+    "$ref": "#/$defs/RouteLocation",
+    "description": "Route destination."
+   },
+   "emissions": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/EmissionsSpec"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "The vehicle's emission declaration, for UK clean-air / low-emission\nzone assessment. Given, the response's `zones` block names every\nzone the route enters and what THIS vehicle pays there, with the\npublishing authority cited. Without it a zone can only be named,\nnever priced. Needs the MapMap gateway, which holds the curated\nzone dataset; the full dataset is readable at `GET /v1/zones`."
+   },
+   "exclude": {
+    "description": "Road features to exclude outright, rendered as the costing's hard\nexclusion flag. Two things follow from that and both matter: a hard\nexclusion can return NO ROUTE rather than a detour (excluding\ntunnels on a Rotherhithe crossing has no answer), and the flags\ndepend on the routing engine's `allow_hard_exclusions` setting,\nwhich the engine does not expose and nothing here can read \u2014 so\nthis is never promised, only requested.",
+    "items": {
+     "$ref": "#/$defs/ExcludeFeature"
+    },
+    "type": [
+     "array",
+     "null"
+    ]
+   },
+   "exclude_polygons": {
+    "description": "Areas to avoid \u2014 scenario analysis (\"close this bridge and\nre-route\"): an array of polygons, each an array of `[lon, lat]`\npairs forming one exterior ring (GeoJSON-style, longitude FIRST).\nRoads intersecting any ring are excluded from the search. Applies\nto the Valhalla engine; unsupported on the GraphHopper engine,\nwhere it is ignored.",
+    "items": {
+     "items": {
+      "items": {
+       "format": "double",
+       "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     },
+     "type": "array"
+    },
+    "type": [
+     "array",
+     "null"
+    ]
+   },
+   "landmarks": {
+    "description": "Name landmarks in the turn instructions (default false): each\nmanoeuvre that passes a recognisable place \u2014 a petrol station, a\nsupermarket, a household-name chain \u2014 gains a\n`landmark_instruction` like \"Turn right just after the Shell\ngarage\" beside the engine's own street-name instruction, which is\nnever replaced. Nothing is named unless it is recognisable from the\nroad, within 40 m of the junction and not tagged as closed, so many\nroutes come back with none: a wrong landmark is worse than no\nlandmark. Needs the MapMap gateway, whose place index does the\nlookup.",
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "origin": {
+    "$ref": "#/$defs/RouteLocation",
+    "description": "Route origin."
+   },
+   "pedestrian": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/PedestrianSpec"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Pedestrian options (lit-street preference, wheelchair/blind type,\nhiking difficulty). Requires costing \"pedestrian\"."
+   },
+   "rationale": {
+    "description": "Explain the route (default false): re-routes with each declared\ntruck constraint (truck costing) or avoidance-side routing\npreference (auto, bicycle, pedestrian, motor_scooter) relaxed and\nreports the ones that actually changed the route as\n`rationale.avoided[]`. Opt-in \u2014 it costs up to 1 + N extra routing\ncalls, one per declared field plus one combined probe, and it is\nbilled for the ones it actually makes: at most 8 in total,\ntypically fewer, and 1 when there is nothing to probe. Against the\nhosted gateway each probe is its own metered route call, which is\nexactly what `POST /route` with `rationale: true` charges for its\nown fan-out, so the two surfaces price the same explanation the\nsame way.",
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "scenic": {
+    "description": "Ask whether there is a prettier way (default false, `auto`\ncosting only). The route in `geometry_polyline6` is NEVER swapped:\nwhat comes back is a peer offer beside it, in `scenic`, carrying\nthe plain sentence that justifies it. No sentence, no offer: a\nroute that scores well but cannot support one is dropped rather\nthan dressed up, and `scenic.reason` is then null, which is an\nanswer. Every candidate that lost says why in\n`scenic.rejections[]` (`same_route`, `no_scenic_gain`,\n`not_scenic_enough`, `over_time_budget`, `nothing_to_say`), so\n\"no prettier way\" is always attributable. Opt-in because it\ncosts: at most two extra metered route computations, the same\nbilling shape as `rationale`. Needs the MapMap gateway, whose\nbasemap archive the scoring is measured against.",
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "truck": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/TruckSpec"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Truck profile (dimensions + ADR declaration). Requires costing\n\"truck\"; when present, ADR dangerous-goods costing options are\nmerged into the request."
+   },
+   "waypoints": {
+    "description": "Optional intermediate stops, visited in order between origin and\ndestination.",
+    "items": {
+     "$ref": "#/$defs/RouteLocation"
+    },
+    "type": [
+     "array",
+     "null"
+    ]
+   }
+  },
+  "required": [
+   "origin",
+   "destination"
+  ],
+  "type": "object"
+ },
+ "name": "route",
+ "outputSchema": {
+  "$defs": {
+   "AppliedAdr": {
+    "description": "The ADR costing that was merged into a truck route request.\n\nEvery field here describes the **request**: the declared load and the\ncosting options built from it. Nothing here is an assertion about the\nreturned geometry \u2014 see [`TunnelEnforcement`].",
+    "properties": {
+     "costing_options": {
+      "description": "The exact Valhalla `costing_options` JSON merged into the request."
+     },
+     "forbidden_tunnel_categories": {
+      "description": "ADR tunnel categories **the vehicle** is forbidden from under the\nworst-case reading of ADR 8.6.4 (conditional clauses assumed to\napply). Empty when unrestricted. This is not a claim that the\nreturned route contains no tunnel of these categories \u2014 read\n[`AppliedAdr::tunnel_enforcement`] for what was actually applied.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "hazmat": {
+      "description": "Whether the profile declared dangerous goods.",
+      "type": "boolean"
+     },
+     "tunnel_code": {
+      "description": "Canonical ADR tunnel restriction code applied (\"B/D\", \"(\u2014)\", \u2026),\nor null when no code was declared.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "tunnel_enforcement": {
+      "$ref": "#/$defs/TunnelEnforcement",
+      "description": "What the router did with `forbidden_tunnel_categories`, and the\nboundary of the resulting guarantee."
+     }
+    },
+    "required": [
+     "hazmat",
+     "forbidden_tunnel_categories",
+     "tunnel_enforcement",
+     "costing_options"
+    ],
+    "type": "object"
+   },
+   "AppliedAvoidance": {
+    "description": "What the avoidance lists actually did, reported back so a 200 is never\nreadable as a certificate.",
+    "properties": {
+     "avoid": {
+      "description": "The `avoid` values that were applied, echoed back.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "caveats": {
+      "description": "The caveats that apply to this request, in words fit to repeat to a\nuser. Always present when anything was applied.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "costing_option_fields": {
+      "description": "The engine costing-option fields these words became, e.g.\n`{\"use_tolls\": 0.0, \"exclude_ferries\": true}`. This is the whole of\nwhat was sent \u2014 there is no hidden second mechanism."
+     },
+     "exclude": {
+      "description": "The `exclude` values that were applied, echoed back.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "costing_option_fields",
+     "caveats"
+    ],
+    "type": "object"
+   },
+   "AvoidedConstraint": {
+    "description": "One constraint or preference the route provably changed for, derived\nby route divergence (see [`RouteRationale`]).",
+    "properties": {
+     "baseline": {
+      "description": "What the probe compared against: \"relaxed_to_non_binding\" (truck\nconstraints set to explicitly non-binding values),\n\"engine_default\" (preference removed so the engine default\napplies) or \"cap_lifted\" (a hard cap raised to its maximum).",
+      "type": "string"
+     },
+     "basis": {
+      "description": "Always \"route_divergence\": the entry was derived by re-routing\nwithout the field and diffing geometry, not from sign or\nmap-feature data.",
+      "type": "string"
+     },
+     "constraint": {
+      "description": "The costing-options field that was relaxed (\"height\", \"use_hills\",\n\u2026, or \"combined\").",
+      "type": "string"
+     },
+     "distance_saved_m": {
+      "description": "Distance the constraint costs, metres.",
+      "format": "double",
+      "type": "number"
+     },
+     "diverged_length_m": {
+      "description": "Length of the diverging span along the constrained route, metres.",
+      "format": "double",
+      "type": "number"
+     },
+     "fields": {
+      "description": "For kind \"combined\": the constraint fields that only bind together.",
+      "items": {
+       "type": "string"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "kind": {
+      "description": "Reason kind. Truck: \"max_height\", \"max_width\", \"max_length\",\n\"max_weight\", \"hazmat\", \"adr_tunnel\". Preferences: \"hill_avoided\",\n\"surface_avoided\", \"road_avoided\", \"highway_avoided\",\n\"toll_avoided\", \"ferry_avoided\", \"living_street_avoided\",\n\"primary_road_avoided\", \"unlit_street_avoided\",\n\"hiking_difficulty_limited\", \"access_profile\". Any costing:\n\"combined\". There is deliberately no \"incident_avoided\" or\n\"traffic_delay_avoided\": the engine consumes no live incident or\ntraffic-speed input, so no divergence can be attributed to them.",
+      "type": "string"
+     },
+     "location": {
+      "$ref": "#/$defs/LatLon",
+      "description": "Where the constrained and unconstrained routes part ways."
+     },
+     "reason": {
+      "description": "Human-readable explanation, honest about the method.",
+      "type": "string"
+     },
+     "rejoins_at": {
+      "$ref": "#/$defs/LatLon",
+      "description": "Where they rejoin."
+     },
+     "time_saved_s": {
+      "description": "Travel time the constraint costs (unconstrained is this much\nfaster), seconds. Zero when the alternative is no faster.",
+      "format": "double",
+      "type": "number"
+     },
+     "unit": {
+      "description": "Unit of `value` (\"m\", \"t\") when dimensional.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "value": {
+      "description": "The declared value for the field (null for \"combined\"). NOTE: for\ntruck this is the vehicle's dimension, not the infrastructure\nlimit \u2014 the physical restriction is not identified."
+     }
+    },
+    "required": [
+     "kind",
+     "constraint",
+     "value",
+     "basis",
+     "baseline",
+     "location",
+     "rejoins_at",
+     "diverged_length_m",
+     "time_saved_s",
+     "distance_saved_m",
+     "reason"
+    ],
+    "type": "object"
+   },
+   "LandmarkSummary": {
+    "description": "The gateway's `landmarks` summary block.",
+    "properties": {
+     "annotated": {
+      "description": "How many manoeuvres gained a `landmark_instruction`.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "note": {
+      "description": "Why the count is what it is, when there is something to say: the\nper-route lookup cap was reached, or the deployment has no place\nindex at all. Absent means the number is simply the number, so a\nzero with no note means this route genuinely passes nothing\nrecognisable rather than that landmarks could not be looked up.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "annotated"
+    ],
+    "type": "object"
+   },
+   "LatLon": {
+    "anyOf": [
+     {
+      "properties": {
+       "lat": {
+        "description": "Latitude in decimal degrees (\u221290 to 90).",
+        "format": "double",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude in decimal degrees (\u2212180 to 180).",
+        "format": "double",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "GeoJSON position [lon, lat]: longitude FIRST.",
+      "items": {
+       "format": "double",
+       "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     }
+    ],
+    "description": "A WGS84 coordinate in decimal degrees: a {lat, lon} object (preferred), or a GeoJSON [lon, lat] array with LONGITUDE FIRST, the same order as every polygon field on this server."
+   },
+   "ManeuverOut": {
+    "description": "One turn-by-turn instruction of a computed route.",
+    "properties": {
+     "distance_m": {
+      "description": "Length of the maneuver in metres.",
+      "format": "double",
+      "type": "number"
+     },
+     "duration_s": {
+      "description": "Estimated duration of the maneuver in seconds.",
+      "format": "double",
+      "type": "number"
+     },
+     "instruction": {
+      "description": "Written instruction, e.g. \"Turn right onto Main Street\".",
+      "type": "string"
+     },
+     "landmark_instruction": {
+      "description": "The same manoeuvre anchored to a recognisable place, e.g. \"Turn\nright just after the Shell garage\" \u2014 present only when the request\nset `landmarks: true` and a place near the junction cleared the\nsalience bar. Prefer reading this aloud when it is there: it is how\na passenger would give the direction. `instruction` is always the\nengine's own and is never replaced.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "instruction",
+     "distance_m",
+     "duration_s"
+    ],
+    "type": "object"
+   },
+   "RouteRationale": {
+    "description": "Why the route goes the way it does \u2014 the `route` tool's opt-in\nrationale block, computed for truck, auto, bicycle, pedestrian and\nmotor_scooter costings. **Method honesty:** the routing engine exposes\nno exclusion set, so entries are derived by re-routing with each\ndeclared constraint or preference relaxed\n(`basis: \"route_divergence\"`); this proves a field was binding and\nwhere, but never names the physical restriction or feature (the\nspecific signed bridge, hill or unlit street). No live traffic or\nincident data enters the comparison and no delay is ever estimated\nfrom one \u2014 the engine has no live speed field.",
+    "properties": {
+     "avoided": {
+      "description": "The declared constraints or preferences that changed the route,\nwith locations and costs. Empty when nothing was binding.",
+      "items": {
+       "$ref": "#/$defs/AvoidedConstraint"
+      },
+      "type": "array"
+     },
+     "caveats": {
+      "description": "The method's limits, spelled out for relaying to users.",
+      "type": "string"
+     },
+     "method": {
+      "description": "Always \"route_divergence\".",
+      "type": "string"
+     },
+     "note": {
+      "description": "Why the list is empty or incomplete, when it is.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "method",
+     "avoided",
+     "caveats"
+    ],
+    "type": "object"
+   },
+   "ScenicOffer": {
+    "description": "The scenic assessment beside a route: a peer offer, never a\nsubstitution.\n\nThe fields here are the ones a client must actually read before\nsaying anything. `block` keeps the gateway's whole answer beside them\nso a figure can always be audited back to the source that produced\nit, rather than to this mapping.",
+    "properties": {
+     "alternative_geometry_polyline6": {
+      "description": "The scenic route's own geometry, polyline6, when there is one to\noffer. `geometry_polyline6` on the route itself is byte-for-byte\nwhat the same request returns without the flag.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "available": {
+      "description": "Whether scenery could be assessed at all on this deployment. When\nfalse, `note` says why and nothing below was measured: that is\n\"we could not look\", never \"there is nothing there\".",
+      "type": "boolean"
+     },
+     "block": {
+      "description": "The gateway's whole `scenic` block, verbatim: candidates, feature\nshares, tile coverage, metering and budget."
+     },
+     "caveats": {
+      "description": "The standing limits of the method, for relaying to users.",
+      "type": "string"
+     },
+     "chosen": {
+      "description": "Which route the assessment would offer: `\"fastest\"` (the quick way\nis already the pretty one, or nothing beat it) or `\"scenic\"`.",
+      "type": "string"
+     },
+     "extra_time_s": {
+      "description": "How much longer the offered route takes than the fastest one,\nseconds, and the sentence for it. Absent when nothing was offered.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "note": {
+      "description": "Why no assessment ran (only when `available` is false).",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "reason": {
+      "description": "The plain, speakable sentence behind the offer. **Null is an\nanswer**: nothing on this corridor measured above the floor, so\nno claim is made rather than one being invented.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "rejections": {
+      "description": "Why each candidate that lost lost. Empty when none did. Relay it:\nit is what makes \"no prettier way\" an attributable answer instead\nof a shrug.",
+      "items": {
+       "$ref": "#/$defs/ScenicRejection"
+      },
+      "type": "array"
+     },
+     "spoken": {
+      "description": "The trade phrased for speech, e.g. \"About seven minutes longer\nthan the quick way.\" Prefer reading this aloud over the seconds.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "available",
+     "chosen",
+     "caveats",
+     "block"
+    ],
+    "type": "object"
+   },
+   "ScenicRejection": {
+    "description": "Why one candidate route was not offered.",
+    "properties": {
+     "code": {
+      "description": "The rejection code: `same_route`, `no_scenic_gain`,\n`not_scenic_enough`, `over_time_budget` or `nothing_to_say`.",
+      "type": "string"
+     },
+     "detail": {
+      "description": "The code in words, including the minutes an `over_time_budget`\ncandidate would have cost, so raising the budget is an informed\nchoice rather than a guess.",
+      "type": "string"
+     },
+     "source": {
+      "description": "Where the candidate came from: `\"fastest\"`, `\"engine_alternate\"`\nor `\"no_motorway\"`.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "source",
+     "code",
+     "detail"
+    ],
+    "type": "object"
+   },
+   "TunnelEnforcement": {
+    "description": "How the declared ADR tunnel code reaches the routing engine, and what a\nreturned route therefore does \u2014 and does not \u2014 prove.\n\nThis block exists because [`AppliedAdr::forbidden_tunnel_categories`] is\na statement about the **load** (ADR 8.6.4 applied to the declared code),\nand on its own it reads like a statement about the **route**. It is not\none. The engine excludes a road only where the routing graph records an\nADR tunnel category for it, and that category is derived from OSM\n`hazmat:*` tagging. Coverage is therefore uneven: a corridor with no\nsuch tagging is not excluded and looks, in the response, exactly like a\ncorridor that was checked and cleared.\n\nThe field is emitted on every `applied_adr`, so a caller can never\nreceive the categories without the boundary that qualifies them.",
+    "properties": {
+     "basis": {
+      "description": "How the code is applied. `\"graph_adr_tunnel_category\"`: merged into\n`costing_options.truck.adr_tunnel_code` and matched, during the\nsearch, against each road's ADR tunnel category as recorded in the\nrouting graph.",
+      "type": "string"
+     },
+     "caveat": {
+      "description": "What an unchanged route does and does not prove, in one sentence.",
+      "type": "string"
+     },
+     "route_certified": {
+      "description": "Whether the returned route has been checked against a tunnel\ninventory *after* it was computed. Always `false`: exclusion happens\nduring the search, and only for roads the graph has a category for.\nA 200 is not a compliance certificate, and must not be relied on as\none.",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "basis",
+     "route_certified",
+     "caveat"
+    ],
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "applied_adr": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/AppliedAdr"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "The ADR costing merged into the request, or null when no truck\nprofile was given."
+   },
+   "avoidance": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/AppliedAvoidance"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "What `avoid`/`exclude` became, and the caveats that go with it\n(only when either list carried something)."
+   },
+   "distance_m": {
+    "description": "Total route distance in metres.",
+    "format": "double",
+    "type": "number"
+   },
+   "duration_s": {
+    "description": "Total estimated travel time in seconds.",
+    "format": "double",
+    "type": "number"
+   },
+   "geometry_polyline6": {
+    "description": "Full route geometry as a Google encoded polyline with six digits of\ndecimal precision (polyline6).",
+    "type": "string"
+   },
+   "landmarks": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/LandmarkSummary"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "The landmark-annotation summary (only when `landmarks: true` was\nrequested): how many manoeuvres gained a `landmark_instruction`,\nand a `note` when the per-route cap was hit or the deployment has\nno place index. A zero with no note means this route genuinely\npasses nothing recognisable."
+   },
+   "maneuvers": {
+    "description": "Ordered turn-by-turn maneuvers across all legs.",
+    "items": {
+     "$ref": "#/$defs/ManeuverOut"
+    },
+    "type": "array"
+   },
+   "rationale": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/RouteRationale"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Why the route goes this way (only when `rationale: true` was\nrequested; computed for truck, auto, bicycle, pedestrian and\nmotor_scooter costings)."
+   },
+   "scenic": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/ScenicOffer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "The scenic peer offer (only when `scenic: true` was requested):\nwhether there is a prettier way, the sentence that justifies it,\nwhat the detour costs, and why every candidate that lost lost.\nThe route above is never swapped for it."
+   },
+   "summary": {
+    "description": "One-line human-readable summary of the route.",
+    "type": "string"
+   },
+   "zones": {
+    "description": "Clean-air / low-emission zones this route enters and what the\ndeclared vehicle pays in each, with the publishing authority cited\n(only when `emissions` was declared). Passed through verbatim from\nthe gateway's curated dataset \u2014 the same figures `GET /v1/zones`\npublishes, so a charge can always be audited back to its source."
+   }
+  },
+  "required": [
+   "distance_m",
+   "duration_s",
+   "summary",
+   "maneuvers",
+   "geometry_polyline6"
+  ],
+  "type": "object"
+ }
+}

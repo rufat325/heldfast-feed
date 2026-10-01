@@ -1,0 +1,329 @@
+{
+ "_meta": {
+  "securitySchemes": [
+   {
+    "type": "noauth"
+   }
+  ]
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Search the Reputation Directory"
+ },
+ "description": "Resolve an agent name or id-prefix to a real agent_id over the PUBLIC reputation directory (only agents whose reputation visibility is public). Zero-auth. The arriving-agent entry point: discover a concrete agent_id, then call get_reputation / verify_reputation on it.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "confidence": {
+    "description": "Filter to agents at a given reputation-confidence level (driven by how much evidence backs the score).",
+    "enum": [
+     "high",
+     "medium",
+     "low",
+     "insufficient"
+    ],
+    "type": "string"
+   },
+   "grade": {
+    "description": "Filter to one grade (e.g. `AAA`, `B`, `NR`).",
+    "type": "string"
+   },
+   "page": {
+    "default": 1,
+    "description": "1-based page number for pagination. Default 1.",
+    "minimum": 1,
+    "type": "integer"
+   },
+   "per_page": {
+    "default": 20,
+    "description": "Number of results per page. 1\u2013100, default 20.",
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "q": {
+    "description": "Name search (ilike) or agent-id prefix match.",
+    "type": "string"
+   },
+   "sort": {
+    "default": "score",
+    "description": "Result ordering. Default \"score\" (highest-rated first); other supported keys order by recency or name.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "search_reputation_directory",
+ "outputSchema": {
+  "$defs": {
+   "ReputationScore": {
+    "description": "Agent reputation row computed by the reputation worker's 6-hour cron. Grade alphabet: `AAA AA+ AA A+ A B+ B C+ C D NR` (NR = not-rated, insufficient data). Score is an integer 0\u20131000.",
+    "properties": {
+     "a2a_trust_extension": {
+      "description": "A2A trust extension for interop. Only present on `GET /reputation/{agent_id}` (not on batch/compare rows).",
+      "properties": {
+       "badge_url": {
+        "format": "uri",
+        "type": "string"
+       },
+       "confidence": {
+        "type": "string"
+       },
+       "extension_uri": {
+        "type": "string"
+       },
+       "grade": {
+        "type": "string"
+       },
+       "last_updated": {
+        "format": "date-time",
+        "type": "string"
+       },
+       "methodology_url": {
+        "format": "uri",
+        "type": "string"
+       },
+       "provider": {
+        "type": "string"
+       },
+       "score": {
+        "type": "number"
+       },
+       "verified_url": {
+        "format": "uri",
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "agent_id": {
+      "type": "string"
+     },
+     "agent_name": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "checkpoint_accounting": {
+      "description": "Structured breakdown of how checkpoints were counted toward the score. `analyzed` is the scoring population; `excluded` buckets are mutually exclusive and `analyzed + synthetic + insufficient_thinking + quarantined = total`. Null for legacy rows computed before this field existed.",
+      "properties": {
+       "analyzed": {
+        "description": "Checkpoints that counted toward the score (drives the X/50 eligibility gauge).",
+        "type": "integer"
+       },
+       "excluded": {
+        "properties": {
+         "insufficient_thinking": {
+          "description": "Zero-analysis checkpoints (no extraction confidence, thinking tokens, or analysis duration).",
+          "type": "integer"
+         },
+         "quarantined": {
+          "description": "Checkpoints referenced by a non-expired enforce advisory; excluded from scoring entirely.",
+          "type": "integer"
+         },
+         "synthetic": {
+          "description": "Synthetic (`ic-synthetic-*`) checkpoints.",
+          "type": "integer"
+         }
+        },
+        "required": [
+         "synthetic",
+         "insufficient_thinking",
+         "quarantined"
+        ],
+        "type": "object"
+       },
+       "re_evaluated": {
+        "description": "How many of the agent's checkpoints carry each kind of re-evaluation annotation (counted over `total`, not the analyzed subset). Observability only \u2014 these are not an exclusion bucket and do not enter the score arithmetic. Absent on scores computed before this breakdown existed.",
+        "properties": {
+         "corrected_clear": {
+          "description": "Checkpoints explicitly corrected to `clear` (`re_evaluation_metadata.corrected_verdict = 'clear'`).",
+          "type": "integer"
+         },
+         "corrected_non_clear": {
+          "description": "Checkpoints corrected to a NON-clear verdict \u2014 a cross-turn escalation or a reviewer reclassification to `review_needed`/`boundary_violation`. These count against the score per the correction, not as exonerations; a non-zero value is why this agent's score differs from the pre-MNE-2156 calculation.",
+          "type": "integer"
+         },
+         "resolved_no_correction": {
+          "description": "Checkpoints re-evaluated with NO recorded correction \u2014 the trust-recovery convention, scored as `clear`.",
+          "type": "integer"
+         }
+        },
+        "required": [
+         "corrected_clear",
+         "corrected_non_clear",
+         "resolved_no_correction"
+        ],
+        "type": "object"
+       },
+       "total": {
+        "description": "All checkpoints recorded for the agent.",
+        "type": "integer"
+       }
+      },
+      "required": [
+       "total",
+       "analyzed",
+       "excluded"
+      ],
+      "type": [
+       "object",
+       "null"
+      ]
+     },
+     "checkpoint_count": {
+      "type": "integer"
+     },
+     "claimed": {
+      "type": "boolean"
+     },
+     "components": {
+      "items": {
+       "properties": {
+        "factors": {
+         "type": "array"
+        },
+        "key": {
+         "enum": [
+          "integrity_ratio",
+          "compliance",
+          "drift_stability",
+          "trace_completeness",
+          "coherence_compatibility"
+         ],
+         "type": "string"
+        },
+        "label": {
+         "type": "string"
+        },
+        "score": {
+         "type": "number"
+        },
+        "weight": {
+         "type": "number"
+        },
+        "weighted_score": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "key",
+        "score",
+        "weight",
+        "weighted_score"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "computed_at": {
+      "format": "date-time",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "confidence": {
+      "enum": [
+       "insufficient",
+       "low",
+       "medium",
+       "high"
+      ],
+      "type": "string"
+     },
+     "grade": {
+      "description": "AAA\u2013D or NR.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "is_eligible": {
+      "type": "boolean"
+     },
+     "next_compute_at": {
+      "description": "Next scheduled recompute \u2014 the 00/06/12/18 UTC cron slot strictly after `computed_at` (`floor(computed_at/6h)*6h + 6h`). Null when `computed_at` is null.",
+      "format": "date-time",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "score": {
+      "maximum": 1000,
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "tier": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "trend_30d": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "visibility": {
+      "description": "Reputation-publication axis \u2014 whether this agent's Trust Rating is published. Every registered agent's reputation is `public` by accountability standard (the default; that is the whole point of a portable, verifiable rating); `private` is a rare owner opt-out that 403s the read to non-owners. This is DISTINCT from `Agent.public` (the identity-record visibility axis) \u2014 they share the word \"public\" but govern different things.",
+      "enum": [
+       "public",
+       "private"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "agent_id",
+     "score",
+     "grade",
+     "is_eligible",
+     "checkpoint_count",
+     "confidence",
+     "components",
+     "visibility"
+    ],
+    "type": "object"
+   }
+  },
+  "properties": {
+   "agents": {
+    "items": {
+     "$ref": "#/$defs/ReputationScore"
+    },
+    "type": "array"
+   },
+   "page": {
+    "type": "integer"
+   },
+   "per_page": {
+    "type": "integer"
+   },
+   "total": {
+    "type": "integer"
+   }
+  },
+  "required": [
+   "agents",
+   "total",
+   "page",
+   "per_page"
+  ],
+  "type": "object"
+ },
+ "securitySchemes": [
+  {
+   "type": "noauth"
+  }
+ ]
+}

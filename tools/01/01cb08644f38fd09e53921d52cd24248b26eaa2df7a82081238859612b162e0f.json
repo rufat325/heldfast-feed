@@ -1,0 +1,222 @@
+{
+ "_meta": {
+  "ui": {
+   "resourceUri": "ui://well/widget/1648cb47"
+  },
+  "ui/resourceUri": "ui://well/widget/1648cb47"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Show records"
+ },
+ "description": "Put a table of records IN FRONT OF THE USER. Use it when the user asked to SEE rows \u2014 \"show me my invoices\", \"list my companies\", \"which suppliers have no category\" \u2014 and when the answer you owe them IS the table.\n\nBy default the table is the root's display view in the Well web app's column order. When the user's request calls for other columns (\"my invoices with their due date and balance\"), pass `columns` and the table shows those, sideways-scrollable, with the root's identity column first. Otherwise omit `columns` and the right ones render.\n\n\u26a0\ufe0f FOR A READ THAT IS YOURS RATHER THAN THEIRS, CALL `well_query_records` INSTEAD. Same arguments, same rows, no table. Every gate, count, freshness check and intermediate read belongs there \u2014 this tool renders on every call, so using it for an internal check drops a table into a conversation about something else.\n\n\u26a0\ufe0f DO NOT NARRATE THE TABLE. The card already shows these rows; restating them as markdown gives the user the table and a duplicate list under it. Two things the table cannot say for itself belong in your text: `totalCount` when it exceeds what is displayed (\"showing the 50 most recently updated of 214\"), and the `records_url` link for everything the card truncates.\n\n\u26a0\ufe0f ONE CARD PER TURN. A turn draws at most one table, and never a table beside a card that is waiting for a click.\n\nROOTS (read-only \u2014 all 33): companies, people, connectors, invoices, documents, transactions, accounts, payment_means, workspace_connectors, memberships, cards, checks, ledger_accounts, journals, journal_entries, tax_rates, exchange_rates, invoice_transactions, categories, account_balances, tasks, workspaces, invoice_payment_means, chat_conversations, blueprint_runs, workspace_connector_sync_logs, media, emails, phones, web_links, locations, invoice_items, billing_events\n(The accounting graph \u2014 ledger_accounts, journals, journal_entries \u2014 and balances/rates are read-only projections owned by the sync/posting pipelines; query them for financial context, you cannot create/update them here. Sub-resources like emails/phones/locations are usually richer when read via their parent company/person.)\n\nCATEGORY CATALOGS: \"categories\" holds two independent taxonomies, separated by `category_type`. Always filter on it \u2014 an unfiltered read mixes them:\n- `whereClause: { category_type: { _eq: \"company\" } }` is the COMPANY-CATEGORY catalog: the industry labels a counterparty carries, and the ids `well_update_company({ category_ids })` accepts. There is no curated allowlist \u2014 the labels are minted during enrichment \u2014 so read them here rather than inventing a taxonomy.\n- `whereClause: { category_type: { _eq: \"transaction\" } }` is the management/transaction taxonomy.\n\nCONNECTED TOOLS: do NOT use this tool to show the user what they have connected \u2014 call well_list_connectors instead. It owns that job: connection status, and an install link for anything not connected yet. Query root \"workspace_connectors\" here only for genuine RECORD-level needs \u2014 reading sync timestamps, filtering connections, joining them with other roots. (\"connectors\" is the installable catalog; \"workspace_connector_sync_logs\" is per-sync history.)\n\nWell already syncs the providers' data into the roots above \u2014 invoices, transactions, accounts, the accounting graph. ALWAYS read it from here. well_invoke_connector_tool and a provider's own tools are for an ACTION the user explicitly asked to take on that provider (e.g. \"create this record in Attio\"), never a way to fetch data Well already holds.\n\nFILTERING (whereClause):\n- Uses Hasura-style operators on field names.\n- Safe operators (work on ALL field types): _eq, _neq, _in, _nin, _is_null\n- Numeric/date only: _gt, _gte, _lt, _lte\n- Text only: _like, _ilike\n- When unsure of a field's type, prefer _eq or _in (they always work).\n- Combine with _and, _or, _not\n- For relationship fields, use nested syntax: { \"issuer\": { \"company_id\": { \"_eq\": \"<company_id>\" } } }\n- NEVER select the workspace's OWN records by matching a company name. One legal entity appears under\n  several labels \u2014 a registered name, a trade name, a bank-issued label \u2014 so a name filter silently\n  drops rows and the total reads as complete. On the invoices root, pass `partyScope` instead: it\n  resolves the workspace's own side on the server, so this query needs no id lookup and no extra call.\n  Call well_get_own_company for the id only when a root has no `partyScope` and you must filter on\n  issuer_pk / receiver_pk or the nested company_id yourself.\n- Match a counterparty by id too whenever you have one. Reach for _ilike on a name only to DISCOVER\n  candidates to show the user, never to compute a figure you will report.\nExamples:\n  { \"status\": { \"_eq\": \"unpaid\" } }\n  { \"grand_total\": { \"_gt\": 1000 } }\n  { \"local_currency\": { \"_eq\": \"EUR\" } }\n  { \"_and\": [{ \"status\": { \"_eq\": \"unpaid\" } }, { \"grand_total\": { \"_gte\": 500 } }] }\n  { \"issuer\": { \"company_id\": { \"_eq\": \"<company_id from well_get_own_company>\" } } }\n\nSORTING (orderBy):\n- Sort by any field: { field: \"grand_total\", direction: \"desc\" }\n- Default sort is by primary key ascending.\n\n\u26a0\ufe0f RULES:\n- Omit `fields` and `columns` to show the user the root's own display view\n- `columns` (at most 12 paths) is what the user SEES; use it only when the request names columns the display view lacks\n- `fields` is ADDITIVE and for values YOU need to reason about: it widens the payload you read and never changes the columns the user sees\n- Field paths from schema: \"invoices.issuer.name\" \u2192 [\"invoices\", \"issuer\", \"name\"]\n- Default 50 records per request, max 500.\n\nEXAMPLE - show the user their invoices (no `fields`, ever):\nwell_show_records({ root: \"invoices\", limit: 50 })\n\nONE CALL IS THE ANSWER \u2014 do not walk the root:\nEvery response carries `totalCount` (ALL matches, not just this page) and `records_url` (the full web-app table, with your filter and sort already applied). So a request to see a record type is ONE call: the user gets a table of the first page, the count tells them how many there are, and the link takes them to the rest. \"Show me all my invoices\" is answered by one call plus the link \u2014 NOT by fetching 483 rows into this conversation.\n- A non-null `nextCursor` is NOT a to-do. It means more rows exist, which\n  `totalCount` already told you and the link already covers.\n- Never paginate to compute a total, count, average or breakdown: aggregate over\n  the filtered set instead. Summing a paginated sample produces a wrong number.\n- Never paginate to \"be thorough\". Large roots will exhaust the output limit\n  mid-walk, and the user ends up with nothing legible.\n- Paginate ONLY for per-row work over every match that no aggregate can express,\n  and tell the user the cost before starting. Then: pass the returned\n  `nextCursor` as `cursor`; `nextCursor: null` is the last page.\n\nReturns { rows, totalCount, nextCursor, success }.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "allFields": {
+    "description": "If true, automatically fetches all scalar fields from schema. No need to specify fields.",
+    "type": "boolean"
+   },
+   "columns": {
+    "description": "The columns the table should show, when the user's request calls for columns other than the root's display view (for example an invoice with its due date and balance). Same path format as `fields`: each path is an array opening with the root's table name, taken verbatim from well_get_schema(root). They REPLACE the display view; the root's identity column still leads. Omit to show the root's own display view. At most 12.",
+    "items": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "maxItems": 12,
+    "type": "array"
+   },
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "cursor": {
+    "description": "Opaque cursor for the next page. Omit for the first page, then pass nextCursor from the previous response.",
+    "type": "string"
+   },
+   "fields": {
+    "description": "EXTRA field paths to add to the root's display view, for values you need to reason about. Each path is an array whose first segment is the root's table name \u2014 use the paths well_get_schema(root) returns verbatim, which is the root name for every root except people (whose table is peoples); a path opening with any other segment is dropped. Additive only: they widen the payload you receive, and the root's own display projection (the columns the Well web app shows, and the ones a table drawn from this query carries) stays what it is no matter what you pass here. A scalar a composite renders comes back AS that composite \u2014 asking for grand_total gets you composite_total_amount_currency, with grand_total inside it \u2014 so read `columns` for what was actually materialized. Omit unless you need a value the display view does not carry.",
+    "items": {
+     "items": {
+      "type": "string"
+     },
+     "type": "array"
+    },
+    "type": "array"
+   },
+   "limit": {
+    "description": "Max records to return (default 50, max 500)",
+    "maximum": 500,
+    "minimum": 1,
+    "type": "number"
+   },
+   "orderBy": {
+    "description": "Sort results by a field. Example: { field: \"grand_total\", direction: \"desc\" }",
+    "properties": {
+     "direction": {
+      "description": "Sort direction",
+      "enum": [
+       "asc",
+       "desc"
+      ],
+      "type": "string"
+     },
+     "field": {
+      "description": "Field name to sort by",
+      "type": "string"
+     }
+    },
+    "required": [
+     "field",
+     "direction"
+    ],
+    "type": "object"
+   },
+   "partyScope": {
+    "description": "Which side of an invoice the workspace itself occupies, resolved from its own company rather than a party name. `invoices` root only. \"purchase\" = the workspace owes it (payables); \"sales\" = the workspace is owed (receivables); \"intra_self\" = both parties are companies the workspace owns; \"unattributed\" = Well cannot place it on either side. The four partition every invoice, so report the \"unattributed\" count beside any payable total rather than dropping it \u2014 an unattributed invoice may still be owed. Prefer this over hand-writing an issuer/receiver filter.",
+    "enum": [
+     "purchase",
+     "sales",
+     "intra_self",
+     "unattributed"
+    ],
+    "type": "string"
+   },
+   "root": {
+    "description": "The entity type to query \u2014 any of the 33 read-only roots (companies, people, connectors, invoices, documents, transactions, accounts, payment_means, workspace_connectors, memberships, cards, checks, ledger_accounts, journals, journal_entries, tax_rates, exchange_rates, invoice_transactions, categories, account_balances, tasks, workspaces, invoice_payment_means, chat_conversations, blueprint_runs, workspace_connector_sync_logs, media, emails, phones, web_links, locations, invoice_items, billing_events). Call well_get_schema(root) first to discover fields.",
+    "type": "string"
+   },
+   "whereClause": {
+    "additionalProperties": {},
+    "description": "Hasura-style filter object. Operators: _eq, _neq, _gt, _gte, _lt, _lte, _like, _ilike, _in, _nin, _is_null. Example: { \"status\": { \"_eq\": \"unpaid\" } }",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit to query every authorized workspace at once; each row comes back tagged with the workspace it belongs to.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "root"
+  ],
+  "type": "object"
+ },
+ "name": "well_show_records",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "columnMeta": {
+    "additionalProperties": {
+     "additionalProperties": false,
+     "properties": {
+      "context": {
+       "type": "string"
+      },
+      "enrichment": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    },
+    "description": "Per-column field meaning, keyed by the same column paths as the rows. `context` = what the field means; `enrichment` = how the value is sourced (e.g. Bank sync, AI extraction). Only documented columns appear. Read this to interpret the returned values.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "columns": {
+    "description": "The materialized columns in display order, with each composite substituted in place of the source fields it consumed. A row object's key order does not preserve this \u2014 the flattener appends reconstructed composites last \u2014 so a UI that wants the web app's column order must read it from here.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "error": {
+    "type": "string"
+   },
+   "nextCursor": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Cursor for the next page. null means last page."
+   },
+   "records_url": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Login-gated deep link to the FULL web-app records table for this root (real DataTable: composites, inline editing, resize/pin), carrying this call's `whereClause` and `orderBy` so it opens on the same rows. Hand it to the user for everything past this page \u2014 it is the answer to 'show me all of them', not pagination. Null when no workspace is in context or no web page serves the root."
+   },
+   "returned": {
+    "description": "Number of rows returned",
+    "type": "number"
+   },
+   "rows": {
+    "description": "Query results",
+    "items": {
+     "additionalProperties": {},
+     "propertyNames": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "totalCount": {
+    "description": "Total matching records",
+    "type": "number"
+   }
+  },
+  "required": [
+   "rows",
+   "totalCount",
+   "returned",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Show records"
+}

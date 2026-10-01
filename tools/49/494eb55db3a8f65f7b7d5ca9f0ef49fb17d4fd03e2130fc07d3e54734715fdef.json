@@ -1,0 +1,272 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Recommend indexes for a workload"
+ },
+ "description": "Recommend indexes for a workload, and prove each one pays for itself before recommending it. Give it `statements` (the SQL you care about) or let it take the top N from `pg_stat_statements`; it plans each statement, generates candidate indexes, costs them with HypoPG hypothetical indexes, and returns only the ones that measurably cut estimated cost.\nHow candidates are generated, and the honest limit: this tool has NO SQL parser and does not read your SQL text. It EXPLAINs each statement and harvests the columns the PLANNER reports as filters, join keys, and sort keys, then intersects those tokens with the real column list from `pg_attribute` -- so a candidate can never name a column that does not exist. The extraction is deliberately loose (a token matching a real column name on a different table can slip through); HypoPG is the arbiter, and anything that does not lower cost is discarded. Column ORDER within each candidate is equality columns first (most selective first, from `pg_stats`), then at most one range column, then sort columns.\nThe search is greedy and BOUNDED. Each accepted index stays in place while the rest are re-costed on top of it, so later picks account for what earlier ones already fixed. `max_candidates` caps how many candidates are considered and `max_explains` caps total EXPLAIN round trips; when a cap stops the search early, `budget_exhausted` is true and the result is a truncated search, not a converged one.\nPostgreSQL 18 note, and it reverses a rule you have probably internalized: PG18 added B-tree SKIP SCAN, so a multi-column index whose LEADING column the query never constrains CAN now be used. The classic 'leading column never filtered means the index is useless' heuristic is wrong on PG18+. This tool gates that prune on the server version -- on PG18+ such candidates are kept and costed (`skip_scan_available: true`, and an accepted one carries `requires_skip_scan`), below PG18 they are pruned as unusable and counted in `candidates_pruned_leading_column`.\nRequires the HypoPG extension (`CREATE EXTENSION hypopg;`). Hypothetical indexes are session-scoped and are reset before the call returns, on the success and the failure path alike, so they never touch disk and never leak into a later query plan. Statements are only ever EXPLAINed, never executed, inside a `BEGIN READ ONLY` transaction.\nCosts are PLANNER ESTIMATES, not measurements: they are the right way to compare two plans for the same statement and the wrong way to predict wall-clock time. They are weighted by `calls` when the workload came from pg_stat_statements, so a query run a million times outranks an identical one run twice. Validate a recommendation with `pg_explain` before creating it, and create it with CONCURRENTLY in production (`create_statement_concurrently`).",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "limit": {
+    "default": 10,
+    "description": "How many statements to pull from pg_stat_statements. Ignored when `statements` is given.",
+    "maximum": 50,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "max_candidates": {
+    "default": 20,
+    "description": "Cap on candidate indexes considered. Candidates are ranked by table sequential-scan count first.",
+    "maximum": 200,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "max_explains": {
+    "default": 150,
+    "description": "Cap on EXPLAIN round trips spent searching (baseline plans are not counted). The search stops when the next candidate would exceed it and reports `budget_exhausted: true`.",
+    "maximum": 1000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "max_index_columns": {
+    "default": 3,
+    "description": "Widest candidate index to consider. Every narrower prefix is considered too.",
+    "maximum": 6,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "max_recommendations": {
+    "default": 5,
+    "description": "Stop after this many accepted indexes, even if more would still help.",
+    "maximum": 20,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "min_improvement": {
+    "default": 0.1,
+    "description": "Fraction of total weighted workload cost an index must remove to be accepted (0.1 = 10%). Relative rather than absolute so it means the same thing on a small and a large database.",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "schema": {
+    "description": "Only recommend indexes on tables in this schema. Candidates elsewhere are dropped.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "statements": {
+    "description": "The workload to optimize. When omitted, the top `limit` statements from pg_stat_statements are used instead (and weighted by their call counts).",
+    "items": {
+     "maxLength": 1000000,
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 50,
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "name": "pg_index_advisor",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "_warnings": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "baseline_workload_cost": {
+    "description": "Weighted total estimated cost before any recommendation.",
+    "type": "number"
+   },
+   "budget_exhausted": {
+    "description": "True when `max_explains` stopped the search before it converged.",
+    "type": "boolean"
+   },
+   "candidates_considered": {
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "candidates_pruned_leading_column": {
+    "description": "Multi-column candidates dropped by the pre-PG18 leading-column rule. Always 0 on PG18+.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "explain_budget": {
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "explains_used": {
+    "description": "EXPLAIN round trips spent searching, excluding baseline plans.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "final_workload_cost": {
+    "description": "Weighted total after applying every recommendation.",
+    "type": "number"
+   },
+   "recommendations": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "columns": {
+       "description": "Key columns in index order.",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "create_statement": {
+       "type": "string"
+      },
+      "create_statement_concurrently": {
+       "description": "The production form. CONCURRENTLY cannot run inside a transaction block.",
+       "type": "string"
+      },
+      "estimated_size_bytes": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Bigint as a decimal string, from hypopg_relation_size. Null when the estimate failed."
+      },
+      "helps_statements": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "cost_after": {
+          "type": "number"
+         },
+         "cost_before": {
+          "type": "number"
+         },
+         "statement": {
+          "description": "Index into the top-level `statements` array.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         }
+        },
+        "required": [
+         "statement",
+         "cost_before",
+         "cost_after"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "requires_skip_scan": {
+       "description": "True when the leading column is never constrained by the workload, so this index relies on PostgreSQL 18 skip scan. Never true below PG18, where such candidates are pruned instead.",
+       "type": "boolean"
+      },
+      "table": {
+       "description": "`schema.table`, as the planner reported it.",
+       "type": "string"
+      },
+      "using": {
+       "description": "Access method. Always btree -- see the tool description.",
+       "type": "string"
+      },
+      "workload_cost_after": {
+       "type": "number"
+      },
+      "workload_cost_before": {
+       "description": "Weighted total workload cost before this index.",
+       "type": "number"
+      },
+      "workload_cost_reduction_pct": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "table",
+      "columns",
+      "using",
+      "create_statement",
+      "create_statement_concurrently",
+      "estimated_size_bytes",
+      "workload_cost_before",
+      "workload_cost_after",
+      "workload_cost_reduction_pct",
+      "requires_skip_scan",
+      "helps_statements"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "skip_scan_available": {
+    "description": "True on PostgreSQL 18+, where B-tree skip scan exists.",
+    "type": "boolean"
+   },
+   "statements": {
+    "description": "The workload as analyzed, in the order `helps_statements.statement` indexes into.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "baseline_cost": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Null when the statement could not be planned."
+      },
+      "calls": {
+       "description": "Bigint as a decimal string. '1' for a caller-supplied statement.",
+       "type": "string"
+      },
+      "planned": {
+       "description": "False when EXPLAIN failed; see `_warnings` for why.",
+       "type": "boolean"
+      },
+      "sql": {
+       "description": "Truncated to 300 characters.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "sql",
+      "calls",
+      "baseline_cost",
+      "planned"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "recommendations",
+   "statements",
+   "baseline_workload_cost",
+   "final_workload_cost",
+   "candidates_considered",
+   "candidates_pruned_leading_column",
+   "explains_used",
+   "explain_budget",
+   "budget_exhausted",
+   "skip_scan_available"
+  ],
+  "type": "object"
+ },
+ "title": "Recommend indexes for a workload"
+}

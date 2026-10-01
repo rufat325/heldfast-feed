@@ -1,0 +1,353 @@
+{
+ "description": "Order a handful of errands against a hard arrival time, and say honestly whether they fit. This is the \"pick up a prescription, get petrol, and be at the school by quarter past three\" tool. Give `origin`, `destination` (+ `destination_name`), `arrive_by` (RFC 3339 with an offset: convert \"quarter past three\" yourself), optional `depart_at`, and 1 to 5 `errands`. Each errand is EITHER a `category` (a kind of place: \"pharmacy\", \"fuel\", \"supermarket\", or a colloquial phrase the server normalises; use `list_place_categories` for the vocabulary) OR a `place` {lat, lon} the driver already knows (\"the school\", \"the nursery\"). Resolve a named place with `geocode` first and pass the coordinate: never invent one. Optional `dwell_minutes` per errand (default 5). The server chooses the order and the actual shops, exhaustively, over engine-computed travel times -- do NOT attempt the ordering or the arithmetic yourself. IMPORTANT: `feasible: false` is an ANSWER, not an error to retry. It names the errand that costs the most (`blocking_errand`), says how late the whole chain would be (`over_by_s`), and returns the stops of the chain that DOES fit with `dropped` naming what had to go. Tell the driver what to drop. Every stop is a real indexed place carrying its id: never mention a shop the answer did not return. `hours` is \"open_on_the_tag\" (the map's tag covers your arrival, which is evidence and not a promise) or \"unknown\" (most places carry no hours at all); a place the tag proves shut is never proposed. ALWAYS show `usage_note`: this is planned before setting off or by a passenger, never at the wheel. Requires the MapMap gateway.",
+ "inputSchema": {
+  "$defs": {
+   "ErrandSpec": {
+    "description": "One errand in a `plan_errands` chain: a kind of place to find, or a\nplace the caller already knows.",
+    "properties": {
+     "category": {
+      "description": "The KIND of place wanted: a category from `list_place_categories`\n(\"pharmacy\", \"fuel\", \"supermarket\"), or a colloquial phrase the\nserver normalises (\"petrol station\", \"chemist\"). Use this for\nanything the driver described by what it is rather than by name.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "dwell_minutes": {
+      "description": "How long the driver is out of the car here, minutes (default 5).",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "id": {
+      "description": "What to call this errand in the answer (\"prescription\", \"petrol\").\nDefaults to the category, or to \"stop N\".",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "place": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/LatLon"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "A specific place the driver already knows, as a coordinate. Use\nthis for \"the school\", \"the nursery\", \"Mum's\": places the map\ncannot be expected to resolve from the words alone. Resolve a NAMED\nplace with `geocode` first and pass the coordinate here; never\nguess one."
+     }
+    },
+    "type": "object"
+   },
+   "LatLon": {
+    "anyOf": [
+     {
+      "properties": {
+       "lat": {
+        "description": "Latitude in decimal degrees (\u221290 to 90).",
+        "format": "double",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude in decimal degrees (\u2212180 to 180).",
+        "format": "double",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "GeoJSON position [lon, lat]: longitude FIRST.",
+      "items": {
+       "format": "double",
+       "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     }
+    ],
+    "description": "A WGS84 coordinate in decimal degrees: a {lat, lon} object (preferred), or a GeoJSON [lon, lat] array with LONGITUDE FIRST, the same order as every polygon field on this server."
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "arrive_by": {
+    "description": "The hard arrival time, RFC 3339 with an offset\n(\"2026-09-21T15:15:00+01:00\"). Convert \"quarter past three\" to an\nabsolute instant in the driver's own offset before calling.",
+    "type": "string"
+   },
+   "depart_at": {
+    "description": "When they set off, RFC 3339. Defaults to now.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "destination": {
+    "$ref": "#/$defs/LatLon",
+    "description": "Where they have to be by `arrive_by`."
+   },
+   "destination_name": {
+    "description": "What to call the destination in the answer (\"the school\").",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "errands": {
+    "description": "The errands, in any order: the answer decides the order. One to\nfive.",
+    "items": {
+     "$ref": "#/$defs/ErrandSpec"
+    },
+    "type": "array"
+   },
+   "max_detour_minutes": {
+    "description": "How far off the direct route a candidate place may sit, as a detour\nin minutes (default 12, at most 45).",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "origin": {
+    "$ref": "#/$defs/LatLon",
+    "description": "Where the driver sets off from."
+   }
+  },
+  "required": [
+   "origin",
+   "destination",
+   "arrive_by",
+   "errands"
+  ],
+  "type": "object"
+ },
+ "name": "plan_errands",
+ "outputSchema": {
+  "$defs": {
+   "ErrandStop": {
+    "description": "One planned stop in an errand chain.",
+    "properties": {
+     "arrive": {
+      "description": "When the driver arrives, RFC 3339.",
+      "type": "string"
+     },
+     "depart": {
+      "description": "When they leave, RFC 3339.",
+      "type": "string"
+     },
+     "drive_s": {
+      "description": "Driving time of the leg into this stop, seconds.",
+      "format": "double",
+      "type": "number"
+     },
+     "errand": {
+      "description": "Which errand this stop discharges.",
+      "type": "string"
+     },
+     "hours": {
+      "description": "What the map's opening-hours tag says about the arrival time:\n\"open_on_the_tag\" (the tag covers it, which is evidence and NOT a\npromise) or \"unknown\" (no usable tag). A stop the tag proves shut\nis never proposed, so \"closed\" never appears here.",
+      "type": "string"
+     },
+     "hours_tag": {
+      "description": "The tag itself, when the map carries one.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "id": {
+      "description": "The index id, for an indexed place. Its presence is what makes the\nstop checkable; a stop without one is a coordinate the caller gave.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "kind": {
+      "description": "\"category\" for a place the index found, \"place\" for one the caller\nsupplied.",
+      "type": "string"
+     },
+     "label": {
+      "description": "Its full label, for reading aloud.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "lat": {
+      "description": "Latitude.",
+      "format": "double",
+      "type": "number"
+     },
+     "lon": {
+      "description": "Longitude.",
+      "format": "double",
+      "type": "number"
+     },
+     "name": {
+      "description": "The place's name.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "errand",
+     "kind",
+     "lat",
+     "lon",
+     "arrive",
+     "depart",
+     "drive_s",
+     "hours"
+    ],
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "arrival": {
+    "description": "When the plan arrives, RFC 3339. Present whenever there is a plan,\nincluding the reduced plan on an infeasible answer.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "arrive_by": {
+    "description": "The deadline, echoed.",
+    "type": "string"
+   },
+   "attribution": {
+    "description": "Credit owed for the place data, when the answer used the index.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "blocking_errand": {
+    "description": "The errand that costs the most time, when the deadline is missed.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "corridor_note": {
+    "description": "**Always present.** What the corridor search did and did not look\nat. An empty answer is a statement about this index and this\ncorridor, never about what exists on the ground.",
+    "type": "string"
+   },
+   "departure": {
+    "description": "When the driver sets off, RFC 3339.",
+    "type": "string"
+   },
+   "dropped": {
+    "description": "Errands that had to be dropped for the plan to fit. Empty when\nfeasible.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "failed_errand": {
+    "description": "The errand a \"no_candidates_in_corridor\" or \"all_candidates_closed\"\nanswer is about.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "feasible": {
+    "description": "**Whether every errand fits before the deadline.** False is an\nANSWER, not an error: report `reason`, the errand named in\n`blocking_errand`, and what `dropped` says has to go.",
+    "type": "boolean"
+   },
+   "geometry_polyline6": {
+    "description": "The planned journey as an encoded polyline6.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "opening_hours_note": {
+    "description": "**Always present.** How opening hours were used, and how little of\nthe map carries them.",
+    "type": "string"
+   },
+   "over_by_s": {
+    "description": "How late the whole chain would be, seconds.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "reason": {
+    "description": "The same cause in plain language, for the driver.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "reason_code": {
+    "description": "Machine token for why the chain does not fit: \"deadline_missed\",\n\"destination_unreachable_in_time\", \"no_candidates_in_corridor\",\n\"all_candidates_closed\" or \"unroutable\".",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "slack_s": {
+    "description": "Spare seconds before the deadline.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "stops": {
+    "description": "The stops, in visit order. On an infeasible answer these are the\nstops of the reduced plan, the one that DOES fit.",
+    "items": {
+     "$ref": "#/$defs/ErrandStop"
+    },
+    "type": "array"
+   },
+   "total_drive_s": {
+    "description": "Total driving time, seconds.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "total_dwell_s": {
+    "description": "Total time out of the car, seconds.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "usage_note": {
+    "description": "**Always present.** Why this is planned stationary rather than at\nthe wheel. Show it.",
+    "type": "string"
+   },
+   "verification_note": {
+    "description": "**Always present.** That every stop is an indexed place or a\nsupplied coordinate, never a generated one.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "feasible",
+   "departure",
+   "arrive_by",
+   "stops",
+   "dropped",
+   "corridor_note",
+   "opening_hours_note",
+   "usage_note",
+   "verification_note"
+  ],
+  "type": "object"
+ }
+}

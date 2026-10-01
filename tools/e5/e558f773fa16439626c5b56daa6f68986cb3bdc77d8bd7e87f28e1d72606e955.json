@@ -1,0 +1,532 @@
+{
+ "_meta": {
+  "openai/outputTemplate": "ui://widget/product-list-v11.skybridge.html",
+  "ui": {
+   "resourceUri": "ui://widget/product-list-v11.html"
+  },
+  "ui/resourceUri": "ui://widget/product-list-v11.html"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false
+ },
+ "description": "Find fashion products using natural language and/or structured filters. Provide a `query` for semantic ranking via multimodal text+image embeddings (\"oversized wool coat\", \"black leather jacket\", \"minimalist gold jewelry\", \"linen shirt for a beach wedding under $200\") \u2014 best for open-ended discovery. Keep queries concrete: noun-led with up to one or two modifiers works best (\"summer linen shirt\" beats \"breathable linen shirt perfect for summer\"). Provide only structured filters (category, brand, colors, gender, price, etc.) for pure browse \u2014 results are recency-ranked and paginate cleanly. Combine both for filtered semantic search. At least one of query or a filter must be provided.\n\nExample calls (notice the sparse filter population \u2014 descriptive attributes stay in `query`, not in structured fields):\n- \"linen wedding guest dress under $200\" \u2192 {query: \"linen wedding guest dress\", gender: \"women\", max_price: 200, materials: [\"linen\"]}\n- \"wool coat under $300\" \u2192 {query: \"wool coat\", gender: \"women\", max_price: 300, materials: [\"wool\"]}\n- \"browse women's black dresses $100-$300\" \u2192 {gender: \"women\", category: \"clothing/dresses\", colors: [\"black\"], min_price: 100, max_price: 300}\n- \"Acne Studios outerwear\" \u2192 {query: \"outerwear\", brand: \"Acne Studios\", gender: \"women\"}\n\nReturns compact product cards: AI-generated summary, price, images, tags, and compact availability by color/size; variant price differences are nested under the availability dimension that determines price. For merchant description, store info, SKU-level variants, exact variant prices, and all product images, call get_product with a product ID from these results. Multi-currency prices supported (e.g. \"under 200 z\u0142\" or min_price=200 + currency=\"PLN\"); returned prices render in the requested currency when provided.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "available_sizes": {
+    "description": "Filter by available size labels, e.g. [\"s\", \"m\", \"38\"].",
+    "items": {
+     "maxLength": 200,
+     "type": "string"
+    },
+    "maxItems": 20,
+    "type": "array"
+   },
+   "brand": {
+    "description": "Filter by brand name",
+    "maxLength": 200,
+    "type": "string"
+   },
+   "category": {
+    "description": "Category slug, e.g. \"clothing\", \"clothing/jackets\", \"clothing/jackets/bomber-jackets\". Accepts last-segment shortcuts when unambiguous \u2014 e.g. \"loafers-and-slip-ons\" resolves the same as \"shoes/loafers-and-slip-ons\", and \"bomber-jackets\" resolves the same as \"clothing/jackets/bomber-jackets\".",
+    "maxLength": 200,
+    "type": "string"
+   },
+   "color_match": {
+    "default": "any",
+    "description": "Color matching mode. \"any\" (default): product has at least one of the queried colors. \"exact\": product has at least one image where the ONLY colors are the queried colors \u2014 use for mono-color searches like \"all black\".",
+    "enum": [
+     "any",
+     "exact"
+    ],
+    "type": "string"
+   },
+   "colors": {
+    "description": "Filter by lowercase colors: e.g. [\"black\", \"navy\", \"sage green\"]",
+    "items": {
+     "maxLength": 200,
+     "type": "string"
+    },
+    "maxItems": 20,
+    "type": "array"
+   },
+   "country": {
+    "description": "Optional shopper location as an ISO-3166-1 alpha-2 country code (e.g. \"US\", \"GB\", \"DE\"). Recorded for analytics and used to improve future offer geo-matching. Omit if unknown \u2014 absence preserves current behavior.",
+    "pattern": "^[A-Za-z]{2}$",
+    "type": "string"
+   },
+   "currency": {
+    "description": "ISO 4217 currency code for min_price/max_price (e.g. \"PLN\", \"EUR\", \"GBP\"). Prices are converted to USD for filtering. Omit for USD.",
+    "maxLength": 3,
+    "type": "string"
+   },
+   "exclude_colors": {
+    "description": "Exclude products with these colors: e.g. [\"white\", \"beige\"]",
+    "items": {
+     "maxLength": 200,
+     "type": "string"
+    },
+    "maxItems": 20,
+    "type": "array"
+   },
+   "exclude_materials": {
+    "description": "Exclude products with these materials: e.g. [\"polyester\", \"nylon\"]",
+    "items": {
+     "maxLength": 200,
+     "type": "string"
+    },
+    "maxItems": 20,
+    "type": "array"
+   },
+   "gender": {
+    "description": "Gender filter.",
+    "enum": [
+     "women",
+     "men",
+     "unisex",
+     "boys",
+     "girls"
+    ],
+    "type": "string"
+   },
+   "is_sustainable": {
+    "description": "True when the user explicitly wants products with sustainability claims.",
+    "type": "boolean"
+   },
+   "limit": {
+    "default": 12,
+    "description": "Page size (1-20, default 12)",
+    "maximum": 20,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "materials": {
+    "description": "Filter by lowercase materials: e.g. [\"cotton\", \"silk\", \"leather\"]",
+    "items": {
+     "maxLength": 200,
+     "type": "string"
+    },
+    "maxItems": 20,
+    "type": "array"
+   },
+   "max_price": {
+    "description": "Maximum price (in the currency specified by \"currency\" param, or USD if omitted)",
+    "maximum": 100000,
+    "minimum": 0.01,
+    "type": "number"
+   },
+   "min_price": {
+    "description": "Minimum price (in the currency specified by \"currency\" param, or USD if omitted)",
+    "maximum": 100000,
+    "minimum": 0.01,
+    "type": "number"
+   },
+   "neckline": {
+    "description": "Neckline filter. Soft descriptor \u2014 set ONLY when the user explicitly named the neckline. Do not infer from category or query.",
+    "enum": [
+     "v-neck",
+     "crewneck",
+     "scoop",
+     "square",
+     "halter",
+     "off-shoulder",
+     "one-shoulder",
+     "sweetheart",
+     "turtleneck",
+     "mock-neck",
+     "boat-neck",
+     "cowl",
+     "asymmetric",
+     "plunge",
+     "high-neck",
+     "collared",
+     "strapless"
+    ],
+    "type": "string"
+   },
+   "occasion": {
+    "description": "Occasion filter. Soft descriptor \u2014 set ONLY when the user explicitly named the occasion. The `query` field already captures occasion semantically; over-specifying is the most common cause of zero-result calls.",
+    "enum": [
+     "casual",
+     "formal",
+     "business",
+     "party",
+     "outdoor",
+     "beach"
+    ],
+    "type": "string"
+   },
+   "page": {
+    "default": 1,
+    "description": "Page number.",
+    "minimum": 1,
+    "type": "integer"
+   },
+   "pattern": {
+    "description": "Pattern filter (e.g. solid, stripe, checked, floral). Soft descriptor \u2014 set ONLY when the user explicitly named the pattern. Default for unspecified (\"solid\") leaks into queries and zeros the candidate set; omit when unsure.",
+    "enum": [
+     "solid",
+     "stripe",
+     "checked",
+     "floral",
+     "polka dot",
+     "camouflage",
+     "logo"
+    ],
+    "type": "string"
+   },
+   "query": {
+    "description": "Natural language search query \u2014 be descriptive for best results. Can include price with currency symbols (e.g. \"white coat under 200 z\u0142\") which will be parsed automatically. Optional: when omitted, results are filtered by the structured fields below and ranked by recency. Provide either a query, structured filters, or both.",
+    "maxLength": 500,
+    "type": "string"
+   },
+   "season": {
+    "description": "Season filter. Soft descriptor \u2014 set ONLY when the user explicitly named the season. The `query` field already captures season semantically; over-specifying is the most common cause of zero-result calls.",
+    "enum": [
+     "spring",
+     "summer",
+     "fall",
+     "winter",
+     "all-season"
+    ],
+    "type": "string"
+   },
+   "silhouette": {
+    "description": "Silhouette/fit filter (e.g. fitted, slim, regular, relaxed, oversized). Soft descriptor \u2014 set ONLY when the user explicitly named the fit. The `query` field already captures silhouette semantically; over-specifying is the most common cause of zero-result calls.",
+    "enum": [
+     "fitted",
+     "slim",
+     "regular",
+     "relaxed",
+     "oversized",
+     "tailored",
+     "boxy"
+    ],
+    "type": "string"
+   },
+   "sleeves": {
+    "description": "Sleeve style filter. Soft descriptor \u2014 set ONLY when the user explicitly named the sleeve style. Do not infer from category or query.",
+    "enum": [
+     "sleeveless",
+     "short-sleeve",
+     "long-sleeve",
+     "three-quarter",
+     "cap-sleeve",
+     "puff",
+     "balloon",
+     "bishop",
+     "bell",
+     "dolman"
+    ],
+    "type": "string"
+   },
+   "store_domain": {
+    "description": "Filter by store domain (e.g. \"thereformation.com\"). Accepts forms with protocol, www, locale subdomain, or path \u2014 they are normalized to match the registered store.",
+    "maxLength": 253,
+    "type": "string"
+   },
+   "styles": {
+    "description": "Style filter (OR semantics \u2014 a product matches if any of its `styles` values is in this list). Pass a single value to filter by one style (\"styles\": [\"minimalist\"]); pass several to span a related set (\"styles\": [\"basics\", \"minimalist\", \"preppy\", \"sportswear\"] for a \"Casual\" bucket). Soft descriptor \u2014 set ONLY when the user explicitly named one or more styles. The `query` field already captures style semantically; over-specifying is the most common cause of zero-result calls.",
+    "items": {
+     "enum": [
+      "minimalist",
+      "streetwear",
+      "elegant",
+      "avant-garde",
+      "grunge",
+      "vintage",
+      "y2k",
+      "techwear",
+      "workwear",
+      "preppy",
+      "punk",
+      "sportswear",
+      "coquette",
+      "quiet-luxury",
+      "old-money",
+      "gorpcore",
+      "goth",
+      "basics",
+      "boho",
+      "glam",
+      "edgy",
+      "classic",
+      "western"
+     ],
+     "type": "string"
+    },
+    "maxItems": 20,
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "name": "discover_products",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "hasNextPage": {
+    "type": "boolean"
+   },
+   "marketUrl": {
+    "type": "string"
+   },
+   "page": {
+    "type": "integer"
+   },
+   "products": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "availability": {
+       "additionalProperties": false,
+       "properties": {
+        "color": {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "availableSizes": {
+            "items": {
+             "additionalProperties": false,
+             "properties": {
+              "inStock": {
+               "type": "boolean"
+              },
+              "label": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "label",
+              "inStock"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "color": {
+            "type": "string"
+           },
+           "colorKey": {
+            "type": "string"
+           },
+           "compareAtPrice": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "compareAtPriceRange": {
+            "$ref": "#/properties/products/items/properties/availability/properties/color/items/properties/priceRange"
+           },
+           "currency": {
+            "type": "string"
+           },
+           "imageUrls": {
+            "items": {
+             "type": "string"
+            },
+            "type": "array"
+           },
+           "inStock": {
+            "type": "boolean"
+           },
+           "label": {
+            "type": "string"
+           },
+           "price": {
+            "type": "number"
+           },
+           "priceRange": {
+            "additionalProperties": false,
+            "properties": {
+             "currency": {
+              "type": "string"
+             },
+             "max": {
+              "type": "number"
+             },
+             "min": {
+              "type": "number"
+             }
+            },
+            "required": [
+             "min",
+             "max",
+             "currency"
+            ],
+            "type": "object"
+           }
+          },
+          "required": [
+           "colorKey",
+           "color",
+           "label",
+           "availableSizes"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "dimensions": {
+         "items": {
+          "enum": [
+           "color",
+           "size"
+          ],
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "sizes": {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "compareAtPrice": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "compareAtPriceRange": {
+            "$ref": "#/properties/products/items/properties/availability/properties/color/items/properties/priceRange"
+           },
+           "currency": {
+            "type": "string"
+           },
+           "inStock": {
+            "type": "boolean"
+           },
+           "label": {
+            "type": "string"
+           },
+           "price": {
+            "type": "number"
+           },
+           "priceRange": {
+            "$ref": "#/properties/products/items/properties/availability/properties/color/items/properties/priceRange"
+           }
+          },
+          "required": [
+           "label",
+           "inStock"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "variants": {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "colorKey": {
+            "type": "string"
+           },
+           "compareAtPrice": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "currency": {
+            "type": "string"
+           },
+           "imageUrl": {
+            "type": "string"
+           },
+           "inStock": {
+            "type": "boolean"
+           },
+           "price": {
+            "type": "number"
+           },
+           "size": {
+            "type": "string"
+           },
+           "sku": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "inStock"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "dimensions",
+        "color",
+        "sizes"
+       ],
+       "type": "object"
+      },
+      "brand": {
+       "type": "string"
+      },
+      "compareAtPrice": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "currency": {
+       "type": "string"
+      },
+      "id": {
+       "type": "string"
+      },
+      "images": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "inStock": {
+       "type": "boolean"
+      },
+      "price": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "productUrl": {
+       "type": "string"
+      },
+      "summary": {
+       "type": "string"
+      },
+      "title": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "id",
+      "title",
+      "price",
+      "currency",
+      "availability"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "products",
+   "page",
+   "hasNextPage",
+   "marketUrl"
+  ],
+  "type": "object"
+ }
+}

@@ -1,0 +1,438 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Project Three-Statement Model"
+ },
+ "description": "Linked forward Income Statement / Balance Sheet / Cash Flow projection, seeded from the company's latest historical annual period. The balance sheet ties out (assets == liabilities + equity) EVERY projected year by algebraic construction \u2014 each year's `tie_out_ok` field is a live correctness check, not decoration. Interest is computed on beginning-of-period debt balances (no circular cash-sweep/revolver solve \u2014 deterministic by design). Gross margin, operating margin, and the combined D&A + working-capital adjustment are held at the seed period's ratio-of-revenue unless overridden; interest_rate_on_debt and tax_rate are ASSUMPTIONS (no historical InterestExpense concept exists in the dataset). Every simplification is listed in the response `caveats[]` \u2014 read them before presenting this as a precise forecast. Returns a `fcf_stream` usable directly as `compute_dcf`'s `fcf_source:\"three_statement\"` input. Tier: sp500+.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "as_of_date": {
+    "description": "Point-in-time cutoff (YYYY-MM-DD) for the seed period. Omit to use the latest knowable annual period.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   },
+   "capex_pct_of_revenue_override": {
+    "description": "Override the seed period's capex-as-%-of-revenue ratio. Leave unset to use the historical ratio.",
+    "type": "number"
+   },
+   "cash_sweep_pct": {
+    "default": 0,
+    "description": "Fraction (0-1) of each year's free cash flow swept to debt paydown. Default 0 (going-concern; use ~1.0 for an LBO-style paydown).",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "dividend_payout_pct": {
+    "default": 0,
+    "description": "Fraction (0-1) of net income paid out as dividends each year. Default 0.",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "gross_margin_pct_override": {
+    "description": "Override the seed period's gross margin (held flat across all years). Leave unset to use the historical ratio.",
+    "type": "number"
+   },
+   "interest_rate_on_debt": {
+    "default": 0.06,
+    "description": "Annual interest rate on beginning-of-period debt. Assumption \u2014 default 0.06.",
+    "maximum": 0.5,
+    "minimum": 0,
+    "type": "number"
+   },
+   "new_debt_draw_year1": {
+    "default": 0,
+    "description": "New debt drawn at year 1 only (absolute USD) \u2014 e.g. acquisition financing. Default 0.",
+    "minimum": 0,
+    "type": "number"
+   },
+   "new_equity_draw_year1": {
+    "default": 0,
+    "description": "New equity contributed at year 1 only (absolute USD) \u2014 hits cash + equity symmetrically. Default 0.",
+    "minimum": 0,
+    "type": "number"
+   },
+   "operating_margin_pct_override": {
+    "description": "Override the seed period's operating margin. Leave unset to use the historical ratio.",
+    "type": "number"
+   },
+   "revenue_growth_rate": {
+    "description": "Flat annual revenue growth rate applied every year (e.g. 0.08 = 8%/yr).",
+    "maximum": 1,
+    "minimum": -0.5,
+    "type": "number"
+   },
+   "tax_rate": {
+    "default": 0.21,
+    "description": "Effective tax rate on positive pretax income. Default 0.21 (US statutory).",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "ticker": {
+    "description": "Stock ticker symbol, e.g. AAPL, MSFT, BRK.B.",
+    "maxLength": 10,
+    "minLength": 1,
+    "type": "string"
+   },
+   "years": {
+    "default": 5,
+    "description": "Projection horizon in years (1-15). Defaults to 5.",
+    "maximum": 15,
+    "minimum": 1,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "ticker",
+   "revenue_growth_rate"
+  ],
+  "type": "object"
+ },
+ "name": "project_three_statement",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "_meta": {
+    "additionalProperties": false,
+    "description": "Provenance envelope \u2014 data lineage for every MCP response",
+    "properties": {
+     "as_of_date": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "cost_usd": {
+      "additionalProperties": false,
+      "description": "Per-call cost transparency. Omitted for subscription-only tools that have no PAYG-equivalent price.",
+      "properties": {
+       "amount_usd": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "basis": {
+        "description": "payg_charge = real agent-pay charge. payg_rate_card = indicative price, not billed.",
+        "enum": [
+         "payg_charge",
+         "payg_rate_card"
+        ],
+        "type": "string"
+       },
+       "billed": {
+        "description": "true = this amount was actually charged via PAYG for this call. false = indicative PAYG-equivalent value; your plan already covers this call for free.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "amount_usd",
+       "billed",
+       "basis"
+      ],
+      "type": "object"
+     },
+     "data_plan": {
+      "description": "Access plan: sample | sp500 | pro | full",
+      "type": "string"
+     },
+     "data_quality": {
+      "additionalProperties": false,
+      "description": "Server-side invariants run on this response",
+      "properties": {
+       "notes": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "validation_failed": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "detail": {
+           "type": "string"
+          },
+          "rule": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "rule",
+          "detail"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "validation_passed": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "validation_passed",
+       "validation_failed",
+       "notes"
+      ],
+      "type": "object"
+     },
+     "fundamentals_as_of": {
+      "description": "ISO timestamp when the FINANCIAL STATEMENTS were last rebuilt in bulk. Use THIS \u2014 not `last_updated` \u2014 when telling a user how current the cross-sectional fundamentals are. The snapshot is republished on every weekday price refresh while the statements are carried forward unchanged, so `last_updated` can be far more recent than the numbers it sits next to. It is a floor for a single filer, not a ceiling: a filer with a live partition receives its filing, facts and ratios intraday (minutes after EDGAR dissemination), so an entity-scoped read may carry a filing newer than this; cross-sectional ranks (factor scores, earnings signals) refresh with the weekly bulk export.",
+      "type": "string"
+     },
+     "last_updated": {
+      "description": "ISO timestamp when the snapshot was exported",
+      "type": "string"
+     },
+     "latency_ms": {
+      "description": "Wall-clock milliseconds this tool call took, measured server-side around the handler.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "limit_warnings": {
+      "description": "Soft-warning array for partial fulfillment. Each entry carries a stable subcode + remediation.options[]. AI agents pattern-match on subcode.",
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "code": {
+         "const": "LIMIT_EXCEEDED",
+         "type": "string"
+        },
+        "current_plan": {
+         "type": "string"
+        },
+        "extensions": {
+         "additionalProperties": {},
+         "type": "object"
+        },
+        "limit_type": {
+         "type": "string"
+        },
+        "limit_value": {},
+        "remediation": {
+         "additionalProperties": true,
+         "properties": {
+          "contact_sales": {
+           "type": "string"
+          },
+          "default_action": {
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "additionalProperties": {},
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "pricing_page": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "options",
+          "default_action",
+          "pricing_page",
+          "contact_sales"
+         ],
+         "type": "object"
+        },
+        "requested_value": {},
+        "returned_value": {},
+        "subcode": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "subcode",
+        "limit_type",
+        "current_plan",
+        "remediation"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "payg_override": {
+      "additionalProperties": false,
+      "description": "Set when this single response was paid for via the agent-pay PAYG flow \u2014 the rate-limit / depth-limit checks were bypassed for this call only.",
+      "properties": {
+       "amount_cents": {
+        "type": "number"
+       },
+       "entity_scope_hash": {
+        "type": "string"
+       },
+       "meter": {
+        "type": "string"
+       },
+       "quote_id": {
+        "type": "string"
+       },
+       "retry_token_hash": {
+        "type": "string"
+       },
+       "ticker_count": {
+        "type": "number"
+       },
+       "tool": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "quote_id",
+       "tool",
+       "meter",
+       "amount_cents",
+       "ticker_count",
+       "entity_scope_hash",
+       "retry_token_hash"
+      ],
+      "type": "object"
+     },
+     "pit_safe": {
+      "description": "true iff a zero-look-ahead point-in-time cut was applied to every returned figure",
+      "type": "boolean"
+     },
+     "price_as_of": {
+      "description": "ISO timestamp when the price surfaces were last refreshed.",
+      "type": "string"
+     },
+     "rate_limit": {
+      "additionalProperties": false,
+      "description": "Caller's remaining budget",
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "remaining": {
+        "type": "integer"
+       },
+       "reset_at": {
+        "description": "ISO 8601 timestamp when the window resets",
+        "type": "string"
+       },
+       "window": {
+        "enum": [
+         "minute",
+         "hour"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "limit",
+       "remaining",
+       "reset_at",
+       "window"
+      ],
+      "type": "object"
+     },
+     "request_id": {
+      "description": "Per-request correlation id (8-char)",
+      "type": "string"
+     },
+     "result_count": {
+      "type": "integer"
+     },
+     "schema_version": {
+      "description": "Parquet schema version from manifest.json",
+      "type": "string"
+     },
+     "snapshot": {
+      "description": "Snapshot directory name (e.g. snapshot_20260420)",
+      "type": "string"
+     },
+     "source": {
+      "const": "SEC EDGAR",
+      "type": "string"
+     },
+     "ticker": {
+      "type": "string"
+     },
+     "truncation": {
+      "additionalProperties": false,
+      "description": "Set when fewer rows were returned than requested \u2014 explains why and points to a remedy",
+      "properties": {
+       "current_plan": {
+        "type": "string"
+       },
+       "plan_limit": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "reason": {
+        "enum": [
+         "PLAN_LIMIT",
+         "DATA_NOT_AVAILABLE",
+         "FISCAL_YEAR_BOUNDARY_FILTER",
+         "OTHER"
+        ],
+        "type": "string"
+       },
+       "requested": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "returned": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "upgrade_required_for": {
+        "type": "string"
+       },
+       "upgrade_url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "requested",
+       "returned",
+       "reason"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "data_plan",
+     "schema_version",
+     "snapshot",
+     "last_updated",
+     "source",
+     "pit_safe"
+    ],
+    "type": "object"
+   },
+   "result": {
+    "additionalProperties": {},
+    "type": "object"
+   },
+   "seed_period_end": {
+    "type": "string"
+   },
+   "ticker": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "_meta",
+   "ticker",
+   "seed_period_end",
+   "result"
+  ],
+  "type": "object"
+ },
+ "title": "Project Linked Three-Statement Model"
+}

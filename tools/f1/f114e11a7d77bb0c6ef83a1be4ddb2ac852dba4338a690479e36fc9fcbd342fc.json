@@ -1,0 +1,902 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": false,
+  "title": "Save Claim"
+ },
+ "description": "Persist a single falsifiable, evidence-backed CLAIM \u2014 the atomic unit of the research graph. Use this for each discrete assertion an analysis produces (e.g. 'NVDA gross margin stays above 70% through FY2026'), then compose claims into a thesis with `link_claim_to_thesis`. Claims are scored independently of theses, so claim accuracy is tracked as its own track record.\n\nPick `claim_type` by HOW it's judged, not what it's about: `assertion` = true now, checked against data; `prediction` = resolves at `horizon_days` via `verifiable_condition`; `judgment` = qualitative, not auto-scored. Use `tags` for the topic (financial, valuation, macro, \u2026). Set `eval_mode: 'auto'` + a `verifiable_condition` for deterministic grading, else `'agent'`/`'manual'`.\n\nTier: all paid + free tiers (sample rejected \u2014 guest has no customerId). Verifiable claims must cite evidence.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "antecedent": {
+    "anyOf": [
+     {
+      "maxLength": 500,
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Scenario precondition \u2014 the claim only resolves when this holds. Null = unconditional."
+   },
+   "claim_type": {
+    "description": "Epistemic type \u2014 drives scoring. assertion=true now (verified vs data); prediction=future (resolves at horizon via verifiable_condition); judgment=qualitative (not auto-scored).",
+    "enum": [
+     "assertion",
+     "prediction",
+     "judgment"
+    ],
+    "type": "string"
+   },
+   "confidence": {
+    "description": "Author confidence in [0,1]. Used as the Brier/log-loss weight when scored.",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "direction": {
+    "description": "Directional polarity of the claim.",
+    "enum": [
+     "bullish",
+     "bearish",
+     "neutral"
+    ],
+    "type": "string"
+   },
+   "eval_mode": {
+    "default": "agent",
+    "description": "How the outcome is resolved: auto (deterministic grade vs data via verifiable_condition), agent (an LLM judges at resolution), manual (a human marks it).",
+    "enum": [
+     "auto",
+     "agent",
+     "manual"
+    ],
+    "type": "string"
+   },
+   "evidence": {
+    "additionalProperties": false,
+    "default": {
+     "fact_ids": [],
+     "source_urls": []
+    },
+    "description": "Evidence grounding the claim.",
+    "properties": {
+     "fact_ids": {
+      "description": "fact_ids backing the claim. Verified against live SEC data at save time (rejected if unresolvable).",
+      "items": {
+       "maxLength": 128,
+       "type": "string"
+      },
+      "maxItems": 50,
+      "type": "array"
+     },
+     "source_links": {
+      "description": "On-read enrichment of source_urls with interactive SEC viewer links.",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "document_url": {
+         "description": "Direct link to the rendered primary document, or null.",
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "inline_viewer_url": {
+         "description": "SEC Inline-XBRL viewer on the rendered filing, or null when not iXBRL.",
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "sec_url": {
+         "description": "EDGAR filing-index page \u2014 always resolves.",
+         "type": "string"
+        },
+        "url": {
+         "description": "The original stored source_url (verbatim).",
+         "type": "string"
+        }
+       },
+       "required": [
+        "url",
+        "sec_url",
+        "document_url",
+        "inline_viewer_url"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "source_urls": {
+      "description": "SEC EDGAR (or report) deep links for one-click human verification.",
+      "items": {
+       "format": "uri",
+       "type": "string"
+      },
+      "maxItems": 50,
+      "type": "array"
+     }
+    },
+    "required": [
+     "fact_ids",
+     "source_urls"
+    ],
+    "type": "object"
+   },
+   "horizon_days": {
+    "anyOf": [
+     {
+      "maximum": 1825,
+      "minimum": 1,
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Resolution horizon in days (predictions). Null for assertions/judgments."
+   },
+   "idempotency_key": {
+    "description": "Optional client key for at-most-once semantics from a retrying agent.",
+    "maxLength": 64,
+    "minLength": 1,
+    "type": "string"
+   },
+   "source_report_id": {
+    "description": "Optional id of a report that contains the supporting analysis.",
+    "maxLength": 128,
+    "type": "string"
+   },
+   "statement": {
+    "description": "The atomic, falsifiable statement. One claim, not a paragraph.",
+    "maxLength": 2000,
+    "minLength": 8,
+    "type": "string"
+   },
+   "tags": {
+    "default": [],
+    "description": "Topical labels (controlled vocab). Multi-valued; drives filtering + learning segmentation, not scoring.",
+    "items": {
+     "enum": [
+      "financial",
+      "valuation",
+      "operational",
+      "competitive",
+      "structural",
+      "strategic",
+      "macro",
+      "behavioral",
+      "catalyst",
+      "risk",
+      "trend",
+      "comparison",
+      "causation",
+      "liquidity",
+      "governance",
+      "guidance"
+     ],
+     "type": "string"
+    },
+    "maxItems": 6,
+    "type": "array"
+   },
+   "tickers": {
+    "description": "Entities referenced (uppercased). 1 for most claims; 2+ for a comparison claim.",
+    "items": {
+     "maxLength": 10,
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 10,
+    "minItems": 1,
+    "type": "array"
+   },
+   "verifiable_condition": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "metric": {
+        "description": "Canonical metric key, e.g. 'gross_margin', 'revenue_yoy', 'net_debt_to_ebitda'.",
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+       },
+       "op": {
+        "description": "Comparison operator the grader applies as: metric_value <op> threshold.",
+        "enum": [
+         "gt",
+         "gte",
+         "lt",
+         "lte",
+         "eq",
+         "approx"
+        ],
+        "type": "string"
+       },
+       "threshold": {
+        "description": "Numeric threshold the metric is compared against.",
+        "type": "number"
+       },
+       "unit": {
+        "anyOf": [
+         {
+          "maxLength": 16,
+          "type": "string"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "Display unit ('%', 'x', 'usd') or null."
+       }
+      },
+      "required": [
+       "metric",
+       "op",
+       "threshold",
+       "unit"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Machine-evaluable condition for eval_mode='auto'. Null otherwise."
+   },
+   "visibility": {
+    "default": "private",
+    "description": "'private' (default) owner-only; 'unlisted' visible at a direct URL; 'public' surfaces on the author's profile and contributes to the claim-accuracy reputation.",
+    "enum": [
+     "private",
+     "unlisted",
+     "public"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "statement",
+   "tickers",
+   "claim_type",
+   "direction",
+   "confidence"
+  ],
+  "type": "object"
+ },
+ "name": "save_claim",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "_meta": {
+    "additionalProperties": false,
+    "description": "Provenance envelope \u2014 data lineage for every MCP response",
+    "properties": {
+     "as_of_date": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "cost_usd": {
+      "additionalProperties": false,
+      "description": "Per-call cost transparency. Omitted for subscription-only tools that have no PAYG-equivalent price.",
+      "properties": {
+       "amount_usd": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "basis": {
+        "description": "payg_charge = real agent-pay charge. payg_rate_card = indicative price, not billed.",
+        "enum": [
+         "payg_charge",
+         "payg_rate_card"
+        ],
+        "type": "string"
+       },
+       "billed": {
+        "description": "true = this amount was actually charged via PAYG for this call. false = indicative PAYG-equivalent value; your plan already covers this call for free.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "amount_usd",
+       "billed",
+       "basis"
+      ],
+      "type": "object"
+     },
+     "data_plan": {
+      "description": "Access plan: sample | sp500 | pro | full",
+      "type": "string"
+     },
+     "data_quality": {
+      "additionalProperties": false,
+      "description": "Server-side invariants run on this response",
+      "properties": {
+       "notes": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "validation_failed": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "detail": {
+           "type": "string"
+          },
+          "rule": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "rule",
+          "detail"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "validation_passed": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "validation_passed",
+       "validation_failed",
+       "notes"
+      ],
+      "type": "object"
+     },
+     "fundamentals_as_of": {
+      "description": "ISO timestamp when the FINANCIAL STATEMENTS were last rebuilt in bulk. Use THIS \u2014 not `last_updated` \u2014 when telling a user how current the cross-sectional fundamentals are. The snapshot is republished on every weekday price refresh while the statements are carried forward unchanged, so `last_updated` can be far more recent than the numbers it sits next to. It is a floor for a single filer, not a ceiling: a filer with a live partition receives its filing, facts and ratios intraday (minutes after EDGAR dissemination), so an entity-scoped read may carry a filing newer than this; cross-sectional ranks (factor scores, earnings signals) refresh with the weekly bulk export.",
+      "type": "string"
+     },
+     "last_updated": {
+      "description": "ISO timestamp when the snapshot was exported",
+      "type": "string"
+     },
+     "latency_ms": {
+      "description": "Wall-clock milliseconds this tool call took, measured server-side around the handler.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "limit_warnings": {
+      "description": "Soft-warning array for partial fulfillment. Each entry carries a stable subcode + remediation.options[]. AI agents pattern-match on subcode.",
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "code": {
+         "const": "LIMIT_EXCEEDED",
+         "type": "string"
+        },
+        "current_plan": {
+         "type": "string"
+        },
+        "extensions": {
+         "additionalProperties": {},
+         "type": "object"
+        },
+        "limit_type": {
+         "type": "string"
+        },
+        "limit_value": {},
+        "remediation": {
+         "additionalProperties": true,
+         "properties": {
+          "contact_sales": {
+           "type": "string"
+          },
+          "default_action": {
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "additionalProperties": {},
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "pricing_page": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "options",
+          "default_action",
+          "pricing_page",
+          "contact_sales"
+         ],
+         "type": "object"
+        },
+        "requested_value": {},
+        "returned_value": {},
+        "subcode": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "subcode",
+        "limit_type",
+        "current_plan",
+        "remediation"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "payg_override": {
+      "additionalProperties": false,
+      "description": "Set when this single response was paid for via the agent-pay PAYG flow \u2014 the rate-limit / depth-limit checks were bypassed for this call only.",
+      "properties": {
+       "amount_cents": {
+        "type": "number"
+       },
+       "entity_scope_hash": {
+        "type": "string"
+       },
+       "meter": {
+        "type": "string"
+       },
+       "quote_id": {
+        "type": "string"
+       },
+       "retry_token_hash": {
+        "type": "string"
+       },
+       "ticker_count": {
+        "type": "number"
+       },
+       "tool": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "quote_id",
+       "tool",
+       "meter",
+       "amount_cents",
+       "ticker_count",
+       "entity_scope_hash",
+       "retry_token_hash"
+      ],
+      "type": "object"
+     },
+     "pit_safe": {
+      "description": "true iff a zero-look-ahead point-in-time cut was applied to every returned figure",
+      "type": "boolean"
+     },
+     "price_as_of": {
+      "description": "ISO timestamp when the price surfaces were last refreshed.",
+      "type": "string"
+     },
+     "rate_limit": {
+      "additionalProperties": false,
+      "description": "Caller's remaining budget",
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "remaining": {
+        "type": "integer"
+       },
+       "reset_at": {
+        "description": "ISO 8601 timestamp when the window resets",
+        "type": "string"
+       },
+       "window": {
+        "enum": [
+         "minute",
+         "hour"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "limit",
+       "remaining",
+       "reset_at",
+       "window"
+      ],
+      "type": "object"
+     },
+     "request_id": {
+      "description": "Per-request correlation id (8-char)",
+      "type": "string"
+     },
+     "result_count": {
+      "type": "integer"
+     },
+     "schema_version": {
+      "description": "Parquet schema version from manifest.json",
+      "type": "string"
+     },
+     "snapshot": {
+      "description": "Snapshot directory name (e.g. snapshot_20260420)",
+      "type": "string"
+     },
+     "source": {
+      "const": "SEC EDGAR",
+      "type": "string"
+     },
+     "ticker": {
+      "type": "string"
+     },
+     "truncation": {
+      "additionalProperties": false,
+      "description": "Set when fewer rows were returned than requested \u2014 explains why and points to a remedy",
+      "properties": {
+       "current_plan": {
+        "type": "string"
+       },
+       "plan_limit": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "reason": {
+        "enum": [
+         "PLAN_LIMIT",
+         "DATA_NOT_AVAILABLE",
+         "FISCAL_YEAR_BOUNDARY_FILTER",
+         "OTHER"
+        ],
+        "type": "string"
+       },
+       "requested": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "returned": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "upgrade_required_for": {
+        "type": "string"
+       },
+       "upgrade_url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "requested",
+       "returned",
+       "reason"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "data_plan",
+     "schema_version",
+     "snapshot",
+     "last_updated",
+     "source",
+     "pit_safe"
+    ],
+    "type": "object"
+   },
+   "capacity": {
+    "additionalProperties": false,
+    "properties": {
+     "cap": {
+      "exclusiveMinimum": 0,
+      "type": "integer"
+     },
+     "remaining": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "used": {
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "used",
+     "cap",
+     "remaining"
+    ],
+    "type": "object"
+   },
+   "claim": {
+    "additionalProperties": false,
+    "properties": {
+     "antecedent": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "archived": {
+      "type": "boolean"
+     },
+     "claim_type": {
+      "enum": [
+       "assertion",
+       "prediction",
+       "judgment"
+      ],
+      "type": "string"
+     },
+     "confidence": {
+      "type": "number"
+     },
+     "created_at": {
+      "type": "number"
+     },
+     "direction": {
+      "enum": [
+       "bullish",
+       "bearish",
+       "neutral"
+      ],
+      "type": "string"
+     },
+     "eval_mode": {
+      "enum": [
+       "auto",
+       "agent",
+       "manual"
+      ],
+      "type": "string"
+     },
+     "evidence": {
+      "additionalProperties": false,
+      "properties": {
+       "fact_ids": {
+        "description": "fact_ids backing the claim. Verified against live SEC data at save time (rejected if unresolvable).",
+        "items": {
+         "maxLength": 128,
+         "type": "string"
+        },
+        "maxItems": 50,
+        "type": "array"
+       },
+       "source_links": {
+        "description": "On-read enrichment of source_urls with interactive SEC viewer links.",
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "document_url": {
+           "description": "Direct link to the rendered primary document, or null.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "inline_viewer_url": {
+           "description": "SEC Inline-XBRL viewer on the rendered filing, or null when not iXBRL.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "sec_url": {
+           "description": "EDGAR filing-index page \u2014 always resolves.",
+           "type": "string"
+          },
+          "url": {
+           "description": "The original stored source_url (verbatim).",
+           "type": "string"
+          }
+         },
+         "required": [
+          "url",
+          "sec_url",
+          "document_url",
+          "inline_viewer_url"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "source_urls": {
+        "description": "SEC EDGAR (or report) deep links for one-click human verification.",
+        "items": {
+         "format": "uri",
+         "type": "string"
+        },
+        "maxItems": 50,
+        "type": "array"
+       }
+      },
+      "required": [
+       "fact_ids",
+       "source_urls"
+      ],
+      "type": "object"
+     },
+     "horizon_days": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "id": {
+      "type": "string"
+     },
+     "outcome_components": {
+      "anyOf": [
+       {
+        "additionalProperties": {},
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Phase C resolved-metric breakdown ({evaluated, basis} from gradeClaim). Null when not yet resolved or resolved without a breakdown (manual); absent entirely on claims resolved before Phase C shipped \u2014 both mean 'no components recorded'."
+     },
+     "outcome_reason": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "outcome_score": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "outcome_scored_at": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "source_report_id": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "statement": {
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "open",
+       "confirmed",
+       "refuted",
+       "expired",
+       "stale",
+       "needs_review"
+      ],
+      "type": "string"
+     },
+     "tags": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "tickers": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "updated_at": {
+      "type": "number"
+     },
+     "verifiable_condition": {
+      "anyOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "metric": {
+          "description": "Canonical metric key, e.g. 'gross_margin', 'revenue_yoy', 'net_debt_to_ebitda'.",
+          "maxLength": 64,
+          "minLength": 1,
+          "type": "string"
+         },
+         "op": {
+          "description": "Comparison operator the grader applies as: metric_value <op> threshold.",
+          "enum": [
+           "gt",
+           "gte",
+           "lt",
+           "lte",
+           "eq",
+           "approx"
+          ],
+          "type": "string"
+         },
+         "threshold": {
+          "description": "Numeric threshold the metric is compared against.",
+          "type": "number"
+         },
+         "unit": {
+          "anyOf": [
+           {
+            "maxLength": 16,
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "Display unit ('%', 'x', 'usd') or null."
+         }
+        },
+        "required": [
+         "metric",
+         "op",
+         "threshold",
+         "unit"
+        ],
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "visibility": {
+      "enum": [
+       "private",
+       "unlisted",
+       "public"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "statement",
+     "tickers",
+     "claim_type",
+     "tags",
+     "direction",
+     "confidence",
+     "eval_mode",
+     "verifiable_condition",
+     "antecedent",
+     "horizon_days",
+     "evidence",
+     "source_report_id",
+     "status",
+     "archived",
+     "visibility",
+     "outcome_score",
+     "outcome_scored_at",
+     "outcome_reason",
+     "created_at",
+     "updated_at"
+    ],
+    "type": "object"
+   },
+   "deduplicated": {
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "_meta",
+   "claim",
+   "deduplicated",
+   "capacity"
+  ],
+  "type": "object"
+ },
+ "title": "Save Claim"
+}

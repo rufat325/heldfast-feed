@@ -1,0 +1,457 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": false,
+  "title": "Save Citation Override"
+ },
+ "description": "Persist a correction of a citation value. The correction is keyed on the canonical `fact_id` (a stable hash of CIK + accession + concept + period) so it applies to every report that references that same fact \u2014 including agent-regenerated reports. Re-saving the same fact_id replaces the prior correction in place (no duplicate row).\n\nThe `fact_id` is VERIFIED against live SEC data (scoped to `ticker`) before the correction is stored \u2014 a fact_id that doesn't resolve to a real fact is rejected with FACT_NOT_FOUND and nothing is persisted. You therefore must supply the `ticker` the fact belongs to.\n\nUse this when the user notices an inaccuracy in an AI-generated report and wants the fix to persist. Provide `notes` for the rationale (\u2264500 chars) and `source_report_id` for provenance. Flat 10,000-override anti-abuse cap per account (deleting frees a slot; never a tier limit).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "corrected_value": {
+    "description": "User-corrected value, stringified. The frontend interprets it based on the fact's known datatype (number, string, ISO date).",
+    "maxLength": 2000,
+    "minLength": 1,
+    "type": "string"
+   },
+   "fact_id": {
+    "description": "Canonical fact identifier \u2014 usually returned in a citation's `fact_ids` array by get_report or any compute tool. Stable across report regenerations. Verified against live SEC data (scoped to `ticker`) before persistence \u2014 a fabricated or unresolvable fact_id is rejected.",
+    "maxLength": 128,
+    "minLength": 1,
+    "type": "string"
+   },
+   "notes": {
+    "description": "Optional free-form rationale, \u2264500 chars.",
+    "maxLength": 500,
+    "type": "string"
+   },
+   "source_report_id": {
+    "description": "Optional report id the user was viewing when they applied the correction (provenance).",
+    "maxLength": 128,
+    "minLength": 1,
+    "type": "string"
+   },
+   "ticker": {
+    "description": "Ticker the fact belongs to (REQUIRED) \u2014 scopes fact_id resolution against live SEC data and denormalises the row for fast filtering (the workspace UI's 'my corrections on AAPL' view).",
+    "maxLength": 10,
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "fact_id",
+   "corrected_value",
+   "ticker"
+  ],
+  "type": "object"
+ },
+ "name": "save_citation_override",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "_meta": {
+    "additionalProperties": false,
+    "description": "Provenance envelope \u2014 data lineage for every MCP response",
+    "properties": {
+     "as_of_date": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "cost_usd": {
+      "additionalProperties": false,
+      "description": "Per-call cost transparency. Omitted for subscription-only tools that have no PAYG-equivalent price.",
+      "properties": {
+       "amount_usd": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "basis": {
+        "description": "payg_charge = real agent-pay charge. payg_rate_card = indicative price, not billed.",
+        "enum": [
+         "payg_charge",
+         "payg_rate_card"
+        ],
+        "type": "string"
+       },
+       "billed": {
+        "description": "true = this amount was actually charged via PAYG for this call. false = indicative PAYG-equivalent value; your plan already covers this call for free.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "amount_usd",
+       "billed",
+       "basis"
+      ],
+      "type": "object"
+     },
+     "data_plan": {
+      "description": "Access plan: sample | sp500 | pro | full",
+      "type": "string"
+     },
+     "data_quality": {
+      "additionalProperties": false,
+      "description": "Server-side invariants run on this response",
+      "properties": {
+       "notes": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "validation_failed": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "detail": {
+           "type": "string"
+          },
+          "rule": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "rule",
+          "detail"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "validation_passed": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "validation_passed",
+       "validation_failed",
+       "notes"
+      ],
+      "type": "object"
+     },
+     "fundamentals_as_of": {
+      "description": "ISO timestamp when the FINANCIAL STATEMENTS were last rebuilt in bulk. Use THIS \u2014 not `last_updated` \u2014 when telling a user how current the cross-sectional fundamentals are. The snapshot is republished on every weekday price refresh while the statements are carried forward unchanged, so `last_updated` can be far more recent than the numbers it sits next to. It is a floor for a single filer, not a ceiling: a filer with a live partition receives its filing, facts and ratios intraday (minutes after EDGAR dissemination), so an entity-scoped read may carry a filing newer than this; cross-sectional ranks (factor scores, earnings signals) refresh with the weekly bulk export.",
+      "type": "string"
+     },
+     "last_updated": {
+      "description": "ISO timestamp when the snapshot was exported",
+      "type": "string"
+     },
+     "latency_ms": {
+      "description": "Wall-clock milliseconds this tool call took, measured server-side around the handler.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "limit_warnings": {
+      "description": "Soft-warning array for partial fulfillment. Each entry carries a stable subcode + remediation.options[]. AI agents pattern-match on subcode.",
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "code": {
+         "const": "LIMIT_EXCEEDED",
+         "type": "string"
+        },
+        "current_plan": {
+         "type": "string"
+        },
+        "extensions": {
+         "additionalProperties": {},
+         "type": "object"
+        },
+        "limit_type": {
+         "type": "string"
+        },
+        "limit_value": {},
+        "remediation": {
+         "additionalProperties": true,
+         "properties": {
+          "contact_sales": {
+           "type": "string"
+          },
+          "default_action": {
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "additionalProperties": {},
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "pricing_page": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "options",
+          "default_action",
+          "pricing_page",
+          "contact_sales"
+         ],
+         "type": "object"
+        },
+        "requested_value": {},
+        "returned_value": {},
+        "subcode": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "subcode",
+        "limit_type",
+        "current_plan",
+        "remediation"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "payg_override": {
+      "additionalProperties": false,
+      "description": "Set when this single response was paid for via the agent-pay PAYG flow \u2014 the rate-limit / depth-limit checks were bypassed for this call only.",
+      "properties": {
+       "amount_cents": {
+        "type": "number"
+       },
+       "entity_scope_hash": {
+        "type": "string"
+       },
+       "meter": {
+        "type": "string"
+       },
+       "quote_id": {
+        "type": "string"
+       },
+       "retry_token_hash": {
+        "type": "string"
+       },
+       "ticker_count": {
+        "type": "number"
+       },
+       "tool": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "quote_id",
+       "tool",
+       "meter",
+       "amount_cents",
+       "ticker_count",
+       "entity_scope_hash",
+       "retry_token_hash"
+      ],
+      "type": "object"
+     },
+     "pit_safe": {
+      "description": "true iff a zero-look-ahead point-in-time cut was applied to every returned figure",
+      "type": "boolean"
+     },
+     "price_as_of": {
+      "description": "ISO timestamp when the price surfaces were last refreshed.",
+      "type": "string"
+     },
+     "rate_limit": {
+      "additionalProperties": false,
+      "description": "Caller's remaining budget",
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "remaining": {
+        "type": "integer"
+       },
+       "reset_at": {
+        "description": "ISO 8601 timestamp when the window resets",
+        "type": "string"
+       },
+       "window": {
+        "enum": [
+         "minute",
+         "hour"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "limit",
+       "remaining",
+       "reset_at",
+       "window"
+      ],
+      "type": "object"
+     },
+     "request_id": {
+      "description": "Per-request correlation id (8-char)",
+      "type": "string"
+     },
+     "result_count": {
+      "type": "integer"
+     },
+     "schema_version": {
+      "description": "Parquet schema version from manifest.json",
+      "type": "string"
+     },
+     "snapshot": {
+      "description": "Snapshot directory name (e.g. snapshot_20260420)",
+      "type": "string"
+     },
+     "source": {
+      "const": "SEC EDGAR",
+      "type": "string"
+     },
+     "ticker": {
+      "type": "string"
+     },
+     "truncation": {
+      "additionalProperties": false,
+      "description": "Set when fewer rows were returned than requested \u2014 explains why and points to a remedy",
+      "properties": {
+       "current_plan": {
+        "type": "string"
+       },
+       "plan_limit": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "reason": {
+        "enum": [
+         "PLAN_LIMIT",
+         "DATA_NOT_AVAILABLE",
+         "FISCAL_YEAR_BOUNDARY_FILTER",
+         "OTHER"
+        ],
+        "type": "string"
+       },
+       "requested": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "returned": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "upgrade_required_for": {
+        "type": "string"
+       },
+       "upgrade_url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "requested",
+       "returned",
+       "reason"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "data_plan",
+     "schema_version",
+     "snapshot",
+     "last_updated",
+     "source",
+     "pit_safe"
+    ],
+    "type": "object"
+   },
+   "capacity": {
+    "additionalProperties": false,
+    "properties": {
+     "cap": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "remaining": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "used": {
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "used",
+     "cap",
+     "remaining"
+    ],
+    "type": "object"
+   },
+   "created": {
+    "type": "boolean"
+   },
+   "override": {
+    "additionalProperties": false,
+    "properties": {
+     "corrected_value": {
+      "type": "string"
+     },
+     "created_at": {
+      "type": "number"
+     },
+     "fact_id": {
+      "type": "string"
+     },
+     "notes": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "source_report_id": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "ticker": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "updated_at": {
+      "type": "number"
+     },
+     "user_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "user_id",
+     "fact_id",
+     "corrected_value",
+     "ticker",
+     "source_report_id",
+     "notes",
+     "created_at",
+     "updated_at"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "_meta",
+   "override",
+   "created",
+   "capacity"
+  ],
+  "type": "object"
+ },
+ "title": "Save Citation Override"
+}

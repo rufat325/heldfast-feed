@@ -1,0 +1,575 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Run Bounded Factor Backtest"
+ },
+ "description": "A SMALL, BOUNDED, in-Worker sanity-check backtest \u2014 NOT a full-universe backtesting engine. Answers a quick question like 'does this factor actually work on these 5 names over the last year' inline, mid-conversation, without leaving MCP. Composes two existing tools (`get_pit_universe` + `get_pit_valuation_ratios`) across up to 10 tickers x 12 rebalance dates (120 cells): for each rebalance date, checks which requested tickers were in the survivorship-free PIT universe on that date (dropping \u2014 never erroring on \u2014 a ticker not yet listed or already delisted), then pulls each surviving ticker's point-in-time valuation multiples and computes the forward return to the NEXT rebalance date from the raw (unadjusted) close. Returns a flat {rebalance_date, ticker, factor_values, forward_return_pct} grid plus a small factor<->forward-return correlation per requested factor \u2014 a quick cross-sectional signal check, NOT a transaction-cost-aware portfolio simulation or a statistically validated backtest result. If the requested grid exceeds 120 cells, this tool does NOT silently truncate \u2014 it returns a `stream_fallback` response (signed Parquet download URLs, same shape as `get_compute_ready_stream`) and tells you to use those URLs. For a REAL full-universe, multi-date, survivorship-free backtest, use the Python SDK's AlphaEngine (`pip install valuein-sdk`) looped over `as_of` dates client-side \u2014 this tool is explicitly the small complement to that, not a replacement for it. Pro and Institutional only: it composes get_pit_valuation_ratios, which reads the daily price series the free tiers do not carry (licensed market data), so the free plans receive an ENTITLEMENT_DENIED upgrade envelope before any read. Coverage follows your plan tier same as the two tools it composes.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "factors": {
+    "description": "Which of get_pit_valuation_ratios's own output fields to include as factor_values. One or more of: pe_ratio, ps_ratio, pb_ratio, ev_ebitda, ev_revenue, fcf_yield_pct, gross_margin_pct, operating_margin_pct, net_margin_pct. Omit to include all of them.",
+    "items": {
+     "enum": [
+      "pe_ratio",
+      "ps_ratio",
+      "pb_ratio",
+      "ev_ebitda",
+      "ev_revenue",
+      "fcf_yield_pct",
+      "gross_margin_pct",
+      "operating_margin_pct",
+      "net_margin_pct"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "rebalance_dates": {
+    "description": "1-12 historical dates (YYYY-MM-DD) to snapshot valuation multiples on. Order does not matter \u2014 the tool sorts them chronologically. Forward return is computed from each date to the NEXT one in the sorted list.",
+    "items": {
+     "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+     "type": "string"
+    },
+    "maxItems": 12,
+    "minItems": 1,
+    "type": "array"
+   },
+   "tickers": {
+    "description": "1-10 stock ticker symbols, e.g. [\"AAPL\",\"MSFT\"].",
+    "items": {
+     "maxLength": 10,
+     "minLength": 1,
+     "pattern": "^([A-Za-z][A-Za-z0-9.\\-]{0,9}|\\d{1,10})$",
+     "type": "string"
+    },
+    "maxItems": 10,
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "required": [
+   "tickers",
+   "rebalance_dates"
+  ],
+  "type": "object"
+ },
+ "name": "run_backtest",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "_meta": {
+    "additionalProperties": false,
+    "description": "Provenance envelope \u2014 data lineage for every MCP response",
+    "properties": {
+     "as_of_date": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "cost_usd": {
+      "additionalProperties": false,
+      "description": "Per-call cost transparency. Omitted for subscription-only tools that have no PAYG-equivalent price.",
+      "properties": {
+       "amount_usd": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "basis": {
+        "description": "payg_charge = real agent-pay charge. payg_rate_card = indicative price, not billed.",
+        "enum": [
+         "payg_charge",
+         "payg_rate_card"
+        ],
+        "type": "string"
+       },
+       "billed": {
+        "description": "true = this amount was actually charged via PAYG for this call. false = indicative PAYG-equivalent value; your plan already covers this call for free.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "amount_usd",
+       "billed",
+       "basis"
+      ],
+      "type": "object"
+     },
+     "data_plan": {
+      "description": "Access plan: sample | sp500 | pro | full",
+      "type": "string"
+     },
+     "data_quality": {
+      "additionalProperties": false,
+      "description": "Server-side invariants run on this response",
+      "properties": {
+       "notes": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "validation_failed": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "detail": {
+           "type": "string"
+          },
+          "rule": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "rule",
+          "detail"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "validation_passed": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "validation_passed",
+       "validation_failed",
+       "notes"
+      ],
+      "type": "object"
+     },
+     "fundamentals_as_of": {
+      "description": "ISO timestamp when the FINANCIAL STATEMENTS were last rebuilt in bulk. Use THIS \u2014 not `last_updated` \u2014 when telling a user how current the cross-sectional fundamentals are. The snapshot is republished on every weekday price refresh while the statements are carried forward unchanged, so `last_updated` can be far more recent than the numbers it sits next to. It is a floor for a single filer, not a ceiling: a filer with a live partition receives its filing, facts and ratios intraday (minutes after EDGAR dissemination), so an entity-scoped read may carry a filing newer than this; cross-sectional ranks (factor scores, earnings signals) refresh with the weekly bulk export.",
+      "type": "string"
+     },
+     "last_updated": {
+      "description": "ISO timestamp when the snapshot was exported",
+      "type": "string"
+     },
+     "latency_ms": {
+      "description": "Wall-clock milliseconds this tool call took, measured server-side around the handler.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "limit_warnings": {
+      "description": "Soft-warning array for partial fulfillment. Each entry carries a stable subcode + remediation.options[]. AI agents pattern-match on subcode.",
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "code": {
+         "const": "LIMIT_EXCEEDED",
+         "type": "string"
+        },
+        "current_plan": {
+         "type": "string"
+        },
+        "extensions": {
+         "additionalProperties": {},
+         "type": "object"
+        },
+        "limit_type": {
+         "type": "string"
+        },
+        "limit_value": {},
+        "remediation": {
+         "additionalProperties": true,
+         "properties": {
+          "contact_sales": {
+           "type": "string"
+          },
+          "default_action": {
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "additionalProperties": {},
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "pricing_page": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "options",
+          "default_action",
+          "pricing_page",
+          "contact_sales"
+         ],
+         "type": "object"
+        },
+        "requested_value": {},
+        "returned_value": {},
+        "subcode": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "subcode",
+        "limit_type",
+        "current_plan",
+        "remediation"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "payg_override": {
+      "additionalProperties": false,
+      "description": "Set when this single response was paid for via the agent-pay PAYG flow \u2014 the rate-limit / depth-limit checks were bypassed for this call only.",
+      "properties": {
+       "amount_cents": {
+        "type": "number"
+       },
+       "entity_scope_hash": {
+        "type": "string"
+       },
+       "meter": {
+        "type": "string"
+       },
+       "quote_id": {
+        "type": "string"
+       },
+       "retry_token_hash": {
+        "type": "string"
+       },
+       "ticker_count": {
+        "type": "number"
+       },
+       "tool": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "quote_id",
+       "tool",
+       "meter",
+       "amount_cents",
+       "ticker_count",
+       "entity_scope_hash",
+       "retry_token_hash"
+      ],
+      "type": "object"
+     },
+     "pit_safe": {
+      "description": "true iff a zero-look-ahead point-in-time cut was applied to every returned figure",
+      "type": "boolean"
+     },
+     "price_as_of": {
+      "description": "ISO timestamp when the price surfaces were last refreshed.",
+      "type": "string"
+     },
+     "rate_limit": {
+      "additionalProperties": false,
+      "description": "Caller's remaining budget",
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "remaining": {
+        "type": "integer"
+       },
+       "reset_at": {
+        "description": "ISO 8601 timestamp when the window resets",
+        "type": "string"
+       },
+       "window": {
+        "enum": [
+         "minute",
+         "hour"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "limit",
+       "remaining",
+       "reset_at",
+       "window"
+      ],
+      "type": "object"
+     },
+     "request_id": {
+      "description": "Per-request correlation id (8-char)",
+      "type": "string"
+     },
+     "result_count": {
+      "type": "integer"
+     },
+     "schema_version": {
+      "description": "Parquet schema version from manifest.json",
+      "type": "string"
+     },
+     "snapshot": {
+      "description": "Snapshot directory name (e.g. snapshot_20260420)",
+      "type": "string"
+     },
+     "source": {
+      "const": "SEC EDGAR",
+      "type": "string"
+     },
+     "ticker": {
+      "type": "string"
+     },
+     "truncation": {
+      "additionalProperties": false,
+      "description": "Set when fewer rows were returned than requested \u2014 explains why and points to a remedy",
+      "properties": {
+       "current_plan": {
+        "type": "string"
+       },
+       "plan_limit": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "reason": {
+        "enum": [
+         "PLAN_LIMIT",
+         "DATA_NOT_AVAILABLE",
+         "FISCAL_YEAR_BOUNDARY_FILTER",
+         "OTHER"
+        ],
+        "type": "string"
+       },
+       "requested": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "returned": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "upgrade_required_for": {
+        "type": "string"
+       },
+       "upgrade_url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "requested",
+       "returned",
+       "reason"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "data_plan",
+     "schema_version",
+     "snapshot",
+     "last_updated",
+     "source",
+     "pit_safe"
+    ],
+    "type": "object"
+   },
+   "capped": {
+    "type": "boolean"
+   },
+   "caveats": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "cells": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "close": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "factor_values": {
+       "additionalProperties": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "type": "object"
+      },
+      "forward_return_pct": {
+       "description": "(next rebalance date's close / this date's close - 1) x 100, using the RAW (unadjusted) close from queryPitValuationRatios. Null on the last rebalance date, or when the ticker has no computed cell at the next date.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "rebalance_date": {
+       "type": "string"
+      },
+      "ticker": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "rebalance_date",
+      "ticker",
+      "close",
+      "factor_values",
+      "forward_return_pct"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "cells_computed": {
+    "type": "integer"
+   },
+   "dropped": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "reason": {
+       "type": "string"
+      },
+      "rebalance_date": {
+       "type": "string"
+      },
+      "ticker": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "ticker",
+      "rebalance_date",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "factors": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "grid_cells": {
+    "type": "integer"
+   },
+   "method": {
+    "enum": [
+     "compose",
+     "stream_fallback"
+    ],
+    "type": "string"
+   },
+   "next_step": {
+    "type": "string"
+   },
+   "note": {
+    "type": "string"
+   },
+   "pit_safe": {
+    "anyOf": [
+     {
+      "const": true,
+      "type": "boolean"
+     },
+     {
+      "const": false,
+      "type": "boolean"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "rebalance_dates": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "source_tools_used": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "streams": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "bucket": {
+       "type": "string"
+      },
+      "expires_at": {
+       "type": "string"
+      },
+      "expires_in_seconds": {
+       "type": "number"
+      },
+      "object_key": {
+       "type": "string"
+      },
+      "ticker": {
+       "type": "string"
+      },
+      "url": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "ticker",
+      "bucket",
+      "object_key",
+      "url",
+      "expires_at",
+      "expires_in_seconds"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "summary": {
+    "additionalProperties": true,
+    "properties": {},
+    "type": "object"
+   },
+   "tickers": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "_meta",
+   "method",
+   "grid_cells",
+   "cells_computed",
+   "pit_safe",
+   "capped",
+   "source_tools_used",
+   "caveats",
+   "tickers",
+   "rebalance_dates",
+   "factors",
+   "dropped",
+   "note"
+  ],
+  "type": "object"
+ },
+ "title": "Run Bounded Factor Backtest"
+}

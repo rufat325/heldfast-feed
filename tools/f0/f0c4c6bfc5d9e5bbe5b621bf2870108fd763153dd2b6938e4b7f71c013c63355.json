@@ -1,0 +1,51 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "readOnlyHint": false,
+  "title": "Confirm a booking on behalf of the customer"
+ },
+ "description": "Confirm a booking on behalf of the customer\n\nFires the customer-actor `confirm_booking` action from the BUSINESS surface (audited as business_on_behalf). Two uses: (1) LIVE \u2014 staff confirm a slot for a customer who booked by phone; (2) SANDBOX \u2014 the customer magic-token surface is live-only (a sandbox job's link can never reach a real customer), so this is the ONLY way to drive a sandbox test job past booking (book \u2192 quote \u2192 confirm \u2192 assign \u2192 complete). Body carries the customer-chosen scheduled_at (business-local naive datetime).\nDECISION TABLE \u2014 every 409 this endpoint returns, and the correct NEXT STEP (branch on error_code, never on the HTTP status):\n\u2022 JOB_REQUEST_STAGE_CONFLICT \u2014 the job changed since you read it (NOTE: every FAILED confirm attempt also bumps status_version by design). Next: re-GET the job, retry with the fresh status_version.\n\u2022 JOB_REQUEST_ACTION_NOT_PENDING \u2014 the job is no longer at the confirm step (usually: already confirmed). Next: re-GET and show current status; do not retry.\n\u2022 JOB_REQUEST_NO_TECHNICIAN_AVAILABLE \u2014 the TIME is infeasible for everyone (outside working hours / the customer window, or nobody qualifies). Best-effort `data` breakdown: `considered` (roster size checked), `blocked_by` (histogram of blockers[0].kind \u2192 count, only kinds that actually blocked someone), `truncated` (roster larger than the check covered). Next: pick another time via booking-windows / time-segments. NOT an emergency case \u2014 displacement cannot conjure capacity.\n\u2022 JOB_REQUEST_TECH_INFEASIBLE \u2014 the FORCED technician can never take the job then; `data.reason` says why (blockers[0].kind): outside_service_area | missing_required_skills | not_lead_tier | no_working_day | on_time_off | off_shift | visit_too_long | cannot_arrive_in_time (see `data.earliest_feasible_at`, RFC3339 UTC \u2014 the first same-day time they CAN be on site \u2192 offer it) | not_available_today (diagnosis unavailable). `data.blockers[]` names EVERY cause, most-structural first (`data.technician` carries an id; `name` is always empty on this confirm path today \u2014 nothing here calls the name lookup move's TECH_NOT_FEASIBLE payload uses); a UI that reads only `reason` still works. Next: keep the tech and reschedule to earliest_feasible_at+, OR keep the time and drop technician_id (auto-pick) / choose another tech from time-segments. NOT an emergency case.\n\u2022 JOB_REQUEST_P0_REQUIRES_DISPLACEMENT \u2014 the ONLY code that routes to the EMERGENCY flow: the job is P0, the tech qualifies, but the lane is genuinely occupied. Next: POST emergency/candidates \u2192 preview \u2192 commit (the commit auto-confirms). Caveat: if the occupying jobs are themselves P0 the preview will reject with EMERGENCY_RESCHEDULE_SLOT_OCCUPIED (P0 never displaces P0) \u2014 then pick another tech/time.",
+ "inputSchema": {
+  "properties": {
+   "after_hours_override": {
+    "description": "AfterHoursOverride (BUSINESS confirm only): schedule this P0 outside the\ntechnician's working hours or approved time-off \u2014 you have phoned them and\nthey agreed. Requires priority p0, a single-person job, and technician_id.\nDouble-booking, service area, required skills and the lead-tier rule still\nreject. Deliberately NOT a binding-tag rule: gin evaluates tags before the\nhandler, which would make the three AFTER_HOURS codes unreachable.",
+    "type": "boolean"
+   },
+   "arrival_window_minutes": {
+    "description": "ArrivalWindowMinutes = width (ph\u00fat) c\u1ee7a arrival-window \u00f4 kh\u00e1ch b\u1ea5m \u1edf\nslot-picker (ch\u00ednh l\u00e0 time_slot_step_minutes, m\u1eb7c \u0111\u1ecbnh 30). Persist \u0111\u1ec3\npost-confirm detail render l\u1ea1i \u0111\u00fang window. Optional; bounds ([5, 240],\nkh\u1edbp slot-picker step) validate \u1edf usecase \u2014 single authority, m\u1ed9t error\ncode (JOB_REQUEST_INVALID_INPUT).",
+    "type": "integer"
+   },
+   "id": {
+    "description": "Job request ID",
+    "type": "string"
+   },
+   "idempotency_key": {
+    "description": "Unique key making retries safe: a repeat send with the same key replays the original response (header Idempotent-Replayed: true) instead of re-running the operation. Reusing a key with a different body returns 422 IDEMPOTENCY_KEY_REUSE. (sent as the Idempotency-Key header)",
+    "type": "string"
+   },
+   "scheduled_at": {
+    "description": "Chosen start time \u2014 business-local wall clock (the business_time.datetime value from the time-segments picker), converted to UTC against the job's business timezone. Seconds may be omitted and a space may replace the T. An offset is accepted only when it agrees with the business timezone; a disagreeing one is refused with JOB_REQUEST_INVALID_INPUT naming what it means locally.",
+    "example": "2030-06-14T09:00:00",
+    "format": "date-time",
+    "type": "string"
+   },
+   "status_version": {
+    "description": "Optimistic-lock fence: the status_version from your last read. Omitted/0 = fence on the row's current version (no race protection).",
+    "example": 2,
+    "type": "integer"
+   },
+   "technician_id": {
+    "description": "TechnicianID (BUSINESS confirm only \u2014 ignored on the customer surface):\nforce-assign the job to this technician instead of the ranked auto-pick.\nRanking is bypassed; feasibility (hours/time-off/geo/skills), the\nTierLead rule and the double-booking guard still apply \u2014 an infeasible\nforced tech rejects the confirm (P0 gets the displacement hint).",
+    "format": "uuid",
+    "type": "string"
+   }
+  },
+  "required": [
+   "id"
+  ],
+  "type": "object"
+ },
+ "name": "confirmJobRequest",
+ "title": "Confirm a booking on behalf of the customer"
+}

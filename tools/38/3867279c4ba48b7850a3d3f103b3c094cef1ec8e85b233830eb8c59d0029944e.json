@@ -1,0 +1,113 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Search for datasets (packages) on a CKAN server using Solr query syntax.\n\nSupports full Solr search capabilities including filters, facets, and sorting.\nUse this to discover datasets matching specific criteria.\n\nNote on parser behavior:\nSome CKAN portals use a restrictive default query parser that can break long OR queries.\nFor those portals, this tool may force the query into 'text:(...)' based on per-portal config.\nYou can override with 'query_parser' to force or disable this behavior per request.\n\nImportant - Date field semantics:\n  - issued: publisher's content publish date when available (best proxy for \"created/published\")\n  - modified: publisher's content update date when available\n  - metadata_created: CKAN record creation timestamp (publish time on source portals,\n    harvest time on aggregators; fallback for \"created\" if issued missing)\n  - metadata_modified: CKAN record update timestamp (publish time on source portals,\n    harvest time on aggregators; use for \"updated/modified in last X\")\n\nNatural language mapping (important for tool callers):\n  - \"created\"/\"published\" -> prefer issued; fallback to metadata_created\n  - \"updated\"/\"modified\" -> prefer modified; fallback to metadata_modified\n  - For \"recent in last X\", consider using content_recent (issued with metadata_created fallback)\n\nContent-recent helper:\n  - content_recent: if true, rewrites the query to use issued with a fallback to\n    metadata_created when issued is missing.\n  - content_recent_days: window for content_recent (default 30 days).\n\nArgs:\n  - server_url (string): Base URL of CKAN server (e.g., \"https://dati.gov.it/opendata\")\n  - q (string): Search query using Solr syntax (default: \"*:*\" for all)\n  - fq (string): Filter query (e.g., \"organization:comune-palermo\")\n    IMPORTANT \u2014 Solr fq syntax rules:\n    1. OR inside a single field: use field:(val1 OR val2), NOT field:val1 OR field:val2.\n       Wrong: fq=type:\"A\" OR type:\"B\"  \u2192 silently ignored, returns entire catalog.\n       Right:  fq=type:(\"A\" OR \"B\")\n    2. CKAN extras fields are indexed as extras_fieldname, not fieldname.\n       e.g. to filter on extra field \"hvd_category\" use fq=extras_hvd_category:\"<value>\"\n  - rows (number): Number of results to return (default: 10, max: 1000)\n  - start (number): Offset for pagination (default: 0)\n  - page (number): Page number (1-based); alias for start. Overrides start if provided.\n  - page_size (number): Results per page when using page (default: 10, max: 1000)\n  - sort (string): Sort field and direction (e.g., \"metadata_modified desc\")\n  - facet_field (array): Fields to facet on (e.g., [\"organization\", \"tags\"])\n  - facet_limit (number): Max facet values per field (default: 50)\n  - include_drafts (boolean): Include draft datasets (default: false)\n  - query_parser ('default' | 'text'): Override search parser behavior\n  - response_format ('markdown' | 'json'): Output format\n\nReturns:\n  Search results with:\n  - count: Number of results found\n  - results: Array of dataset objects\n  - facets: Facet counts (if facet_field specified)\n  - search_facets: Detailed facet information\n\nQuery Syntax (parameter q):\n  Boolean operators:\n    - AND / &&: \"water AND climate\"\n    - OR / ||: \"health OR sanit\u00e0\"\n    - NOT / !: \"data NOT personal\"\n    - +required -excluded: \"+title:water -title:sea\"\n    - Grouping: \"(title:water OR title:climate) AND tags:environment\"\n\n  Wildcards:\n    - *: \"title:environment*\" (matches environmental, environments, etc.)\n    - Note: Left truncation (*water) not supported\n\n  Fuzzy search (edit distance):\n    - ~: \"title:rest~\" or \"title:rest~1\" (finds \"test\", \"best\", \"rest\")\n\n  Proximity search (words within N positions):\n    - \"phrase\"~N: \"title:\"climate change\"~5\"\n\n  Range queries:\n    - Inclusive [a TO b]: \"num_resources:[5 TO 10]\"\n    - Exclusive {a TO b}: \"num_resources:{0 TO 100}\"\n    - One side open: \"metadata_modified:[2024-01-01T00:00:00Z TO *]\"\n\n  Date math:\n    - NOW-1YEAR, NOW-6MONTHS, NOW-7DAYS, NOW-1HOUR\n    - NOW/DAY, NOW/MONTH (round down)\n    - Combined: \"metadata_modified:[NOW-2MONTHS TO NOW]\"\n    - Example: \"metadata_created:[NOW-1YEAR TO *]\"\n    - IMPORTANT: NOW syntax works on metadata_modified and metadata_created fields\n    - For 'modified' and 'issued' fields, NOW syntax is auto-converted to ISO dates\n    - Manual ISO dates always work: \"modified:[2026-01-15T00:00:00Z TO *]\"\n\n  Field existence:\n    - Exists: \"field:*\" or \"field:[* TO *]\"\n    - Not exists: \"NOT field:*\" or \"-field:*\"\n\n  Boosting (relevance scoring):\n    - Boost term: \"title:water^2 OR notes:water\" (title matches score higher)\n    - Constant score: \"title:water^=1.5\"\n\nExamples:\n  - Search all: { q: \"*:*\" }\n  - By tag: { q: \"tags:sanit\u00e0\" }\n  - Boolean: { q: \"(title:water OR title:climate) AND NOT title:sea\" }\n  - Wildcard: { q: \"title:environment*\" }\n  - Fuzzy: { q: \"title:health~2\" }\n  - Proximity: { q: \"notes:\"open data\"~3\" }\n  - Date range: { q: \"metadata_modified:[2024-01-01T00:00:00Z TO 2024-12-31T23:59:59Z]\" }\n  - Date math: { q: \"metadata_modified:[NOW-6MONTHS TO *]\" }\n  - Date math (auto-converted): { q: \"modified:[NOW-30DAYS TO NOW]\" }\n  - Published in 2025 (content date): { fq: \"issued:[2025-01-01T00:00:00Z TO 2025-12-31T23:59:59Z]\" }\n  - First appeared on portal in 2025: { fq: \"metadata_created:[2025-01-01T00:00:00Z TO 2025-12-31T23:59:59Z]\" }\n  - Recent content (issued w/ fallback): { q: \"*:*\", content_recent: true, content_recent_days: 180 }\n  - Field exists: { q: \"organization:* AND num_resources:[1 TO *]\" }\n  - Boosting: { q: \"title:climate^2 OR notes:climate\" }\n  - Filter org: { fq: \"organization:regione-siciliana\" }\n  - Filter extras field (correct): { fq: \"extras_hvd_category:\"http://data.europa.eu/bna/c_ac64a52d\"\" }\n  - Filter extras OR (correct): { fq: \"extras_hvd_category:(\"http://data.europa.eu/bna/c_ac64a52d\" OR \"http://data.europa.eu/bna/c_dd313021\")\" }\n  - Get facets: { facet_field: [\"organization\"], rows: 0 }\n\nQuery language:\n  Before searching a portal, check its locale via ckan_status_show (field: \"Portal Locale\" / locale_default).\n  Translate query terms to the portal's language \u2014 searching in English on a non-English portal returns 0 results.\n  Examples: locale \"it\" \u2192 Italian terms; \"uk_UA\" \u2192 Ukrainian (Cyrillic); \"fr_FR\" \u2192 French.\n  Exception: multilingual portals (e.g. data.europa.eu, open.canada.ca) accept EN + native terms joined with OR.\n\nTypical workflow: ckan_status_show (check locale) \u2192 ckan_package_search (query in portal's language) \u2192 ckan_package_show (get full metadata + resource IDs) \u2192 ckan_datastore_search (query tabular data)",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "content_recent": {
+    "default": false,
+    "description": "Use issued date with fallback to metadata_created for recent content",
+    "type": "boolean"
+   },
+   "content_recent_days": {
+    "default": 30,
+    "description": "Day window for content_recent (default 30)",
+    "minimum": 1,
+    "type": "integer"
+   },
+   "facet_field": {
+    "description": "Fields to facet on",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "facet_limit": {
+    "default": 50,
+    "description": "Maximum facet values per field",
+    "minimum": 1,
+    "type": "integer"
+   },
+   "fq": {
+    "description": "Filter query in Solr syntax; applied after scoring, does not affect relevance. CKAN extras fields use prefix 'extras_' (e.g. extras_hvd_category). For OR on same field use field:(val1 OR val2), never field:val1 OR field:val2 (silently breaks). Examples: 'organization:comune-palermo', 'res_format:CSV', 'extras_hvd_category:(\"uri1\" OR \"uri2\")'.",
+    "type": "string"
+   },
+   "include_drafts": {
+    "default": false,
+    "description": "Include draft datasets",
+    "type": "boolean"
+   },
+   "page": {
+    "description": "Page number (1-based); alias for start. Overrides start if provided.",
+    "minimum": 1,
+    "type": "integer"
+   },
+   "page_size": {
+    "default": 10,
+    "description": "Results per page when using page (default: 10)",
+    "maximum": 1000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "q": {
+    "default": "*:*",
+    "description": "Search query in Solr syntax",
+    "type": "string"
+   },
+   "query_parser": {
+    "description": "Override search parser ('text' forces text:(...) on non-fielded queries)",
+    "enum": [
+     "default",
+     "text"
+    ],
+    "type": "string"
+   },
+   "response_format": {
+    "default": "markdown",
+    "description": "Output format: 'markdown' for human-readable or 'json' for machine-readable",
+    "enum": [
+     "markdown",
+     "json"
+    ],
+    "type": "string"
+   },
+   "rows": {
+    "default": 10,
+    "description": "Number of results to return",
+    "maximum": 1000,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "server_url": {
+    "description": "Base URL of the CKAN server",
+    "format": "uri",
+    "type": "string"
+   },
+   "sort": {
+    "description": "Sort field and direction (e.g., 'metadata_modified desc')",
+    "type": "string"
+   },
+   "start": {
+    "default": 0,
+    "description": "Offset for pagination",
+    "minimum": 0,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "server_url"
+  ],
+  "type": "object"
+ },
+ "name": "ckan_package_search",
+ "title": "Search CKAN Datasets"
+}

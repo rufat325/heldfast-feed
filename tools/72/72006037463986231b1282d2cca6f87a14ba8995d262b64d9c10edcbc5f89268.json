@@ -1,0 +1,702 @@
+{
+ "_meta": {
+  "ui": {
+   "resourceUri": "ui://well/widget/1648cb47"
+  },
+  "ui/resourceUri": "ui://well/widget/1648cb47"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "List missing invoices"
+ },
+ "description": "List the supplier invoices a past period is still missing \u2014 the settled spend whose invoice has not been collected, one row per counterparty, exactly as the Well app's expense-invoices card shows them. Use it for \"which invoices am I missing for <month>?\" and as the input to fetching them. It does NOT list the connection routes a provider offers; for \"which connectors, extension, mailbox or drive can bring in this provider's invoices\" call `well_list_connectors` with `counterparty_ids` copied from these rows.\n\nName the period ONE way: `{ calendar_year, calendar_month }` (the calendar month, e.g. June 2026 \u2192 2026, 6), `{ fiscal_year, fiscal_period }`, or `periods: [{ calendar_year, calendar_month }, \u2026]` for SEVERAL months in one call (1-12), or name NO period at all to use the months the user selected on the period card in this conversation (well_list_periods \u2192 the user clicks \u2192 well_switch_workspace records them). With no period named and no months selected, the call refuses and tells you to run the period step first. Every month must have ended: a current or future month is refused, and so is the adjustment period (13). Duplicate months are refused.\n\nCOST: there is no batch endpoint, so each named month is a separate read of that month's spend. Ask for the months the user actually named, not a whole year \"to be safe\".\n\nReturns `rows`, ONE per counterparty for the whole call, never one per month. Each row carries `name`, `tx_count` and `base_total_amount` in `base_currency` SUMMED over the months it covers, its own `months` array naming those months (each with that month's `tx_count`, `base_total_amount`, `proof_task_id`, `acquisition_status` and `refusal_reason`), and the route fields `mode`, `available_modes`, `suggested_action`, `matched_provider_name` and `matched_connector_service_id`, which the provider match resolves once per counterparty. NEVER list a counterparty once per month and never present its months as separate gaps: it is one supplier to chase, and one collection covers every month behind it. Name the months a row spans from its `months` array. The envelope's own `months` carries each month's totals (rows are NOT repeated there), `periods_covered` names the months read, and `transaction_count`, `group_count` and `dropped_groups` are totals across every month read. `row_count` counts the DISTINCT counterparties, so it is never the sum of the months' own `row_count`. `dropped_groups` counts the GROUPS that produced no row \u2014 party-less bank operations, unresolved counterparties, unnamed companies \u2014 never transactions, and `bank_internal` and `unknown` hold one group per month whatever they contain, so quote neither as a quantity of operations. `unknown` and `unnamed_company` ARE categorized expense spend still missing a supplier invoice, so an empty `rows` over a non-zero count is not a complete period; `bank_internal` alone is, since no supplier can invoice a party-less operation. The single-month fields `calendar_year`, `calendar_month`, `fiscal_year`, `fiscal_period` and `period_label` appear ONLY when the call named exactly one month.\n\nEvery row also carries `transactions` \u2014 the counterparty's own lines behind the row, each with `date`, `description` (the bank's remittance text), `category`, `amount`, `currency` and `base_amount`. `amount` is signed and stays in the transaction's own currency, so never add those together across a row; `base_amount` is the same line in `base_currency`, and the magnitudes of those DO add up to `base_total_amount`. The list is capped at 25 per row and `transactions_omitted` says how many the cap left out \u2014 quote that number instead of implying the list is complete.\n\n`mode` is the ONE route the card suggests for that row: `agent` (a browser agent can collect it from the supplier portal), `connect` (connect the named service and Well fetches it), `upload` (the user supplies the file). `available_modes` lists every route the row offers instead of only the suggested one \u2014 `agent` and `upload` on every row, plus `connect` when the catalog holds a connector for the matched provider, so 2 or 3 entries. Present `mode` as the suggestion and `available_modes` as the choice.\n\nOnly CATEGORIZED expense transactions are considered \u2014 uncategorized spend is not listed, so poor categorization coverage under-reports the gaps; disclose the `hints`.\n\nThis tool reads the user's data and changes none of it. It does not mint tasks, start a close, connect anything, or fetch any invoice.\n\nCall this directly \u2014 no other tool call is needed first (workspace is resolved from the caller's authorized token, same as every other well_* tool).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "calendar_month": {
+    "description": "Calendar month, 1 = January \u2026 12 = December.",
+    "maximum": 12,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "calendar_year": {
+    "description": "Calendar year, e.g. 2026.",
+    "maximum": 2100,
+    "minimum": 2000,
+    "type": "integer"
+   },
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "fiscal_period": {
+    "description": "Fiscal period, 1-12. The adjustment period (13) is refused: it has no calendar month.",
+    "maximum": 13,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "fiscal_year": {
+    "description": "Fiscal year (the calendar year the workspace's fiscal year STARTED in).",
+    "maximum": 2100,
+    "minimum": 2000,
+    "type": "integer"
+   },
+   "periods": {
+    "description": "Several calendar months in one call, 1-12. Each month costs one separate read, so name only the months you need. Duplicates are refused.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "calendar_month": {
+       "description": "Calendar month, 1 = January \u2026 12 = December.",
+       "maximum": 12,
+       "minimum": 1,
+       "type": "integer"
+      },
+      "calendar_year": {
+       "description": "Calendar year, e.g. 2026.",
+       "maximum": 2100,
+       "minimum": 2000,
+       "type": "integer"
+      }
+     },
+     "required": [
+      "calendar_year",
+      "calendar_month"
+     ],
+     "type": "object"
+    },
+    "maxItems": 12,
+    "minItems": 1,
+    "type": "array"
+   },
+   "workspace_id": {
+    "description": "Target workspace. This read reports one workspace's own data. Omit it and the token's primary workspace answers, which may not be the one you mean; the result names the workspace that did.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "well_list_missing_invoices",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "base_currency": {
+    "type": "string"
+   },
+   "calendar_month": {
+    "description": "Present only when the call named exactly one month.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "calendar_year": {
+    "description": "Present only when the call named exactly one month.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "dropped_groups": {
+    "additionalProperties": false,
+    "properties": {
+     "bank_internal": {
+      "description": "GROUPS of party-less bank operations \u2014 nothing to collect. One group per month that held any, NOT a count of operations: never quote this number as a quantity of bank operations.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "unknown": {
+      "description": "GROUPS of spend with no resolved counterparty. One group per month that held any, NOT a count of transactions or of counterparties.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "unnamed_company": {
+      "description": "GROUPS the card cannot render (no name or no key) \u2014 one per company, NOT a count of transactions.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "bank_internal",
+     "unknown",
+     "unnamed_company"
+    ],
+    "type": "object"
+   },
+   "error": {
+    "type": "string"
+   },
+   "fiscal_period": {
+    "description": "Present only when the call named exactly one month.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "fiscal_year": {
+    "description": "Present only when the call named exactly one month.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "group_count": {
+    "description": "Groups the reads returned before the card's projection.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "hints": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "months": {
+    "description": "Per-month totals, oldest first.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "calendar_month": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "calendar_year": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "dropped_groups": {
+       "additionalProperties": false,
+       "properties": {
+        "bank_internal": {
+         "description": "GROUPS of party-less bank operations \u2014 nothing to collect. One group per month that held any, NOT a count of operations: never quote this number as a quantity of bank operations.",
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "unknown": {
+         "description": "GROUPS of spend with no resolved counterparty. One group per month that held any, NOT a count of transactions or of counterparties.",
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "unnamed_company": {
+         "description": "GROUPS the card cannot render (no name or no key) \u2014 one per company, NOT a count of transactions.",
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        }
+       },
+       "required": [
+        "bank_internal",
+        "unknown",
+        "unnamed_company"
+       ],
+       "type": "object"
+      },
+      "fiscal_period": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "fiscal_year": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "group_count": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "period_label": {
+       "type": "string"
+      },
+      "row_count": {
+       "description": "Counterparties THIS month is missing an invoice from. A counterparty owing an invoice in several months counts in each of them, so these do not sum to the envelope's `row_count`, which counts each counterparty once.",
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "transaction_count": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      }
+     },
+     "required": [
+      "calendar_year",
+      "calendar_month",
+      "period_label",
+      "fiscal_year",
+      "fiscal_period",
+      "row_count",
+      "transaction_count",
+      "group_count",
+      "dropped_groups"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "next_step": {
+    "description": "What to do with the card this result renders. Added by the dispatcher when the card asks for a click.",
+    "type": "string"
+   },
+   "period_label": {
+    "description": "Human-readable label of the period, e.g. \"June 2026\". Present only when the call named one month.",
+    "type": "string"
+   },
+   "periods_covered": {
+    "description": "The months the result covers, oldest first.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "calendar_month": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "calendar_year": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "period_label": {
+       "description": "The month this row belongs to, e.g. \"June 2026\".",
+       "type": "string"
+      }
+     },
+     "required": [
+      "calendar_year",
+      "calendar_month",
+      "period_label"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "periods_requested": {
+    "description": "How many calendar months the call named.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "row_count": {
+    "description": "Rows in `rows`, which is the DISTINCT counterparties the call found. Never the sum of the months' own `row_count`.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "rows": {
+    "description": "The card's rows, ONE per counterparty for the whole call, in the order the oldest month listed them, each naming the months it covers in `months`. A counterparty owing an invoice in several of the months read is one row, never one per month.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "available_modes": {
+       "description": "Every collection method this counterparty offers, agent first and upload last \u2014 2 or 3 entries, never one. `agent` and `upload` stand for every row; `connect` joins them only when the catalog holds a connector for the matched provider, which is exactly what a non-null matched_connector_service_id reports. `mode` names the ONE route the card suggests, this names all the routes the user may pick.",
+       "items": {
+        "enum": [
+         "agent",
+         "connect",
+         "upload"
+        ],
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "base_total_amount": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Sum in base_currency across every month in `months`; null when an FX rate was missing for any transaction of any of them."
+      },
+      "company_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "domain_resolution": {
+       "description": "The counterparty company's own domain-discovery state: 'resolved' when it already carries a domain (any source); 'pending' when a web-evidence resolve is durably enqueued and still open; 'none' when no domain is known and nothing is in flight.",
+       "enum": [
+        "resolved",
+        "pending",
+        "none"
+       ],
+       "type": "string"
+      },
+      "id": {
+       "description": "Stable row key: the counterparty company id, or the proof task id of a gap that resolved no company. One key per counterparty for the whole call, so it never repeats across the months the row covers.",
+       "type": "string"
+      },
+      "logo_url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "The counterparty's mark: the matched provider's stored logo, else the counterparty company's own stored logo \u2014 the one company enrichment resolved from that company's domain. Null when the row matched no provider and its company carries no stored logo. A null here does not mean the card draws initials: the widget is additionally offered a mark derived from the company's own host, which this field never carries."
+      },
+      "matched_connector_service_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "matched_provider_has_blueprint": {
+       "type": "boolean"
+      },
+      "matched_provider_name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "matched_provider_url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "mode": {
+       "description": "How the app's card offers to obtain the invoice: agent (a browser agent runs the supplier portal \u2014 the provider carries a blueprint OR a real portal URL the agent runs against), connect (connect matched_connector_service_id and Well fetches it), upload (the user supplies the file). Decided from the provider facts: connect wins when a connector matched, else agent when it can run, else upload.",
+       "enum": [
+        "agent",
+        "upload",
+        "connect"
+       ],
+       "type": "string"
+      },
+      "months": {
+       "description": "The months of the call this counterparty is missing an invoice in, oldest first: one entry, or several when the same counterparty owes an invoice in more than one of them. The envelope's `periods_covered` names every month READ; this names the months THIS row covers.",
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "acquisition_status": {
+          "enum": [
+           "waiting",
+           "processing",
+           "mapped",
+           "refused"
+          ],
+          "type": "string"
+         },
+         "base_total_amount": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "This month's sum in `base_currency`; null when an FX rate was missing for any of its transactions."
+         },
+         "calendar_month": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "calendar_year": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "period_label": {
+          "description": "The month this row belongs to, e.g. \"June 2026\".",
+          "type": "string"
+         },
+         "proof_task_id": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "The close-proof task bound to this month's gap; null until one is minted."
+         },
+         "refusal_reason": {
+          "anyOf": [
+           {
+            "enum": [
+             "noop_not_proof",
+             "noop_no_gap_match",
+             "noop_ambiguous_gaps",
+             "noop_task_unavailable",
+             "warn_bridge_error"
+            ],
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "Populated only when THIS month's acquisition_status is refused."
+         },
+         "tx_count": {
+          "description": "Transactions this counterparty is missing an invoice for in THIS month alone.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         }
+        },
+        "required": [
+         "calendar_year",
+         "calendar_month",
+         "period_label",
+         "tx_count",
+         "base_total_amount",
+         "proof_task_id",
+         "acquisition_status",
+         "refusal_reason"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "name": {
+       "type": "string"
+      },
+      "suggested_action": {
+       "description": "The backend's routing decision for the row. `chrome_extension_fetch` when the matched provider can run the browser agent (a blueprint or a real portal URL), `connect_provider` when a connector matched, else `manual_upload`. `mode` is the same decision in the card's vocabulary.",
+       "enum": [
+        "connect_provider",
+        "chrome_extension_fetch",
+        "manual_upload"
+       ],
+       "type": "string"
+      },
+      "transactions": {
+       "description": "The row's own transactions, oldest month first, at most 25 for the WHOLE row: the same bounded sample the app's card lists under the counterparty. A row spanning months carries one sample across them, not one per month.",
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "amount": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "Signed amount in `currency` \u2014 negative when the money leaves the account."
+         },
+         "base_amount": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "The same amount converted to `base_currency`, still signed. Sum the magnitudes of these to reach `base_total_amount`; null when no FX rate covered the date."
+         },
+         "category": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "Display label of THIS transaction's management category, not the group's. Null when uncategorized."
+         },
+         "category_key": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "Stable taxonomy key of the same category \u2014 branch on this, never on the label. Null when off-catalog."
+         },
+         "currency": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "date": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "The day the transaction posts under (YYYY-MM-DD); null when it carries no date."
+         },
+         "description": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "The bank's remittance text \u2014 what distinguishes one line from the next. Null when the row carries none."
+         },
+         "id": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "id",
+         "date",
+         "description",
+         "category",
+         "category_key",
+         "amount",
+         "currency",
+         "base_amount"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "transactions_omitted": {
+       "description": "How many of the row's transactions the cap left out: `tx_count` minus the listed ones.",
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "tx_count": {
+       "description": "Transactions missing an invoice, summed across every month in `months`.",
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      }
+     },
+     "required": [
+      "id",
+      "company_id",
+      "name",
+      "logo_url",
+      "domain_resolution",
+      "months",
+      "tx_count",
+      "transactions",
+      "transactions_omitted",
+      "base_total_amount",
+      "mode",
+      "available_modes",
+      "suggested_action",
+      "matched_provider_name",
+      "matched_provider_url",
+      "matched_provider_has_blueprint",
+      "matched_connector_service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "transaction_count": {
+    "description": "Every transaction missing its invoice, across all groups and all months.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "workspace_id": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "rows",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "List missing invoices"
+}

@@ -1,0 +1,655 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Get Auditable Research File"
+ },
+ "description": "Fetch the Auditable Research File behind one of the caller's own agent runs \u2014 the complete evidence chain an examiner asks for: the originating prompt, every tool the agent called in order, every `fact_id` it cited, every human approval, and which models were used. Assembled from the immutable audit ledger written as the run executed; nothing here is reconstructed or inferred. Name the subject EITHER way, and pass exactly one: `report_id` (a report you wrote or found \u2014 from `create_report`, `list_my_reports` or `search_reports`) or `run_id` (from `list_agent_runs`). Naming a REPORT is the richer call: it resolves the run behind that report AND adds two sections a run's ledger cannot carry \u2014 `human_review` (each figure a HUMAN verified, corrected, rejected or sourced externally, with who and when) and `sources` (the SEC filing, form, period and filed date behind each cited fact_id). It also echoes the resolved `run_id`. A run-keyed call omits both, because a run may produce several reports and 'the report for this run' has no honest answer; empty or absent there means NOT RESOLVED, never 'no sources'. `format: \"pdf\"` returns the SAME assembled file as a branded compliance PDF instead of inline JSON \u2014 a 15-minute presigned download URL (`url` + `filename`) for the human-facing artifact (cover with the completeness verdict, evidence chain table, provenance with clickable sec.gov links). The PDF is rendered fresh on every call \u2014 never cached \u2014 because an in-flight run's ledger can gain entries, and a stale 'complete' verdict is exactly the lie this document exists to prevent. \u26a0\ufe0f ALWAYS READ `completeness` FIRST AND REPORT IT. `completeness.complete` is computed from the ledger, and `completeness.gaps` names every hole found \u2014 an irreversible action taken with no named approver, a state-changing action that cited no fact_id, an unrecorded model, a failed step. If you present this run as evidence, present the gaps too; a chain with holes that is quoted as if whole is the one thing this artifact exists to prevent. \u26a0\ufe0f `found: false` IS NOT A FINDING ABOUT THE WORK. It is returned (not as an error) for an unknown id, an id belonging to another customer, and a report with no run on record \u2014 deliberately indistinguishable, so no caller can probe which. It means we hold no audit trail under that id. It does NOT mean the report is unaudited, unverified, or that the id does not exist, and it must never be reported that way. Tier: sp500+ (sample rejected).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "format": {
+    "default": "json",
+    "description": "json (default) = the assembled file inline. pdf = a presigned download URL for the branded compliance PDF \u2014 the human-facing artifact; rendered fresh on every call, never cached.",
+    "enum": [
+     "json",
+     "pdf"
+    ],
+    "type": "string"
+   },
+   "report_id": {
+    "description": "Report identifier \u2014 from create_report, list_my_reports or search_reports. Resolves the run behind that report and adds the human_review + sources sections. Pass this OR run_id, not both.",
+    "maxLength": 200,
+    "minLength": 1,
+    "type": "string"
+   },
+   "run_id": {
+    "description": "Run identifier, as returned by list_agent_runs. Pass this OR report_id, not both.",
+    "maxLength": 200,
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "get_research_file",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "_meta": {
+    "additionalProperties": false,
+    "description": "Provenance envelope \u2014 data lineage for every MCP response",
+    "properties": {
+     "as_of_date": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "cost_usd": {
+      "additionalProperties": false,
+      "description": "Per-call cost transparency. Omitted for subscription-only tools that have no PAYG-equivalent price.",
+      "properties": {
+       "amount_usd": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "basis": {
+        "description": "payg_charge = real agent-pay charge. payg_rate_card = indicative price, not billed.",
+        "enum": [
+         "payg_charge",
+         "payg_rate_card"
+        ],
+        "type": "string"
+       },
+       "billed": {
+        "description": "true = this amount was actually charged via PAYG for this call. false = indicative PAYG-equivalent value; your plan already covers this call for free.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "amount_usd",
+       "billed",
+       "basis"
+      ],
+      "type": "object"
+     },
+     "data_plan": {
+      "description": "Access plan: sample | sp500 | pro | full",
+      "type": "string"
+     },
+     "data_quality": {
+      "additionalProperties": false,
+      "description": "Server-side invariants run on this response",
+      "properties": {
+       "notes": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "validation_failed": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "detail": {
+           "type": "string"
+          },
+          "rule": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "rule",
+          "detail"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "validation_passed": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "validation_passed",
+       "validation_failed",
+       "notes"
+      ],
+      "type": "object"
+     },
+     "fundamentals_as_of": {
+      "description": "ISO timestamp when the FINANCIAL STATEMENTS were last rebuilt in bulk. Use THIS \u2014 not `last_updated` \u2014 when telling a user how current the cross-sectional fundamentals are. The snapshot is republished on every weekday price refresh while the statements are carried forward unchanged, so `last_updated` can be far more recent than the numbers it sits next to. It is a floor for a single filer, not a ceiling: a filer with a live partition receives its filing, facts and ratios intraday (minutes after EDGAR dissemination), so an entity-scoped read may carry a filing newer than this; cross-sectional ranks (factor scores, earnings signals) refresh with the weekly bulk export.",
+      "type": "string"
+     },
+     "last_updated": {
+      "description": "ISO timestamp when the snapshot was exported",
+      "type": "string"
+     },
+     "latency_ms": {
+      "description": "Wall-clock milliseconds this tool call took, measured server-side around the handler.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "limit_warnings": {
+      "description": "Soft-warning array for partial fulfillment. Each entry carries a stable subcode + remediation.options[]. AI agents pattern-match on subcode.",
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "code": {
+         "const": "LIMIT_EXCEEDED",
+         "type": "string"
+        },
+        "current_plan": {
+         "type": "string"
+        },
+        "extensions": {
+         "additionalProperties": {},
+         "type": "object"
+        },
+        "limit_type": {
+         "type": "string"
+        },
+        "limit_value": {},
+        "remediation": {
+         "additionalProperties": true,
+         "properties": {
+          "contact_sales": {
+           "type": "string"
+          },
+          "default_action": {
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "additionalProperties": {},
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "pricing_page": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "options",
+          "default_action",
+          "pricing_page",
+          "contact_sales"
+         ],
+         "type": "object"
+        },
+        "requested_value": {},
+        "returned_value": {},
+        "subcode": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "subcode",
+        "limit_type",
+        "current_plan",
+        "remediation"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "payg_override": {
+      "additionalProperties": false,
+      "description": "Set when this single response was paid for via the agent-pay PAYG flow \u2014 the rate-limit / depth-limit checks were bypassed for this call only.",
+      "properties": {
+       "amount_cents": {
+        "type": "number"
+       },
+       "entity_scope_hash": {
+        "type": "string"
+       },
+       "meter": {
+        "type": "string"
+       },
+       "quote_id": {
+        "type": "string"
+       },
+       "retry_token_hash": {
+        "type": "string"
+       },
+       "ticker_count": {
+        "type": "number"
+       },
+       "tool": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "quote_id",
+       "tool",
+       "meter",
+       "amount_cents",
+       "ticker_count",
+       "entity_scope_hash",
+       "retry_token_hash"
+      ],
+      "type": "object"
+     },
+     "pit_safe": {
+      "description": "true iff a zero-look-ahead point-in-time cut was applied to every returned figure",
+      "type": "boolean"
+     },
+     "price_as_of": {
+      "description": "ISO timestamp when the price surfaces were last refreshed.",
+      "type": "string"
+     },
+     "rate_limit": {
+      "additionalProperties": false,
+      "description": "Caller's remaining budget",
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "remaining": {
+        "type": "integer"
+       },
+       "reset_at": {
+        "description": "ISO 8601 timestamp when the window resets",
+        "type": "string"
+       },
+       "window": {
+        "enum": [
+         "minute",
+         "hour"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "limit",
+       "remaining",
+       "reset_at",
+       "window"
+      ],
+      "type": "object"
+     },
+     "request_id": {
+      "description": "Per-request correlation id (8-char)",
+      "type": "string"
+     },
+     "result_count": {
+      "type": "integer"
+     },
+     "schema_version": {
+      "description": "Parquet schema version from manifest.json",
+      "type": "string"
+     },
+     "snapshot": {
+      "description": "Snapshot directory name (e.g. snapshot_20260420)",
+      "type": "string"
+     },
+     "source": {
+      "const": "SEC EDGAR",
+      "type": "string"
+     },
+     "ticker": {
+      "type": "string"
+     },
+     "truncation": {
+      "additionalProperties": false,
+      "description": "Set when fewer rows were returned than requested \u2014 explains why and points to a remedy",
+      "properties": {
+       "current_plan": {
+        "type": "string"
+       },
+       "plan_limit": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "reason": {
+        "enum": [
+         "PLAN_LIMIT",
+         "DATA_NOT_AVAILABLE",
+         "FISCAL_YEAR_BOUNDARY_FILTER",
+         "OTHER"
+        ],
+        "type": "string"
+       },
+       "requested": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "returned": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "upgrade_required_for": {
+        "type": "string"
+       },
+       "upgrade_url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "requested",
+       "returned",
+       "reason"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "data_plan",
+     "schema_version",
+     "snapshot",
+     "last_updated",
+     "source",
+     "pit_safe"
+    ],
+    "type": "object"
+   },
+   "content_type": {
+    "type": "string"
+   },
+   "expires_at": {
+    "type": "string"
+   },
+   "expires_in_seconds": {
+    "type": "integer"
+   },
+   "file": {
+    "additionalProperties": false,
+    "properties": {
+     "approvals": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "action": {
+         "type": "string"
+        },
+        "approver": {
+         "type": "string"
+        },
+        "at": {
+         "type": "number"
+        },
+        "risk": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "action",
+        "approver",
+        "at",
+        "risk"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "completeness": {
+      "additionalProperties": false,
+      "properties": {
+       "complete": {
+        "type": "boolean"
+       },
+       "gaps": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "complete",
+       "gaps"
+      ],
+      "type": "object"
+     },
+     "fact_ids": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "generated_at": {
+      "type": "number"
+     },
+     "human_review": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "corrected_value": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "fact_id": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "figure": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "note": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "reviewed_at": {
+         "type": "string"
+        },
+        "reviewed_by": {
+         "type": "string"
+        },
+        "reviewed_by_name": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "state": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "figure",
+        "state",
+        "note",
+        "corrected_value",
+        "reviewed_by",
+        "reviewed_at",
+        "fact_id"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "models": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "prompt": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "report_id": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "report_title": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "run_id": {
+      "type": "string"
+     },
+     "sources": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "claim": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "fact_id": {
+         "type": "string"
+        },
+        "filed_at": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "form": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "period": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "ticker": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "url": {
+         "type": [
+          "string",
+          "null"
+         ]
+        }
+       },
+       "required": [
+        "fact_id",
+        "claim",
+        "ticker",
+        "form",
+        "period",
+        "filed_at",
+        "url"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "steps": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "action": {
+         "type": "string"
+        },
+        "approver": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "at": {
+         "type": "number"
+        },
+        "fact_ids": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "model": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "n": {
+         "type": "number"
+        },
+        "risk": {
+         "type": "string"
+        },
+        "status": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "n",
+        "at",
+        "action",
+        "risk",
+        "status",
+        "fact_ids",
+        "approver",
+        "model"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "run_id",
+     "generated_at",
+     "prompt",
+     "steps",
+     "fact_ids",
+     "approvals",
+     "models",
+     "completeness"
+    ],
+    "type": "object"
+   },
+   "filename": {
+    "type": "string"
+   },
+   "found": {
+    "type": "boolean"
+   },
+   "run_id": {
+    "type": "string"
+   },
+   "size_bytes": {
+    "type": "integer"
+   },
+   "url": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "_meta",
+   "found"
+  ],
+  "type": "object"
+ },
+ "title": "Get Auditable Research File"
+}

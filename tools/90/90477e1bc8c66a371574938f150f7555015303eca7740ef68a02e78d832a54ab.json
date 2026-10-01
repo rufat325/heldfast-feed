@@ -1,0 +1,90 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "readOnlyHint": false,
+  "title": "Commit the previewed re-staffing of a technician's day"
+ },
+ "description": "Commit the previewed re-staffing of a technician's day\n\nApplies the plan returned by /absence/preview, ATOMICALLY: every assignment in one transaction (all or nothing), each job re-staffed onto its alternate at its unchanged window, its \"needs attention\" flag cleared, its status_version bumped. Commit VERIFIES and never re-solves \u2014 send `assignments[]` copied from `preview.resolved[]` (you may drop rows, never add or re-point them) and, to ACCEPT a priced alternative from `preview.unresolved[].alternatives[]`, the same row plus its `alternative_kind` and (for a reschedule kind) its `start_at`/`end_at`; the engine re-checks that technician at that window under exactly that relaxation. A reschedule kind rewrites `scheduled_at`, notifies the customer of the NEW TIME (`job_rescheduled`, never `tech_reassigned` on top) and fires `job_request.rescheduled`; the response row then carries `alternative_kind`, `cost`, `original_start_at`/`original_end_at` and `window_preserved: false`. Requires a time-off record covering EVERY day of the range for the technician (pending or approved); a pending one is APPROVED by the commit, because the engine's feasibility filter reads approved time-off only and without it the absent technician stays bookable everywhere else. The response mirrors the preview plus per-job `notification` evidence (dispatched | skipped + reason \u2014 what the routing WILL do, never proof of delivery), `attention_cleared`, and `time_off`. Supports Idempotency-Key. Requires job_manage AND schedule_manage (the approval is a scheduling action). See ABSENCE_RESOLVE_DESIGN.md.\n409 NEXT STEPS: ABSENCE_RESOLVE_TIME_OFF_REQUIRED \u2014 the absence is not recorded well enough to commit against: `data.uncovered_dates[]` (days no eligible record touches) and `data.uncovered_jobs[]` (jobs no single eligible record spans); eligible = approved records, plus PENDING records whose span lies INSIDE the range \u2014 a pending record WIDER than the range (somebody's leave request) is never approved by this commit and is listed in `data.pending_wider_time_off_ids[]` for a human to decide. Record a sick-day time-off via `data.create_via` (POST /business/technician-time-off, pending is enough), then commit again. ABSENCE_RESOLVE_PLAN_DRIFTED \u2014 the world moved since the preview; `data.drifted[]` names the job (job_id/short_code/expected_version) and `reason` says how: `version` (the row changed or left the technician's lane), `infeasible` (the alternate can no longer take it), `occupied` (the alternate's lane overlapped after the write). No job was written; `data.time_offs[]` lists any pending record the commit had already approved \u2014 re-preview, show the new plan, commit again. ABSENCE_RESOLVE_NO_ORPHANED_JOBS \u2014 the board is empty for the range.",
+ "inputSchema": {
+  "properties": {
+   "assignments": {
+    "description": "The placements to apply, taken from preview.resolved[]. At least one.",
+    "items": {
+     "properties": {
+      "alternative_kind": {
+       "description": "Accepting an alternative: its kind, copied from alternatives[].kind. Omit for a strict placement from resolved[].\nAn unknown kind is ABSENCE_RESOLVE_INVALID_INPUT reason=unknown_alternative_kind (checked in the usecase, not at the binder).",
+       "enum": [
+        "reassign_out_of_area",
+        "reschedule_same_day",
+        "reschedule_later_day"
+       ],
+       "type": "string"
+      },
+      "end_at": {
+       "format": "date-time",
+       "type": "string"
+      },
+      "job_id": {
+       "description": "The job to re-staff (from preview.resolved[].job_id or preview.unresolved[].job_id).",
+       "format": "uuid",
+       "type": "string"
+      },
+      "start_at": {
+       "description": "REQUIRED for a reschedule kind: the new window, copied from alternatives[].start_at / end_at (RFC3339 UTC).\nMust be absent (or equal to the current window) for a strict or reassign_out_of_area placement.",
+       "format": "date-time",
+       "type": "string"
+      },
+      "status_version": {
+       "description": "The job's status_version at preview time \u2014 the drift fence.",
+       "type": "integer"
+      },
+      "to_technician_id": {
+       "description": "The technician receiving the job (from preview.resolved[].to_technician_id or alternatives[].to_technician_id).",
+       "format": "uuid",
+       "type": "string"
+      }
+     },
+     "required": [
+      "job_id",
+      "status_version",
+      "to_technician_id"
+     ],
+     "type": "object"
+    },
+    "maxItems": 100,
+    "minItems": 1,
+    "type": "array"
+   },
+   "date": {
+    "description": "First day of the absence (YYYY-MM-DD, business-local) \u2014 must match the preview.",
+    "example": "2030-06-15",
+    "format": "date",
+    "type": "string"
+   },
+   "idempotency_key": {
+    "description": "Unique key making retries safe: a repeat send with the same key replays the original response (header Idempotent-Replayed: true) instead of re-running the operation. Reusing a key with a different body returns 422 IDEMPOTENCY_KEY_REUSE. (sent as the Idempotency-Key header)",
+    "type": "string"
+   },
+   "technician_id": {
+    "description": "The absent technician (must match the preview).",
+    "format": "uuid",
+    "type": "string"
+   },
+   "until_date": {
+    "description": "Last day, inclusive (YYYY-MM-DD) \u2014 must match the preview.",
+    "example": "2030-06-16",
+    "format": "date",
+    "type": "string"
+   }
+  },
+  "required": [
+   "assignments",
+   "date",
+   "technician_id"
+  ],
+  "type": "object"
+ },
+ "name": "commitAbsenceResolve",
+ "title": "Commit the previewed re-staffing of a technician's day"
+}

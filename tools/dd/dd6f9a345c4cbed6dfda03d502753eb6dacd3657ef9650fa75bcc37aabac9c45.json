@@ -1,0 +1,804 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Wait for a process"
+ },
+ "description": "Waits up to 5 seconds for one background process of the workspace and returns where it stands.\nBefore each call, announce it with the sentence for its kind, and nothing else, unless the skill says to make that call with no announce sentence:\n- bank_sync: \"Retrieving transactions from your bank\u2026\"\n- transaction_categories: \"Categorizing transactions from your counterparties\u2026\"\n- invoice_matching: \"Retrieving invoices and matching with transactions\u2026\"\n- reconciliation: \"Matching invoices with your bank transactions\u2026\"\n- statement_import: \"Reading your statements\u2026\" (pass document_ids)\nPass call: 1 on the first call of a turn and 1 more on each next call; keep every other argument the same.\nstatus \"still_running\": call again now, at most 60 calls in one turn, then end the turn on the last headline (invoice_matching: after the last of them, go on to the close instead of ending the turn; reconciliation: after the last of them, go on to the next step of the flow instead of ending the turn). A next_step that says to stop ends the loop at once, even on still_running.\nstatus \"done\": quote the headline in one line and continue.\nstatus \"failed\": stop the loop and take the failure branch the headline names.\nWhen the token authorizes one workspace, call this directly \u2014 no other tool call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "call": {
+    "description": "Which call of this turn this is: 1 on the first call of a turn, then 1 more on each next call. On call 60, next_step says to stop.",
+    "maximum": 9007199254740991,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "counterparty_ids": {
+    "description": "invoice_matching only: the company_id of every row of well_enqueue_invoice_fetch's enqueued list. Each one comes back in invoice_matching.vendors with the state of its collection.",
+    "items": {
+     "type": "string"
+    },
+    "maxItems": 100,
+    "type": "array"
+   },
+   "document_ids": {
+    "description": "statement_import only: every document_id well_claim_statement_draft or well_upload_statement_bytes returned for the statements being imported.",
+    "items": {
+     "type": "string"
+    },
+    "maxItems": 10,
+    "minItems": 1,
+    "type": "array"
+   },
+   "expected_rows": {
+    "description": "invoice_matching only: how many picked gap rows the enqueue covered.",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "kind": {
+    "description": "The background process to wait for.",
+    "enum": [
+     "bank_sync",
+     "transaction_categories",
+     "invoice_matching",
+     "reconciliation",
+     "statement_import"
+    ],
+    "type": "string"
+   },
+   "periods": {
+    "description": "The months the flow waits on, at most 6. Name each period ONE way: { calendar_year, calendar_month } or { fiscal_year, fiscal_period }, never both. Required for transaction_categories and invoice_matching. Optional for bank_sync: omit it before the months are chosen. Not taken by reconciliation: it reads the recent ended months of the whole workspace on its own, and a call that passes periods is refused.",
+    "items": {
+     "anyOf": [
+      {
+       "additionalProperties": false,
+       "properties": {
+        "calendar_month": {
+         "description": "Calendar month, 1 = January \u2026 12 = December.",
+         "maximum": 12,
+         "minimum": 1,
+         "type": "integer"
+        },
+        "calendar_year": {
+         "description": "Calendar year, e.g. 2026.",
+         "maximum": 2100,
+         "minimum": 2000,
+         "type": "integer"
+        }
+       },
+       "required": [
+        "calendar_year",
+        "calendar_month"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "fiscal_period": {
+         "description": "Fiscal period, 1-12. The adjustment period (13) is refused: it has no calendar month.",
+         "maximum": 13,
+         "minimum": 1,
+         "type": "integer"
+        },
+        "fiscal_year": {
+         "description": "Fiscal year (the calendar year the workspace's fiscal year STARTED in).",
+         "maximum": 2100,
+         "minimum": 2000,
+         "type": "integer"
+        }
+       },
+       "required": [
+        "fiscal_year",
+        "fiscal_period"
+       ],
+       "type": "object"
+      }
+     ]
+    },
+    "maxItems": 6,
+    "minItems": 1,
+    "type": "array"
+   },
+   "snapshot_only": {
+    "description": "Return the current state at once, without waiting.",
+    "type": "boolean"
+   },
+   "timeout_s": {
+    "description": "Default 5, clamped to 5-60.",
+    "type": "number"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several: this read reports one workspace's own figures and will not choose which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "kind"
+  ],
+  "type": "object"
+ },
+ "name": "well_wait_for_process",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "already_done": {
+    "description": "The first read was already terminal: no waiting happened.",
+    "type": "boolean"
+   },
+   "bank_sync": {
+    "additionalProperties": false,
+    "properties": {
+     "connectors": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "estimated_remaining_minutes": {
+         "anyOf": [
+          {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "fresh": {
+         "type": "boolean"
+        },
+        "install_url": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "last_refreshed_days": {
+         "anyOf": [
+          {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "last_successful_sync_at": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "name": {
+         "type": "string"
+        },
+        "reconnect_url": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "running_for_minutes": {
+         "anyOf": [
+          {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "state": {
+         "enum": [
+          "synced",
+          "syncing",
+          "errored",
+          "not_landed"
+         ],
+         "type": "string"
+        },
+        "transactions_imported": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        }
+       },
+       "required": [
+        "name",
+        "state",
+        "transactions_imported",
+        "running_for_minutes",
+        "estimated_remaining_minutes",
+        "last_successful_sync_at",
+        "last_refreshed_days",
+        "fresh",
+        "reconnect_url",
+        "install_url"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "failure_reason": {
+      "anyOf": [
+       {
+        "enum": [
+         "sync_failed",
+         "no_bank_connector"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "periods": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "bank_transactions": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "calendar_month": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "calendar_year": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "no_activity": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "calendar_year",
+        "calendar_month",
+        "bank_transactions",
+        "no_activity"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "sync_state": {
+      "enum": [
+       "complete",
+       "awaiting_first_sync",
+       "sync_failed",
+       "no_bank_connector"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "sync_state",
+     "failure_reason",
+     "connectors",
+     "periods"
+    ],
+    "type": "object"
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "elapsed_s": {
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "error": {
+    "type": "string"
+   },
+   "headline": {
+    "type": "string"
+   },
+   "invoice_matching": {
+    "additionalProperties": false,
+    "properties": {
+     "collecting": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "mapped": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "matched_rows": {
+      "anyOf": [
+       {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "periods": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "calendar_month": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "calendar_year": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "remaining_rows": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "remaining_transactions": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        }
+       },
+       "required": [
+        "calendar_year",
+        "calendar_month",
+        "remaining_rows",
+        "remaining_transactions"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "processing": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "refused": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "remaining_rows": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "remaining_transactions": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "vendors": {
+      "description": "One entry per distinct counterparty_ids entry, in that order: where its collection stands. Present only when the call named counterparties.",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "company_id": {
+         "type": "string"
+        },
+        "documents": {
+         "anyOf": [
+          {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "Documents the finished run brought back. Set only on collected."
+        },
+        "failure": {
+         "anyOf": [
+          {
+           "enum": [
+            "auth_wall",
+            "portal_blocked",
+            "no_documents",
+            "no_entitlement",
+            "retrieval_failed",
+            "extension_unavailable",
+            "extension_refused",
+            "extension_timeout",
+            "dispatch_failed",
+            "unreported",
+            "unknown"
+           ],
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "Why the collection failed. Set only on failed."
+        },
+        "state": {
+         "description": "not_started: no run has started for this vendor yet. running: a browser run is in progress. collected: the run finished. failed: the run ended in error or never reached the extension. cancelled: the task or its run was cancelled. manual_upload: the vendor has no browser route; its invoice needs an upload.",
+         "enum": [
+          "not_started",
+          "running",
+          "collected",
+          "failed",
+          "cancelled",
+          "manual_upload"
+         ],
+         "type": "string"
+        },
+        "task_id": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "The collection task the state was read from; null when the counterparty has none."
+        }
+       },
+       "required": [
+        "company_id",
+        "task_id",
+        "state",
+        "documents",
+        "failure"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "waiting": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "remaining_rows",
+     "remaining_transactions",
+     "processing",
+     "waiting",
+     "refused",
+     "mapped",
+     "matched_rows",
+     "collecting",
+     "periods"
+    ],
+    "type": "object"
+   },
+   "kind": {
+    "enum": [
+     "bank_sync",
+     "transaction_categories",
+     "invoice_matching",
+     "reconciliation",
+     "statement_import"
+    ],
+    "type": "string"
+   },
+   "next_step": {
+    "type": "string"
+   },
+   "reconciliation": {
+    "additionalProperties": false,
+    "properties": {
+     "in_flight": {
+      "description": "Every item still processing in those months, the items being matched included.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "matching": {
+      "description": "Invoices and bank transactions the matcher is still linking to each other.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "periods": {
+      "description": "The ended months the read covered, oldest first.",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "calendar_month": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "calendar_year": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        }
+       },
+       "required": [
+        "calendar_year",
+        "calendar_month"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "matching",
+     "in_flight",
+     "periods"
+    ],
+    "type": "object"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "statement_import": {
+    "additionalProperties": false,
+    "properties": {
+     "documents": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "document_id": {
+         "type": "string"
+        },
+        "status": {
+         "enum": [
+          "not_found_yet",
+          "processing",
+          "needs_account",
+          "imported",
+          "duplicate",
+          "skipped",
+          "failed"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "document_id",
+        "status"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "imported": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "needs_account": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "not_imported": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "still_reading": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "imported",
+     "still_reading",
+     "needs_account",
+     "not_imported",
+     "documents"
+    ],
+    "type": "object"
+   },
+   "status": {
+    "enum": [
+     "still_running",
+     "done",
+     "failed"
+    ],
+    "type": "string"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "transaction_categories": {
+    "additionalProperties": false,
+    "properties": {
+     "categorized": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "classifier_failed": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "counterparties_identifying": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "in_flight_tasks": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "left_for_you": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "not_started": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "owed_propagations": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "pending": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "periods": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "calendar_month": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "calendar_year": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "categorized": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "pending": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "stalled": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "total": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        }
+       },
+       "required": [
+        "calendar_year",
+        "calendar_month",
+        "total",
+        "categorized",
+        "pending",
+        "stalled"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "stalled": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "total": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "total",
+     "categorized",
+     "pending",
+     "not_started",
+     "left_for_you",
+     "classifier_failed",
+     "stalled",
+     "in_flight_tasks",
+     "owed_propagations",
+     "counterparties_identifying",
+     "periods"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Wait for a process"
+}

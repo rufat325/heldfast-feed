@@ -1,0 +1,465 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Measure customer lifetime value"
+ },
+ "description": "Measure the revenue lifetime value (LTV) of every customer the workspace invoiced over a window of whole months, with the portfolio churn and lifespan it rests on. It draws nothing.\n\nUse it to rank customers by lifetime value, or to state what a customer is worth over its life. Do not use it for revenue in a period (`well_sum_invoices`), for recurring revenue (MRR), or for what customers still owe (receivables aging). Do not page `well_query_records` to rebuild this figure: this read covers every invoice in the window, unless `partial` is true (a month with very many customers can be cut short; see below).\n\n**The rule is fixed, and `rule` echoes it on every call.** LTV = average order value x monthly purchase frequency x lifespan in months. It is a REVENUE LTV: no margin or cost is applied, so say \"revenue lifetime value\" and never present it as profit.\n- Revenue: the billing documents the workspace ISSUED and did not cancel, net of tax (`items_total`), credit notes netted. Payment status plays no part.\n- Per customer and currency: `aov` = `net_revenue` / `invoice_count`; `monthly_frequency` = `invoice_count` / `active_span_months`, where the span runs from the customer's first invoice month to the last month of the window, for every customer including a churned one. `net_revenue` is what the customer was billed over the window: give it beside the LTV.\n- A churned customer's LTV: A churned customer's LTV can be lower than its billed net revenue, because its frequency counts the months after it churned, and it moves with the window end. Do not present it as what the customer was worth: net_revenue is what it was billed. State that limit when you name a churned customer's LTV (`churned: true`), and name the window end it depends on.\n- Churned: no invoice for 2 x the customer's usual interval (the median gap between its invoice months), and at least 3 months. A customer invoiced in one month only takes the 3-month floor.\n- Portfolio: `monthly_churn` = churned customers / `observed_customer_months`, the months customers were at risk of churning (a customer counts from its first invoice month until it churns, or until the window ends if it has not churned; a churned customer adds no month after its churn); `lifespan_months` = 1 / `monthly_churn`, capped at 60. `cap_applied: true` means the lifespan IS the cap (zero churn, or a churn so low its inverse passes the cap): state that the cap applied, and give the churned count beside it.\n- A window with no invoiced customer gives `rows: []` and a null `monthly_churn` and `lifespan_months`. Say the window holds no invoiced customers. State no LTV, lifespan or churn for it, and do not call it zero churn.\n- A customer flagged `young` has an active span under 12 months: its frequency is normalised per month over that short span. Say so when you name one.\n\n**The window is whole, COMPLETE months.** `from` and `to` are both the first day of a month, as YYYY-MM-01; `from` is inclusive and `to` is EXCLUSIVE. The window may not reach the running month, so `to` is at most the first day of the current month, and it covers at most 60 months. Choose the window yourself and say which one you read.\n\n**Amounts are never converted.** Each row is one customer in ONE currency, and `currencies` summarises each currency apart. Never add rows of two currencies without converting them first at a rate you can state. A customer billed in two currencies has two rows; converted, they add up.\n\n**`counterparty_alias_sets` folds company rows that are one customer.** Pass the sets the own-company step confirmed, as arrays of company ids; each set folds into its first id, and `alias_company_ids` lists what was folded. Without it nothing is folded.\n\n**The workspace's own company must be set.** Without it Well cannot tell what the workspace issued, and the call is refused with a message naming the own company: resolve the own company, then call again.\n\n**What the figure cannot reach, stated beside it:**\n- `unattributed_count`: billing documents Well could place on neither side. They may belong to a customer; state the count when it is above zero. `null` means the count failed, which is not `0`.\n- `excluded_no_customer`: issued documents with no identified customer. They are in no row.\n- `excluded_malformed`: issued documents with no readable net amount or no currency. `null` means the count failed.\n- `credit_note_only_count`: customer and currency pairs with credit notes and no invoice in the window.\n- `corrected_or_consolidated_count`: corrected or consolidated invoices among the rows, which may count billing twice with the invoices they replace.\n- `omitted_row_count`: rows past the first 100 of a currency. They still count in `currencies` and `portfolio`.\n- `partial: true` means a monthly read was cut short, so some customers' invoices are missing. That can move a customer's churn, the lifespan and every LTV in either direction: the figures are not bounds. Name the truncation in the reply and do not present any figure as a minimum or a maximum.\n\nWhen the token authorizes one workspace, call this directly \u2014 no other tool call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "counterparty_alias_sets": {
+    "description": "Sets of company ids that are one customer, as the own-company step confirmed them. Each set folds into its first id. Omit when there are none.",
+    "items": {
+     "items": {
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+      "type": "string"
+     },
+     "maxItems": 20,
+     "minItems": 2,
+     "type": "array"
+    },
+    "maxItems": 50,
+    "type": "array"
+   },
+   "from": {
+    "description": "Inclusive start of the history: the first day of a month, YYYY-MM-01.",
+    "pattern": "^(\\d{4})-(\\d{2})-01$",
+    "type": "string"
+   },
+   "to": {
+    "description": "EXCLUSIVE end of the history: the first day of the month after the last complete month you read, YYYY-MM-01. At most the first day of the current month.",
+    "pattern": "^(\\d{4})-(\\d{2})-01$",
+    "type": "string"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several: this read reports one workspace's own figures and will not choose which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "from",
+   "to"
+  ],
+  "type": "object"
+ },
+ "name": "well_measure_customer_ltv",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "corrected_or_consolidated_count": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "credit_note_only_count": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "currencies": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "average_ltv": {
+       "type": "number"
+      },
+      "currency": {
+       "type": "string"
+      },
+      "customer_count": {
+       "type": "number"
+      },
+      "net_revenue": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "currency",
+      "customer_count",
+      "net_revenue",
+      "average_ltv"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "error": {
+    "type": "string"
+   },
+   "excluded_malformed": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "excluded_no_customer": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "omitted_row_count": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "partial": {
+    "type": "boolean"
+   },
+   "portfolio": {
+    "additionalProperties": false,
+    "properties": {
+     "cap_applied": {
+      "type": "boolean"
+     },
+     "churned_count": {
+      "type": "number"
+     },
+     "customer_count": {
+      "type": "number"
+     },
+     "lifespan_months": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "monthly_churn": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "observed_customer_months": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "customer_count",
+     "churned_count",
+     "observed_customer_months",
+     "monthly_churn",
+     "lifespan_months",
+     "cap_applied"
+    ],
+    "type": "object"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "rows": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "active_span_months": {
+       "type": "number"
+      },
+      "alias_company_ids": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "aov": {
+       "type": "number"
+      },
+      "churn_gap_months": {
+       "type": "number"
+      },
+      "churned": {
+       "type": "boolean"
+      },
+      "credit_note_count": {
+       "type": "number"
+      },
+      "credit_note_sum": {
+       "type": "number"
+      },
+      "currency": {
+       "type": "string"
+      },
+      "customer_id": {
+       "type": "string"
+      },
+      "first_invoice_month": {
+       "type": "string"
+      },
+      "invoice_count": {
+       "type": "number"
+      },
+      "last_invoice_month": {
+       "type": "string"
+      },
+      "ltv": {
+       "type": "number"
+      },
+      "monthly_frequency": {
+       "type": "number"
+      },
+      "name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "net_revenue": {
+       "type": "number"
+      },
+      "silent_months": {
+       "type": "number"
+      },
+      "usual_interval_months": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "young": {
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "customer_id",
+      "name",
+      "alias_company_ids",
+      "currency",
+      "net_revenue",
+      "invoice_count",
+      "credit_note_count",
+      "credit_note_sum",
+      "aov",
+      "monthly_frequency",
+      "ltv",
+      "first_invoice_month",
+      "last_invoice_month",
+      "active_span_months",
+      "usual_interval_months",
+      "churn_gap_months",
+      "silent_months",
+      "churned",
+      "young"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "rule": {
+    "additionalProperties": false,
+    "properties": {
+     "churn_denominator": {
+      "enum": [
+       "customer_months_at_risk_until_churn"
+      ],
+      "type": "string"
+     },
+     "churn_interval_multiplier": {
+      "type": "number"
+     },
+     "churn_min_gap_months": {
+      "type": "number"
+     },
+     "churned_customer_ltv_note": {
+      "const": "A churned customer's LTV can be lower than its billed net revenue, because its frequency counts the months after it churned, and it moves with the window end. Do not present it as what the customer was worth: net_revenue is what it was billed.",
+      "type": "string"
+     },
+     "complete_months_only": {
+      "const": true,
+      "type": "boolean"
+     },
+     "formula": {
+      "const": "aov_x_monthly_frequency_x_lifespan_months",
+      "type": "string"
+     },
+     "frequency_span": {
+      "enum": [
+       "first_invoice_month_to_last_window_month"
+      ],
+      "type": "string"
+     },
+     "history_cap_months": {
+      "type": "number"
+     },
+     "lifespan_cap_months": {
+      "type": "number"
+     },
+     "margin_applied": {
+      "const": false,
+      "type": "boolean"
+     },
+     "revenue_basis": {
+      "enum": [
+       "issued_non_canceled_billing_documents_net_of_tax_credit_notes_netted"
+      ],
+      "type": "string"
+     },
+     "single_invoice_churn_gap_months": {
+      "type": "number"
+     },
+     "usual_interval": {
+      "enum": [
+       "median_gap_between_invoice_months"
+      ],
+      "type": "string"
+     },
+     "young_customer_span_months": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "formula",
+     "revenue_basis",
+     "margin_applied",
+     "complete_months_only",
+     "history_cap_months",
+     "lifespan_cap_months",
+     "churn_interval_multiplier",
+     "churn_min_gap_months",
+     "single_invoice_churn_gap_months",
+     "usual_interval",
+     "churn_denominator",
+     "frequency_span",
+     "churned_customer_ltv_note",
+     "young_customer_span_months"
+    ],
+    "type": "object"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "unattributed_count": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "window": {
+    "additionalProperties": false,
+    "properties": {
+     "from": {
+      "type": "string"
+     },
+     "to": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "from",
+     "to"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "rows",
+   "currencies",
+   "portfolio",
+   "window",
+   "rule",
+   "omitted_row_count",
+   "unattributed_count",
+   "excluded_malformed",
+   "excluded_no_customer",
+   "credit_note_only_count",
+   "corrected_or_consolidated_count",
+   "partial",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Measure customer lifetime value"
+}

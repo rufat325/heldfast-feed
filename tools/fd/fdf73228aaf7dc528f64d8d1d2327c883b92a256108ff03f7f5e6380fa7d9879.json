@@ -1,0 +1,328 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Database health snapshot"
+ },
+ "description": "Quick health snapshot: server version, database size, connection counts measured against `max_connections`, active queries with their wait events, a pg_stat_database rollup, and table count. Useful as a connection sanity check and to spot runaway queries, connection-cap pressure, and lock/IO waits.\n- connections: `total` for the CURRENT database, broken down into `active` / `idle` / `idle_in_transaction` / `idle_in_transaction_aborted` / `other` (starting, fastpath function call, disabled) / `state_unavailable` -- those six sum to `total`. `idle_in_transaction_aborted` is called out separately because it holds locks and blocks vacuum while doing no work and will never commit. `state_unavailable` counts sessions whose `state` reads NULL because the role lacks pg_read_all_stats / pg_monitor membership; a non-zero value means every other bucket is under-counted by at least that much, so do NOT read `active: 0` next to it as an idle database. Plus `cluster_client_backends` (client backends across ALL databases -- those are what actually consume connection slots), `max_connections`, `superuser_reserved_connections`, and `used_fraction` (cluster_client_backends / max_connections). A raw connection count means nothing without the cap; read `used_fraction` first.\n- active_queries: `pid`, `state`, `query`, `application_name`, `backend_type`, `wait_event_type` / `wait_event` (both NULL when the backend is running rather than waiting -- the single most diagnostic pair in pg_stat_activity). Both are reported verbatim as the server spells them, and that spelling changes between majors: a backend waiting on a buffer pin reports `wait_event_type` 'BufferPin' through PostgreSQL 18 and 'Buffer' from 19 on, with the `wait_event` names beneath it changing to match. Read them against the reported `version` rather than hard-coding a literal. `duration_seconds` (since query_start) and `transaction_age_seconds` (since xact_start). A large transaction_age_seconds next to a small duration_seconds is a long-open transaction, the usual root cause behind lock waits, bloat, and stalled autovacuum.\n- database_stats: pg_stat_database for the current database -- `deadlocks`, `temp_files` / `temp_bytes` (work_mem spills), `conflicts` (recovery conflicts, only ever non-zero on a replica), `blks_hit` / `blks_read` / `cache_hit_ratio`, and `stats_reset`. Every counter is CUMULATIVE since stats_reset, not a rate -- interpret them against that timestamp.\nSub-queries that fail (several of these are permission-gated on managed providers) append to `_warnings` and leave their field null; the rest of the snapshot still returns.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "activeQueryLimit": {
+    "default": 10,
+    "description": "Max active queries to return (default 10, max 100).",
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   }
+  },
+  "type": "object"
+ },
+ "name": "pg_health",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "_warnings": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "active_queries": {
+    "description": "Empty array both when nothing is running and when the fetch failed -- check `_warnings`.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "application_name": {
+       "type": "string"
+      },
+      "backend_type": {
+       "type": "string"
+      },
+      "duration_seconds": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Since query_start."
+      },
+      "pid": {
+       "type": "number"
+      },
+      "query": {
+       "type": "string"
+      },
+      "state": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "transaction_age_seconds": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Since xact_start; null outside a transaction block. Large here beside a small duration_seconds is a long-open transaction."
+      },
+      "wait_event": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "wait_event_type": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Null when the backend is RUNNING rather than waiting. Spelling changes between majors ('BufferPin' through PG18, 'Buffer' from 19) -- read it against `version`."
+      },
+      "xact_start": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "pid",
+      "state",
+      "duration_seconds",
+      "transaction_age_seconds",
+      "xact_start",
+      "wait_event_type",
+      "wait_event",
+      "backend_type",
+      "query",
+      "application_name"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "connected": {
+    "description": "Always true on a success response -- the version probe answered.",
+    "type": "boolean"
+   },
+   "connections": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "active": {
+        "type": "string"
+       },
+       "cluster_client_backends": {
+        "description": "Client backends across ALL databases -- the ones that actually consume connection slots.",
+        "type": "string"
+       },
+       "idle": {
+        "type": "string"
+       },
+       "idle_in_transaction": {
+        "type": "string"
+       },
+       "idle_in_transaction_aborted": {
+        "description": "Holds locks and blocks vacuum while doing no work, and can never commit.",
+        "type": "string"
+       },
+       "max_connections": {
+        "type": "number"
+       },
+       "other": {
+        "description": "Catch-all: starting, fastpath function call, disabled, plus any future state.",
+        "type": "string"
+       },
+       "state_unavailable": {
+        "description": "Sessions whose `state` read NULL for lack of pg_read_all_stats / pg_monitor. Non-zero means every other bucket is under-counted -- do NOT read `active: 0` beside it as an idle database.",
+        "type": "string"
+       },
+       "superuser_reserved_connections": {
+        "type": "number"
+       },
+       "total": {
+        "description": "Sessions in the CURRENT database. The six state buckets below sum to this.",
+        "type": "string"
+       },
+       "used_fraction": {
+        "anyOf": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "cluster_client_backends / max_connections. Null only if max_connections read as 0."
+       }
+      },
+      "required": [
+       "total",
+       "active",
+       "idle",
+       "idle_in_transaction",
+       "idle_in_transaction_aborted",
+       "other",
+       "state_unavailable",
+       "cluster_client_backends",
+       "max_connections",
+       "superuser_reserved_connections",
+       "used_fraction"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "database": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "database": {
+        "type": "string"
+       },
+       "size_bytes": {
+        "description": "Bigint as a decimal string -- past 2^53 a JS number would lose digits.",
+        "type": "string"
+       },
+       "size_pretty": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "database",
+       "size_pretty",
+       "size_bytes"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "database_stats": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "blks_hit": {
+        "type": "string"
+       },
+       "blks_read": {
+        "type": "string"
+       },
+       "cache_hit_ratio": {
+        "anyOf": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "Null on a freshly reset database (both counters 0)."
+       },
+       "conflicts": {
+        "description": "Recovery conflicts; only ever non-zero on a replica.",
+        "type": "string"
+       },
+       "deadlocks": {
+        "type": "string"
+       },
+       "stats_reset": {
+        "anyOf": [
+         {
+          "type": "string"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "Every counter here is cumulative SINCE this timestamp. Null = never reset."
+       },
+       "temp_bytes": {
+        "type": "string"
+       },
+       "temp_bytes_pretty": {
+        "type": "string"
+       },
+       "temp_files": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "deadlocks",
+       "temp_files",
+       "temp_bytes",
+       "temp_bytes_pretty",
+       "conflicts",
+       "blks_hit",
+       "blks_read",
+       "cache_hit_ratio",
+       "stats_reset"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Null when pg_stat_database is unreadable OR has no row for this database."
+   },
+   "table_count": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "User tables and partitioned tables, as a decimal string."
+   },
+   "version": {
+    "description": "Full `version()` banner. Absent (with a `_warnings` entry) if the row came back without it.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "connected",
+   "active_queries",
+   "database_stats"
+  ],
+  "type": "object"
+ },
+ "title": "Database health snapshot"
+}

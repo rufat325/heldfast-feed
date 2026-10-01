@@ -1,0 +1,73 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "readOnlyHint": false,
+  "title": "Commit emergency insert + cascade reschedule"
+ },
+ "description": "Commit emergency insert + cascade reschedule\n\nApplies the cascade previewed by /emergency/preview: assigns the emergency job to the technician and pushes the displaced jobs back (or, with `displacement_mode=reassign`, re-staffs them onto their previewed alternates first), atomically. Supports Idempotency-Key. The server recomputes the plan under a lock and fences each job on its status_version \u2014 if anything changed since the preview it returns 409 EMERGENCY_RESCHEDULE_PLAN_DRIFTED (re-preview). Same body as preview + optional `emergency_expected_version`. `after_hours_override=true` must match the preview it followed \u2014 it drops the non-working-day rejection (this endpoint never runs the technician's working-hours/time-off feasibility check; that only happens on /candidates), and the response carries an AFTER_HOURS warning; the committed job's activity feed also records who authorized the after-hours placement. Isolated feature (see EMERGENCY_RESCHEDULE_DESIGN.md).\n409 NEXT STEPS: EMERGENCY_RESCHEDULE_PLAN_DRIFTED \u2014 the schedule changed between your preview and this commit (another booking/move won a lane); `data.drifted[]` names the job(s) whose status_version moved when the fence can attribute it (absent, never empty, when only a length mismatch is known): call /preview again, show the fresh plan, then commit. EMERGENCY_RESCHEDULE_SLOT_OCCUPIED \u2014 landing window blocked by an immovable anchor (P0/crew/multi-day); `data.conflicts[]` names it: another tech or time. Other codes \u2014 same remedies and `data` shapes as /candidates. EMERGENCY_RESCHEDULE_NO_WORKING_DAY does NOT fire when after_hours_override=true.",
+ "inputSchema": {
+  "properties": {
+   "after_hours_override": {
+    "description": "Place this P0 outside working hours / approved time-off \u2014 you have phoned\nthe technician and they agreed. Drops the non-working-day rejection; the\nresponse then carries an AFTER_HOURS warning. Double-booking, service\narea, required skills and the lead-tier rule still reject.",
+    "type": "boolean"
+   },
+   "displacement_mode": {
+    "description": "Fate of displaced jobs: reschedule (default) or reassign \u2014 must match the preview.",
+    "enum": [
+     "reschedule",
+     "reassign"
+    ],
+    "type": "string"
+   },
+   "emergency_expected_version": {
+    "description": "Optimistic-lock fence from the previewed job (0 = fence on the server-read version).",
+    "type": "integer"
+   },
+   "emergency_job_id": {
+    "description": "ID of the P0 job to insert.",
+    "format": "uuid",
+    "type": "string"
+   },
+   "expected_move_ids": {
+    "description": "ExpectedMoveIDs \u2014 the displaced job IDs the preview returned (echo BOTH\ndata.days[].moves[].job_id AND data.reassignments[].job_id). RECOMMENDED:\nif the recomputed cascade would touch a different set (a job booked onto\nthe lane since the preview), the commit is rejected with\nEMERGENCY_RESCHEDULE_PLAN_DRIFTED instead of displacing a job the\ncoordinator never saw. Omit to opt out.",
+    "items": {
+     "format": "uuid",
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "idempotency_key": {
+    "description": "Unique key making retries safe: a repeat send with the same key replays the original response (header Idempotent-Replayed: true) instead of re-running the operation. Reusing a key with a different body returns 422 IDEMPOTENCY_KEY_REUSE. (sent as the Idempotency-Key header)",
+    "type": "string"
+   },
+   "mode": {
+    "description": "Cascade mode: overtime | next_day (must match the preview).",
+    "enum": [
+     "overtime",
+     "next_day"
+    ],
+    "type": "string"
+   },
+   "start_at": {
+    "description": "Desired start \u2014 business-local naive datetime, no offset. Must be in the future and match the preview.",
+    "example": "2030-06-14T09:00:00",
+    "type": "string"
+   },
+   "technician_id": {
+    "description": "Target technician (must belong to the business).",
+    "format": "uuid",
+    "type": "string"
+   }
+  },
+  "required": [
+   "emergency_job_id",
+   "mode",
+   "start_at",
+   "technician_id"
+  ],
+  "type": "object"
+ },
+ "name": "commitEmergencyReschedule",
+ "title": "Commit emergency insert + cascade reschedule"
+}

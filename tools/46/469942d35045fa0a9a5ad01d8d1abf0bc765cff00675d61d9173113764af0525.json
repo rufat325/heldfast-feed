@@ -1,0 +1,490 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Price History (date range)"
+ },
+ "description": "Daily EOD bar series (OHLCV) for a company over a date range. Returns up to 252 trading-day bars oldest-first \u2014 one bar per trading day. Each bar carries: open / high / low / close (raw, unadjusted), total_return_index (dividends reinvested and splits neutralized, forward-compounded from an arbitrary base so only RATIOS of it are meaningful \u2014 TOTAL RETURN BETWEEN TWO DATES IS tri_b / tri_a - 1; it is PIT-immutable, so a later dividend appends rather than restating), adjusted_close (a back-adjusted series \u2014 SPARSELY POPULATED, usually null, and retroactively restated on each corporate action so it is NOT PIT-immutable; prefer total_return_index), volume (shares traded), div_cash (ex-dividend cash per share on that date, 0 on non-dividend days), and split_factor (1.0 on non-split days). Never compute a return from raw close \u2014 a 4-for-1 split reads as a 75% crash. If total_return_index is null across the returned bars (a tier that has not re-exported since schema 2.29.0), the response note says so and you should compound close with div_cash / split_factor instead. For a company with more than one listing (dual-class, CVR), bars are the requested share class where the data supports it; `listing_resolution` and `multi_listing` on the response say which listing you actually received. Omit start_date for the trailing year before end_date. Omit end_date for the latest available close. Coverage follows your plan's tier slice: Pro and Institutional get the full daily bar series (full = all companies & all archived history, pro = all companies & last 15 years). On the free plans (sample, benchmark) this tool returns MONTH-END bars instead of daily ones: the close on the last trading day of each calendar month in range (not an average), COMPLETED months only (the month in progress appears once it ends), unadjusted, from up to 360 months (~30 years) of the same archive at coarser granularity \u2014 open/high/low/volume/adjusted_close are null on a monthly bar (nothing intraday to report), and close/total_return_index/div_cash/split_factor are populated. The response's `granularity` field says which series answered the call ('daily' or 'monthly'), and a monthly response's `note` spells out the upgrade path to daily bars. What every plan additionally has \u2014 the valuation multiples at each fiscal year end via get_financial_ratios (category 'valuation') and get_valuation_metrics, and 1/3/6/12-month momentum plus the 52-week high/low via get_earnings_signals. This archive is market data, NOT EDGAR, so it does NOT share the 1993 EDGAR floor that applies to fundamentals: the earliest bar differs per security and is 1994 or later. A request before a security's first bar returns zero bars on every tier, Institutional included, and is reported as DATA_COVERAGE rather than a plan limit.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "end_date": {
+    "description": "Inclusive end of the date range (YYYY-MM-DD). Defaults to today (the latest available close). Weekends and holidays resolve to the last trading close on or before this date.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   },
+   "limit": {
+    "default": 252,
+    "description": "Maximum number of bars to return. Daily plans (Pro, Institutional): 1\u2013252, default 252 \u2248 1 trading year. Free plans (sample, benchmark), which return month-end bars: 1\u2013360, covering up to the full ~30-year monthly archive. When the range contains more bars than `limit`, the most recent `limit` bars within the range are returned.",
+    "maximum": 360,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "start_date": {
+    "description": "Inclusive start of the date range (YYYY-MM-DD). Bars on or after this date are returned (up to `limit`). Omit to receive the `limit` most-recent bars before end_date.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   },
+   "ticker": {
+    "description": "Stock ticker symbol, e.g. AAPL, MSFT \u2014 or a CIK (SEC identifier), e.g. '0000320193'.",
+    "maxLength": 10,
+    "minLength": 1,
+    "pattern": "^[A-Za-z0-9.\\-]+$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "ticker"
+  ],
+  "type": "object"
+ },
+ "name": "get_price_history",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "_meta": {
+    "additionalProperties": false,
+    "description": "Provenance envelope \u2014 data lineage for every MCP response",
+    "properties": {
+     "as_of_date": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "cost_usd": {
+      "additionalProperties": false,
+      "description": "Per-call cost transparency. Omitted for subscription-only tools that have no PAYG-equivalent price.",
+      "properties": {
+       "amount_usd": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "basis": {
+        "description": "payg_charge = real agent-pay charge. payg_rate_card = indicative price, not billed.",
+        "enum": [
+         "payg_charge",
+         "payg_rate_card"
+        ],
+        "type": "string"
+       },
+       "billed": {
+        "description": "true = this amount was actually charged via PAYG for this call. false = indicative PAYG-equivalent value; your plan already covers this call for free.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "amount_usd",
+       "billed",
+       "basis"
+      ],
+      "type": "object"
+     },
+     "data_plan": {
+      "description": "Access plan: sample | sp500 | pro | full",
+      "type": "string"
+     },
+     "data_quality": {
+      "additionalProperties": false,
+      "description": "Server-side invariants run on this response",
+      "properties": {
+       "notes": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "validation_failed": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "detail": {
+           "type": "string"
+          },
+          "rule": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "rule",
+          "detail"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "validation_passed": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "validation_passed",
+       "validation_failed",
+       "notes"
+      ],
+      "type": "object"
+     },
+     "fundamentals_as_of": {
+      "description": "ISO timestamp when the FINANCIAL STATEMENTS were last rebuilt in bulk. Use THIS \u2014 not `last_updated` \u2014 when telling a user how current the cross-sectional fundamentals are. The snapshot is republished on every weekday price refresh while the statements are carried forward unchanged, so `last_updated` can be far more recent than the numbers it sits next to. It is a floor for a single filer, not a ceiling: a filer with a live partition receives its filing, facts and ratios intraday (minutes after EDGAR dissemination), so an entity-scoped read may carry a filing newer than this; cross-sectional ranks (factor scores, earnings signals) refresh with the weekly bulk export.",
+      "type": "string"
+     },
+     "last_updated": {
+      "description": "ISO timestamp when the snapshot was exported",
+      "type": "string"
+     },
+     "latency_ms": {
+      "description": "Wall-clock milliseconds this tool call took, measured server-side around the handler.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "limit_warnings": {
+      "description": "Soft-warning array for partial fulfillment. Each entry carries a stable subcode + remediation.options[]. AI agents pattern-match on subcode.",
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "code": {
+         "const": "LIMIT_EXCEEDED",
+         "type": "string"
+        },
+        "current_plan": {
+         "type": "string"
+        },
+        "extensions": {
+         "additionalProperties": {},
+         "type": "object"
+        },
+        "limit_type": {
+         "type": "string"
+        },
+        "limit_value": {},
+        "remediation": {
+         "additionalProperties": true,
+         "properties": {
+          "contact_sales": {
+           "type": "string"
+          },
+          "default_action": {
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "additionalProperties": {},
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "pricing_page": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "options",
+          "default_action",
+          "pricing_page",
+          "contact_sales"
+         ],
+         "type": "object"
+        },
+        "requested_value": {},
+        "returned_value": {},
+        "subcode": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "subcode",
+        "limit_type",
+        "current_plan",
+        "remediation"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "payg_override": {
+      "additionalProperties": false,
+      "description": "Set when this single response was paid for via the agent-pay PAYG flow \u2014 the rate-limit / depth-limit checks were bypassed for this call only.",
+      "properties": {
+       "amount_cents": {
+        "type": "number"
+       },
+       "entity_scope_hash": {
+        "type": "string"
+       },
+       "meter": {
+        "type": "string"
+       },
+       "quote_id": {
+        "type": "string"
+       },
+       "retry_token_hash": {
+        "type": "string"
+       },
+       "ticker_count": {
+        "type": "number"
+       },
+       "tool": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "quote_id",
+       "tool",
+       "meter",
+       "amount_cents",
+       "ticker_count",
+       "entity_scope_hash",
+       "retry_token_hash"
+      ],
+      "type": "object"
+     },
+     "pit_safe": {
+      "description": "true iff a zero-look-ahead point-in-time cut was applied to every returned figure",
+      "type": "boolean"
+     },
+     "price_as_of": {
+      "description": "ISO timestamp when the price surfaces were last refreshed.",
+      "type": "string"
+     },
+     "rate_limit": {
+      "additionalProperties": false,
+      "description": "Caller's remaining budget",
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "remaining": {
+        "type": "integer"
+       },
+       "reset_at": {
+        "description": "ISO 8601 timestamp when the window resets",
+        "type": "string"
+       },
+       "window": {
+        "enum": [
+         "minute",
+         "hour"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "limit",
+       "remaining",
+       "reset_at",
+       "window"
+      ],
+      "type": "object"
+     },
+     "request_id": {
+      "description": "Per-request correlation id (8-char)",
+      "type": "string"
+     },
+     "result_count": {
+      "type": "integer"
+     },
+     "schema_version": {
+      "description": "Parquet schema version from manifest.json",
+      "type": "string"
+     },
+     "snapshot": {
+      "description": "Snapshot directory name (e.g. snapshot_20260420)",
+      "type": "string"
+     },
+     "ticker": {
+      "type": "string"
+     },
+     "truncation": {
+      "additionalProperties": false,
+      "description": "Set when fewer rows were returned than requested \u2014 explains why and points to a remedy",
+      "properties": {
+       "current_plan": {
+        "type": "string"
+       },
+       "plan_limit": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "reason": {
+        "enum": [
+         "PLAN_LIMIT",
+         "DATA_NOT_AVAILABLE",
+         "FISCAL_YEAR_BOUNDARY_FILTER",
+         "OTHER"
+        ],
+        "type": "string"
+       },
+       "requested": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "returned": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "upgrade_required_for": {
+        "type": "string"
+       },
+       "upgrade_url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "requested",
+       "returned",
+       "reason"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "data_plan",
+     "schema_version",
+     "snapshot",
+     "last_updated",
+     "pit_safe"
+    ],
+    "type": "object"
+   },
+   "bar_count": {
+    "minimum": 0,
+    "type": "integer"
+   },
+   "bars": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "adjusted_close": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "close": {
+       "type": "number"
+      },
+      "div_cash": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "high": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "low": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "open": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "price_date": {
+       "type": "string"
+      },
+      "split_factor": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "total_return_index": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "volume": {
+       "type": [
+        "number",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "price_date",
+      "open",
+      "high",
+      "low",
+      "close",
+      "adjusted_close",
+      "total_return_index",
+      "volume",
+      "div_cash",
+      "split_factor"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "cik": {
+    "type": "string"
+   },
+   "company_name": {
+    "type": "string"
+   },
+   "end_date": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "granularity": {
+    "enum": [
+     "daily",
+     "monthly"
+    ],
+    "type": "string"
+   },
+   "note": {
+    "type": "string"
+   },
+   "plan": {
+    "type": "string"
+   },
+   "start_date": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "ticker": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "_meta",
+   "ticker",
+   "plan",
+   "cik",
+   "company_name",
+   "start_date",
+   "end_date",
+   "bar_count",
+   "granularity",
+   "bars",
+   "note"
+  ],
+  "type": "object"
+ },
+ "title": "Price History (date range)"
+}

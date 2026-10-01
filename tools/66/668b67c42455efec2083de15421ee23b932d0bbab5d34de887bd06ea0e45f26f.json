@@ -1,0 +1,260 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Search earnings-call transcripts"
+ },
+ "description": "Search earnings-call transcripts and earnings press-release exhibits by speaker turn (CEO/CFO prepared remarks, analyst Q&A, press releases). Returns verbatim quotes as agent-ready payloads: speaker name/role, fiscal year + quarter, call date, source_type (asr_call = our own ASR of the real call vs press_release), sec.gov source URL and citation string. Use for guidance, management tone and forward-looking color that filings don't capture; pair with financial_search to back narrative with filed numbers. ALWAYS pass `issuer` (the ticker whose calls you mean) plus `fiscal_year` when you know it \u2014 a named call is scoped to that issuer's calls, fast and precise. A call with no issuer runs as scope=cross_company: slower, ranked by relevance only, and the response sets `quality_caveat` \u2014 check for that field. Use scope=cross_company deliberately, only for questions genuinely about many companies (\"which management teams talked about tariff pass-through\"). Narrow further with speaker_role, lookback_quarters or source_type. FETCH MODE: omit `query` entirely and pass issuer.ticker plus fiscal_year / quarter / date_from / date_to to get that call's segments back in call-date-desc then spoken order, with no ranking and in tens of milliseconds \u2014 the right tool when you already know WHICH call you want. For onset/\"first mention\" questions (when did a topic first come up), bound with date_from/date_to and set order='earliest' \u2014 a date pair, not a fiscal year, is the right tool there.",
+ "inputSchema": {
+  "properties": {
+   "date_from": {
+    "description": "Point-in-time lower bound on call date, inclusive ISO YYYY-MM-DD",
+    "type": "string"
+   },
+   "date_to": {
+    "description": "Point-in-time upper bound on call date, inclusive ISO YYYY-MM-DD",
+    "type": "string"
+   },
+   "fiscal_year": {
+    "description": "Fiscal year(s) the question concerns \u2014 the ISSUER'S OWN fiscal year, as printed on its cover page, matched exactly against each segment's fiscal-year label. Offset-fiscal-year issuers work as stated: NVDA fiscal_year 2027 returns the calls held during calendar 2026, AAPL 2025 the Q1-Q4 FY2025 calls. If the requested year matches nothing the search retries once at \u00b11 and says so in `quality_caveat`. Independent of date_from/date_to, which bound the CALL DATE and still apply on top.",
+    "oneOf": [
+     {
+      "maximum": 2100,
+      "minimum": 1990,
+      "type": "integer"
+     },
+     {
+      "items": {
+       "maximum": 2100,
+       "minimum": 1990,
+       "type": "integer"
+      },
+      "maxItems": 10,
+      "minItems": 1,
+      "type": "array"
+     }
+    ]
+   },
+   "issuer": {
+    "description": "The company whose calls you mean. Pass `ticker` (e.g. \"NVDA\"); this corpus is keyed on ticker, so that is the field that scopes it. Strongly recommended on every call.",
+    "properties": {
+     "cik": {
+      "description": "SEC CIK. Accepted for symmetry with financial_search; this corpus scopes on ticker.",
+      "pattern": "^(CIK\\s*)?\\d{1,10}$",
+      "type": "string"
+     },
+     "company_name": {
+      "description": "Reserved for non-US calls once the ASR corpus carries them.",
+      "type": "string"
+     },
+     "ticker": {
+      "description": "US ticker symbol.",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "limit": {
+    "default": 10,
+    "maximum": 50,
+    "type": "number"
+   },
+   "lookback_quarters": {
+    "description": "Keep calls within last N quarters (default: no filter)",
+    "type": "number"
+   },
+   "order": {
+    "default": "relevance",
+    "description": "Sort order. 'earliest'/'latest' sort matched hits chronologically (use 'earliest' for onset/first-mention queries); 'relevance' sorts by rank score.",
+    "enum": [
+     "relevance",
+     "earliest",
+     "latest"
+    ],
+    "type": "string"
+   },
+   "profile": {
+    "default": "hybrid",
+    "enum": [
+     "bm25",
+     "hybrid"
+    ],
+    "type": "string"
+   },
+   "quarter": {
+    "description": "Fiscal quarter(s) \u2014 \"Q2\" or [\"Q1\",\"Q2\"]. Exact, case-insensitive. With issuer.ticker and fiscal_year this names one call, which is the natural fetch-mode request.",
+    "oneOf": [
+     {
+      "type": "string"
+     },
+     {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 8,
+      "type": "array"
+     }
+    ]
+   },
+   "query": {
+    "description": "Natural language query. OMIT IT for fetch mode: with no query nothing is embedded or scored and the matching segments come back newest call first, then in the order they were spoken. Fetch mode requires a ticker.",
+    "type": "string"
+   },
+   "scope": {
+    "default": "issuer",
+    "description": "issuer (default): results limited to the issuer's own calls. cross_company: search every issuer's calls \u2014 slower, relevance-ranked only, and always carries `quality_caveat`. Setting it drops the ticker filter, so a caveated answer is never secretly a scoped one.",
+    "enum": [
+     "issuer",
+     "cross_company"
+    ],
+    "type": "string"
+   },
+   "source_type": {
+    "description": "Provenance filter: asr_call = our ASR of the real call (Q&A); furnished_transcript = issuer transcript exhibit; press_release = 8-K press exhibit.",
+    "enum": [
+     "press_release",
+     "furnished_transcript",
+     "asr_call"
+    ],
+    "type": "string"
+   },
+   "speaker_role": {
+    "description": "Optional speaker role filter: CEO / CFO / Analyst / Operator",
+    "type": "string"
+   },
+   "ticker": {
+    "description": "Optional ticker filter (e.g. NVDA). Legacy alias of `issuer.ticker`.",
+    "type": "string"
+   }
+  },
+  "required": [],
+  "type": "object"
+ },
+ "name": "transcript_search",
+ "outputSchema": {
+  "properties": {
+   "latency_ms": {
+    "type": "integer"
+   },
+   "mode": {
+    "description": "\"search\" = ranked by relevance. \"fetch\" = no ranking; segments listed newest call first then in spoken order, and `confidence` is 0 on every result because there is no relevance signal.",
+    "enum": [
+     "search",
+     "fetch"
+    ],
+    "type": "string"
+   },
+   "quality_caveat": {
+    "description": "Present when the result is not issuer-precise. Read it before trusting cross-company results.",
+    "type": "string"
+   },
+   "query": {
+    "type": "string"
+   },
+   "results": {
+    "items": {
+     "properties": {
+      "call_date": {
+       "type": "string"
+      },
+      "citation": {
+       "type": "string"
+      },
+      "confidence": {
+       "maximum": 1,
+       "minimum": 0,
+       "type": "number"
+      },
+      "fiscal_year": {
+       "type": "integer"
+      },
+      "quarter": {
+       "type": "string"
+      },
+      "retrieval": {
+       "type": "object"
+      },
+      "segment_id": {
+       "type": "string"
+      },
+      "segment_index": {
+       "type": "integer"
+      },
+      "segment_total": {
+       "type": "integer"
+      },
+      "source_type": {
+       "type": "string"
+      },
+      "source_url": {
+       "type": "string"
+      },
+      "speaker_company": {
+       "type": "string"
+      },
+      "speaker_name": {
+       "type": "string"
+      },
+      "speaker_role": {
+       "type": "string"
+      },
+      "text": {
+       "description": "Verbatim speaker-turn text.",
+       "type": "string"
+      },
+      "ticker": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "segment_id",
+      "ticker",
+      "fiscal_year",
+      "quarter",
+      "call_date",
+      "speaker_name",
+      "speaker_role",
+      "text",
+      "source_url",
+      "citation",
+      "confidence"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "scope": {
+    "description": "Effective scope after issuer resolution.",
+    "enum": [
+     "issuer",
+     "cross_company"
+    ],
+    "type": "string"
+   },
+   "source": {
+    "type": "string"
+   },
+   "ticker_filter": {
+    "type": "string"
+   },
+   "total": {
+    "type": "integer"
+   }
+  },
+  "required": [
+   "query",
+   "mode",
+   "results",
+   "total",
+   "source",
+   "latency_ms"
+  ],
+  "type": "object"
+ },
+ "x_aether_auth": {
+  "kind": "account_required",
+  "reason": "live transcript search consumes Aether API quota"
+ }
+}

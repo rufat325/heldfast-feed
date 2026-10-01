@@ -1,0 +1,335 @@
+{
+ "description": "Check whether places (and itineraries) an AI mentioned are real, findable and physically possible. Pass structured `claims` (reliable, and the only path that supports itinerary feasibility) or free `text` (best-effort quoted-phrase extraction). Each claim resolves to exactly one of three verdicts, never a boolean: \"verified\" (matched a real place, with its stable id and the source/date of the evidence), \"contradicted\" (a specific, dated, sourced fact rules it out \u2014 currently only an itinerary leg the routing engine proves cannot be driven in the stated time, with the computed travel time as evidence), or \"unverified\" (no evidence either way). This tool NEVER asserts that a named real business does not exist or has closed \u2014 that would be a defamation risk with no upside; a missing match is always \"unverified\". Claims sharing increasing `sequence` values and both carrying `claimed_time` (ISO 8601) form itinerary legs checked for feasibility via `matrix`, catching e.g. \"breakfast in Bath, 10am meeting in Edinburgh\". Max 20 claims per request. The response's `summary` field is a concise plain-text digest \u2014 also returned as this tool result's text content \u2014 so clients that drop structured/non-text content blocks still see the verdicts.",
+ "inputSchema": {
+  "$defs": {
+   "CostingKind": {
+    "description": "Costing models exposed by the MCP tools (a deliberate subset of the\nValhalla costing list), serialised in snake_case exactly as Valhalla\nnames them.",
+    "oneOf": [
+     {
+      "const": "auto",
+      "description": "Standard car costing.",
+      "type": "string"
+     },
+     {
+      "const": "truck",
+      "description": "Truck costing; honours dimensional limits and, when a `truck`\nprofile is supplied, ADR dangerous-goods restrictions.",
+      "type": "string"
+     },
+     {
+      "const": "bicycle",
+      "description": "Bicycle costing; tune it with a `bicycle` options object.",
+      "type": "string"
+     },
+     {
+      "const": "pedestrian",
+      "description": "Pedestrian (walking) costing; tune it with a `pedestrian` options\nobject (lit streets, wheelchair/blind, hiking difficulty).",
+      "type": "string"
+     },
+     {
+      "const": "motor_scooter",
+      "description": "Motor scooter (moped) costing: like auto but prefers lower-speed\nroads and may use ways closed to larger motor vehicles.",
+      "type": "string"
+     }
+    ]
+   },
+   "VerifyClaimInput": {
+    "description": "One place claim for the `verify_places` tool: a place an AI mentioned,\nto be checked for existence and (as part of an itinerary) feasibility.",
+    "properties": {
+     "claimed_time": {
+      "description": "ISO 8601 timestamp: when the itinerary claims you are at this place.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "id": {
+      "description": "Caller-chosen id, echoed back on the matching result. Auto-assigned\n(\"claim-1\", \u2026) when omitted.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "locality": {
+      "description": "Optional disambiguating context, e.g. \"Oxford\". Country-level words\n(\"UK\", \"England\", \u2026) are stripped before querying \u2014 they add noise,\nnot signal, to name search.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "name": {
+      "description": "The place name as claimed, e.g. \"The Eagle and Child\".",
+      "type": "string"
+     },
+     "sequence": {
+      "description": "Itinerary position. Claims that share increasing `sequence` values\nand both carry `claimed_time` form legs the feasibility pass checks.",
+      "format": "int64",
+      "type": [
+       "integer",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "claims": {
+    "description": "Structured claims \u2014 the reliable path, and the only path that\nsupports itinerary feasibility. Mutually exclusive with `text`.\nMax 20 per request.",
+    "items": {
+     "$ref": "#/$defs/VerifyClaimInput"
+    },
+    "type": [
+     "array",
+     "null"
+    ]
+   },
+   "costing": {
+    "$ref": "#/$defs/CostingKind",
+    "default": "auto",
+    "description": "Costing for feasibility legs: \"auto\" (default), \"truck\", \"bicycle\",\n\"pedestrian\" or \"motor_scooter\"."
+   },
+   "text": {
+    "description": "Free text to extract place claims from (best-effort heuristic:\nquoted phrases and Title Case runs after \"at/in/near/to/from/\nvisiting\" \u2014 not NLP or an LLM call, and it does not attempt\nitinerary feasibility since there are no explicit times to anchor\nlegs to). Mutually exclusive with `claims`. Max 8,000 characters.",
+    "type": [
+     "string",
+     "null"
+    ]
+   }
+  },
+  "type": "object"
+ },
+ "name": "verify_places",
+ "outputSchema": {
+  "$defs": {
+   "VerifyClaimEcho": {
+    "description": "The claim as echoed back (a subset of the input, for context).",
+    "properties": {
+     "locality": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "name": {
+      "type": "string"
+     },
+     "sequence": {
+      "format": "int64",
+      "type": [
+       "integer",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   },
+   "VerifyClaimResult": {
+    "description": "The result for one claim.",
+    "properties": {
+     "claim": {
+      "$ref": "#/$defs/VerifyClaimEcho"
+     },
+     "evidence": {
+      "items": {
+       "$ref": "#/$defs/VerifyEvidence"
+      },
+      "type": "array"
+     },
+     "feasibility": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/VerifyFeasibility"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "id": {
+      "type": "string"
+     },
+     "match": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/VerifyPlaceMatch"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "verdict": {
+      "$ref": "#/$defs/VerifyVerdict"
+     }
+    },
+    "required": [
+     "id",
+     "claim",
+     "verdict",
+     "evidence"
+    ],
+    "type": "object"
+   },
+   "VerifyEvidence": {
+    "description": "One piece of evidence backing a verdict. Always dated.",
+    "properties": {
+     "checked_at": {
+      "description": "ISO 8601 timestamp of when this evidence was gathered (a check\ntime, not necessarily the underlying map data's edit date).",
+      "type": "string"
+     },
+     "detail": {
+      "description": "Short factual note, always from a fixed template (see\n`crate::verify`) \u2014 never free-form text that could assert\nnon-existence or closure.",
+      "type": "string"
+     },
+     "source": {
+      "description": "Where the evidence came from, e.g. \"mapmap-geocode\", \"mapmap-matrix\".",
+      "type": "string"
+     }
+    },
+    "required": [
+     "source",
+     "checked_at",
+     "detail"
+    ],
+    "type": "object"
+   },
+   "VerifyFeasibility": {
+    "description": "Feasibility of the leg arriving at this stop, when computable.",
+    "properties": {
+     "available_minutes": {
+      "description": "Minutes the itinerary claims are available for this leg.",
+      "format": "double",
+      "type": "number"
+     },
+     "from_id": {
+      "type": "string"
+     },
+     "from_name": {
+      "type": "string"
+     },
+     "status": {
+      "$ref": "#/$defs/VerifyFeasibilityStatus"
+     },
+     "to_id": {
+      "type": "string"
+     },
+     "to_name": {
+      "type": "string"
+     },
+     "travel_time_minutes": {
+      "description": "Minutes the routing engine computed, or null when it could not\ncompute one at all (e.g. beyond its routable distance).",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "from_id",
+     "from_name",
+     "to_id",
+     "to_name",
+     "available_minutes",
+     "status"
+    ],
+    "type": "object"
+   },
+   "VerifyFeasibilityStatus": {
+    "description": "Feasibility status of one itinerary leg.",
+    "oneOf": [
+     {
+      "enum": [
+       "feasible",
+       "impossible"
+      ],
+      "type": "string"
+     },
+     {
+      "const": "implausible",
+      "description": "Tight \u2014 flagged, but not asserted as impossible (not certain enough\nto contradict).",
+      "type": "string"
+     }
+    ]
+   },
+   "VerifyPlaceMatch": {
+    "description": "The place a claim matched, when one was found.",
+    "properties": {
+     "category": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "id": {
+      "description": "Stable identifier when the geocoding backend supplies one,\notherwise a coordinate-based fallback.",
+      "type": "string"
+     },
+     "lat": {
+      "format": "double",
+      "type": "number"
+     },
+     "lon": {
+      "format": "double",
+      "type": "number"
+     },
+     "name": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "name",
+     "lat",
+     "lon"
+    ],
+    "type": "object"
+   },
+   "VerifyVerdict": {
+    "description": "The three-state verdict \u2014 see `crate::verify` module docs for why\nthere is no fourth \"does not exist\" state and never a boolean.",
+    "oneOf": [
+     {
+      "const": "verified",
+      "description": "Matched a real, findable place in the index.",
+      "type": "string"
+     },
+     {
+      "const": "contradicted",
+      "description": "A specific, dated, sourced fact contradicts the claim (currently:\nan itinerary leg the routing engine proves cannot be driven in the\nstated time). Never used to assert a business does not exist or\nhas closed.",
+      "type": "string"
+     },
+     {
+      "const": "unverified",
+      "description": "No evidence either way: no confident name match, or the check\ncould not run.",
+      "type": "string"
+     }
+    ]
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "results": {
+    "items": {
+     "$ref": "#/$defs/VerifyClaimResult"
+    },
+    "type": "array"
+   },
+   "summary": {
+    "description": "Always present: a concise plain-text summary alongside the\nstructured `results` \u2014 several MCP clients (notably ChatGPT\nconnectors) drop non-text content blocks, so this must stand on\nits own. This same string is also returned as the tool call's text\ncontent block, not only inside the structured JSON.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "results",
+   "summary"
+  ],
+  "type": "object"
+ }
+}

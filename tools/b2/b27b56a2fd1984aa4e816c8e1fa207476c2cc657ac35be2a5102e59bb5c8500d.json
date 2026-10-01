@@ -1,0 +1,496 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Search Companies"
+ },
+ "description": "Search for US public companies by name, ticker symbol, CIK (SEC identifier), or SIC industry code. Returns ticker, company name, sector, industry, exchange, and current S&P 500 membership status. Use this tool to resolve a company name to ticker/CIK before calling `get_company_fundamentals`, `get_valuation_metrics`, or other tools that require a ticker \u2014 they do not fuzzy-match company names.\n\n**Use this tool \u2014 NOT `get_pit_universe` \u2014 when the user asks about CURRENT S&P 500 members.** To list current S&P 500 members, call `search_companies({ is_sp500: true })` (the `is_sp500` filter is itself a valid search parameter, so no other input is required). This returns the live snapshot as of query time. Example: \"List 5 current S&P 500 members\" \u2192 call `search_companies({ is_sp500: true, limit: 5 })`.\n\n**Use `get_pit_universe` ONLY when the user explicitly needs a survivorship-free historical universe as of a specific past date** (e.g. \"S&P 500 members as of March 2018\"). If the user says \"current,\" \"today,\" \"now,\" or gives no date, use `search_companies` instead.\n\n**One ticker can return two rows.** A CIK identifies a *registrant*, not a company, so a reincorporation or holdco reorganisation moves the ticker to a NEW CIK while the filing history stays under the old one. Both rows are real. Use `is_active` to tell them apart: `true` is the current listing, `false` is the superseded one and carries `listed_until`. Prefer `is_active` over `status` \u2014 `status` is an entity-level flag that is unreliable in both directions.\n\n**Data details:** `sic_code` is the 4-digit SIC; `industry` is the human-readable label. `sector` is SIC-derived with GICS-style labels \u2014 NOT licensed GICS, so industrial conglomerates may map differently from official GICS (e.g. 3M \u2192 'Health Care' by SIC vs Industrials by GICS). S&P 500 membership is sourced from index_membership.parquet (current SP500 = `index_name='SP500' AND removal_date IS NULL`). Available on all plans.\n\n**CIK is the canonical, stable identifier \u2014 prefer it for backtests and archival work.** A ticker can be retired and later RECYCLED to an unrelated company (DEC is now Diversified Energy, AMR is Alpha Metallurgical, ARC is a document company today), so a ticker-only reference can silently drift to the wrong issuer years later. A purely-numeric `query` (or the dedicated `cik` param) resolves by CIK. Every company-scoped tool (`get_company_fundamentals`, `get_financial_ratios`, `get_stock_price`, etc.) accepts the `cik` this tool returns in place of `ticker` \u2014 carry it forward across a multi-step workflow instead of re-resolving by ticker each call. `include_inactive` defaults to `true`: this is a survivorship-free product, so delisted/superseded listings are never hidden by default.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "cik": {
+    "description": "SEC CIK identifier (exact match). E.g. '0000320193' for Apple.",
+    "pattern": "^\\d{1,10}$",
+    "type": "string"
+   },
+   "include_inactive": {
+    "default": true,
+    "description": "Whether delisted / superseded listings may appear in results. Defaults to true \u2014 this is a survivorship-free product, so a search must not silently hide dead companies by default. Set to false to restrict to currently-active listings only (equivalent to `is_active: true`, but as a search-scope toggle rather than a hard filter). If `is_active` is also supplied, `is_active` wins.",
+    "type": "boolean"
+   },
+   "is_active": {
+    "description": "Filter on whether the LISTING is current. true = currently trading; false = superseded listings only (delisted, or a ticker that moved to a new registrant). Omit to return both.",
+    "type": "boolean"
+   },
+   "is_sp500": {
+    "description": "Filter to current S&P 500 members only.",
+    "type": "boolean"
+   },
+   "limit": {
+    "default": 25,
+    "description": "Maximum number of results to return (1\u201350). Defaults to 25.",
+    "maximum": 50,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "query": {
+    "description": "Free-text search over company name and ticker. Case-insensitive. E.g. 'Apple', 'AAPL', 'Microsoft', 'semiconductor'.",
+    "maxLength": 100,
+    "minLength": 1,
+    "type": "string"
+   },
+   "sic_code": {
+    "description": "4-digit SIC industry code. E.g. '7372' for Prepackaged Software.",
+    "pattern": "^\\d{4}$",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "search_companies",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "_meta": {
+    "additionalProperties": false,
+    "description": "Provenance envelope \u2014 data lineage for every MCP response",
+    "properties": {
+     "as_of_date": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "cost_usd": {
+      "additionalProperties": false,
+      "description": "Per-call cost transparency. Omitted for subscription-only tools that have no PAYG-equivalent price.",
+      "properties": {
+       "amount_usd": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "basis": {
+        "description": "payg_charge = real agent-pay charge. payg_rate_card = indicative price, not billed.",
+        "enum": [
+         "payg_charge",
+         "payg_rate_card"
+        ],
+        "type": "string"
+       },
+       "billed": {
+        "description": "true = this amount was actually charged via PAYG for this call. false = indicative PAYG-equivalent value; your plan already covers this call for free.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "amount_usd",
+       "billed",
+       "basis"
+      ],
+      "type": "object"
+     },
+     "data_plan": {
+      "description": "Access plan: sample | sp500 | pro | full",
+      "type": "string"
+     },
+     "data_quality": {
+      "additionalProperties": false,
+      "description": "Server-side invariants run on this response",
+      "properties": {
+       "notes": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "validation_failed": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "detail": {
+           "type": "string"
+          },
+          "rule": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "rule",
+          "detail"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "validation_passed": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "validation_passed",
+       "validation_failed",
+       "notes"
+      ],
+      "type": "object"
+     },
+     "fundamentals_as_of": {
+      "description": "ISO timestamp when the FINANCIAL STATEMENTS were last rebuilt in bulk. Use THIS \u2014 not `last_updated` \u2014 when telling a user how current the cross-sectional fundamentals are. The snapshot is republished on every weekday price refresh while the statements are carried forward unchanged, so `last_updated` can be far more recent than the numbers it sits next to. It is a floor for a single filer, not a ceiling: a filer with a live partition receives its filing, facts and ratios intraday (minutes after EDGAR dissemination), so an entity-scoped read may carry a filing newer than this; cross-sectional ranks (factor scores, earnings signals) refresh with the weekly bulk export.",
+      "type": "string"
+     },
+     "last_updated": {
+      "description": "ISO timestamp when the snapshot was exported",
+      "type": "string"
+     },
+     "latency_ms": {
+      "description": "Wall-clock milliseconds this tool call took, measured server-side around the handler.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "limit_warnings": {
+      "description": "Soft-warning array for partial fulfillment. Each entry carries a stable subcode + remediation.options[]. AI agents pattern-match on subcode.",
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "code": {
+         "const": "LIMIT_EXCEEDED",
+         "type": "string"
+        },
+        "current_plan": {
+         "type": "string"
+        },
+        "extensions": {
+         "additionalProperties": {},
+         "type": "object"
+        },
+        "limit_type": {
+         "type": "string"
+        },
+        "limit_value": {},
+        "remediation": {
+         "additionalProperties": true,
+         "properties": {
+          "contact_sales": {
+           "type": "string"
+          },
+          "default_action": {
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "additionalProperties": {},
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "pricing_page": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "options",
+          "default_action",
+          "pricing_page",
+          "contact_sales"
+         ],
+         "type": "object"
+        },
+        "requested_value": {},
+        "returned_value": {},
+        "subcode": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "subcode",
+        "limit_type",
+        "current_plan",
+        "remediation"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "payg_override": {
+      "additionalProperties": false,
+      "description": "Set when this single response was paid for via the agent-pay PAYG flow \u2014 the rate-limit / depth-limit checks were bypassed for this call only.",
+      "properties": {
+       "amount_cents": {
+        "type": "number"
+       },
+       "entity_scope_hash": {
+        "type": "string"
+       },
+       "meter": {
+        "type": "string"
+       },
+       "quote_id": {
+        "type": "string"
+       },
+       "retry_token_hash": {
+        "type": "string"
+       },
+       "ticker_count": {
+        "type": "number"
+       },
+       "tool": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "quote_id",
+       "tool",
+       "meter",
+       "amount_cents",
+       "ticker_count",
+       "entity_scope_hash",
+       "retry_token_hash"
+      ],
+      "type": "object"
+     },
+     "pit_safe": {
+      "description": "true iff a zero-look-ahead point-in-time cut was applied to every returned figure",
+      "type": "boolean"
+     },
+     "price_as_of": {
+      "description": "ISO timestamp when the price surfaces were last refreshed.",
+      "type": "string"
+     },
+     "rate_limit": {
+      "additionalProperties": false,
+      "description": "Caller's remaining budget",
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "remaining": {
+        "type": "integer"
+       },
+       "reset_at": {
+        "description": "ISO 8601 timestamp when the window resets",
+        "type": "string"
+       },
+       "window": {
+        "enum": [
+         "minute",
+         "hour"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "limit",
+       "remaining",
+       "reset_at",
+       "window"
+      ],
+      "type": "object"
+     },
+     "request_id": {
+      "description": "Per-request correlation id (8-char)",
+      "type": "string"
+     },
+     "result_count": {
+      "type": "integer"
+     },
+     "schema_version": {
+      "description": "Parquet schema version from manifest.json",
+      "type": "string"
+     },
+     "snapshot": {
+      "description": "Snapshot directory name (e.g. snapshot_20260420)",
+      "type": "string"
+     },
+     "source": {
+      "const": "SEC EDGAR",
+      "type": "string"
+     },
+     "ticker": {
+      "type": "string"
+     },
+     "truncation": {
+      "additionalProperties": false,
+      "description": "Set when fewer rows were returned than requested \u2014 explains why and points to a remedy",
+      "properties": {
+       "current_plan": {
+        "type": "string"
+       },
+       "plan_limit": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "reason": {
+        "enum": [
+         "PLAN_LIMIT",
+         "DATA_NOT_AVAILABLE",
+         "FISCAL_YEAR_BOUNDARY_FILTER",
+         "OTHER"
+        ],
+        "type": "string"
+       },
+       "requested": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "returned": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "upgrade_required_for": {
+        "type": "string"
+       },
+       "upgrade_url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "requested",
+       "returned",
+       "reason"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "data_plan",
+     "schema_version",
+     "snapshot",
+     "last_updated",
+     "source",
+     "pit_safe"
+    ],
+    "type": "object"
+   },
+   "companies": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "cik": {
+       "type": "string"
+      },
+      "exchange": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "industry": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "is_active": {
+       "description": "Whether THIS listing is the current one for its ticker. When a company reincorporates or forms a holdco, SEC issues a new CIK and moves the ticker to it, so one symbol can return two rows \u2014 the superseded listing (false, with `listed_until` set) and the current one (true).",
+       "type": "boolean"
+      },
+      "is_sp500": {
+       "type": "boolean"
+      },
+      "listed_until": {
+       "description": "Date this listing stopped being current, or null while it still is. Non-null means the ticker moved to another registrant or the security was delisted.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "match_confidence": {
+       "description": "How confidently this result matches your query text: exact = exact ticker/name match, high = name starts with query, medium = word-boundary or ticker-prefix match, low = bare substring match. Omitted for filter-only calls with no text query.",
+       "enum": [
+        "exact",
+        "high",
+        "medium",
+        "low"
+       ],
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "sector": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "sic_code": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "status": {
+       "description": "Entity-level flag from entity.status. Kept for back-compat and NOT a reliable liveness signal \u2014 it is wrong in both directions on real data (American Electric Power, a current S&P 500 member, reads 'INACTIVE'). Read `is_active` instead.",
+       "type": "string"
+      },
+      "ticker": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "valid_from": {
+       "description": "Date this listing became current, or null when unknown. Paired with valid_to/cik/is_active so an agent can disambiguate a RECYCLED ticker \u2014 two rows for one symbol, each covering a different window \u2014 without a second call.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "valid_to": {
+       "description": "Same value as `listed_until`, under the CIK-first-resolution naming convention. Both are returned for back-compat.",
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "cik",
+      "ticker",
+      "name",
+      "sector",
+      "industry",
+      "sic_code",
+      "exchange",
+      "status",
+      "is_active",
+      "listed_until",
+      "valid_from",
+      "valid_to",
+      "is_sp500"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "query": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "results_returned": {
+    "minimum": 0,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "_meta",
+   "query",
+   "results_returned",
+   "companies"
+  ],
+  "type": "object"
+ },
+ "title": "Search Companies"
+}

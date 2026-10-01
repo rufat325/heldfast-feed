@@ -1,0 +1,474 @@
+{
+ "description": "Find the cheapest fuel along a route, with the REAL extra travel time of stopping at each station \u2014 never a straight-line guess. Provide `origin` + `destination` (a route is computed) or an existing route's `geometry_polyline6`, plus a `fuel` code (\"diesel\" default, \"petrol_95\", \"petrol_98\", \"premium_diesel\", \"e85\", \"lpg\") and `max_detour_minutes` (default 10). Stations come from the live open-data price feeds (UK CMA retailer scheme and/or the statutory Fuel Finder, FR prix-carburants, DE Tankerkoenig; the response's `fuel_attribution` names the ones actually matched), are priced through the routing engine with your costing (a `truck` profile makes detours respect dimensional/ADR restrictions) and ranked freshest-priced first and cheapest within that. Each result carries price {value, currency, updated_at, stale}, detour_minutes/detour_km, and saving_per_litre vs the cheapest on-route baseline (pass `fill_litres` to also get saving_total). `stale` = not verifiably fresher than 24 h: true unless BOTH the price's own updated_at and the snapshot's fetch time are inside that window, and true whenever either is missing. A stale price is ranked below every fresh one, is never the baseline, and carries NO saving_per_litre \u2014 quote it as \"last seen at X on <date>\", never as a saving. `say` is ALWAYS present and is the whole answer as one short spoken line, composed by the gateway with the number, the detour and the honest qualifier already in it. Prefer reading it verbatim to writing your own summary: a stale price's line states the figure and the day it was last seen and claims no saving, and an empty result's line names the cause rather than implying there is no fuel on that road. Requires the MapMap gateway; answers a clear error when the deployment has no fuel-price dataset. Display the returned fuel_attribution with the prices.",
+ "inputSchema": {
+  "$defs": {
+   "CostingKind": {
+    "description": "Costing models exposed by the MCP tools (a deliberate subset of the\nValhalla costing list), serialised in snake_case exactly as Valhalla\nnames them.",
+    "oneOf": [
+     {
+      "const": "auto",
+      "description": "Standard car costing.",
+      "type": "string"
+     },
+     {
+      "const": "truck",
+      "description": "Truck costing; honours dimensional limits and, when a `truck`\nprofile is supplied, ADR dangerous-goods restrictions.",
+      "type": "string"
+     },
+     {
+      "const": "bicycle",
+      "description": "Bicycle costing; tune it with a `bicycle` options object.",
+      "type": "string"
+     },
+     {
+      "const": "pedestrian",
+      "description": "Pedestrian (walking) costing; tune it with a `pedestrian` options\nobject (lit streets, wheelchair/blind, hiking difficulty).",
+      "type": "string"
+     },
+     {
+      "const": "motor_scooter",
+      "description": "Motor scooter (moped) costing: like auto but prefers lower-speed\nroads and may use ways closed to larger motor vehicles.",
+      "type": "string"
+     }
+    ]
+   },
+   "LatLon": {
+    "anyOf": [
+     {
+      "properties": {
+       "lat": {
+        "description": "Latitude in decimal degrees (\u221290 to 90).",
+        "format": "double",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude in decimal degrees (\u2212180 to 180).",
+        "format": "double",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "GeoJSON position [lon, lat]: longitude FIRST.",
+      "items": {
+       "format": "double",
+       "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     }
+    ],
+    "description": "A WGS84 coordinate in decimal degrees: a {lat, lon} object (preferred), or a GeoJSON [lon, lat] array with LONGITUDE FIRST, the same order as every polygon field on this server."
+   },
+   "TruckSpec": {
+    "description": "Truck profile for routing: physical dimensions plus the ADR\ndangerous-goods declaration. Omitted dimensions default to the EU\nmaximum authorised dimensions of Council Directive 96/53/EC (4.0 m\nheight, 2.55 m width, 16.5 m length, 40 t gross weight).",
+    "properties": {
+     "gross_weight_t": {
+      "description": "Gross combination weight in metric tonnes.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "hazmat": {
+      "default": false,
+      "description": "Whether the vehicle carries dangerous goods (ADR). Defaults to\nfalse.",
+      "type": "boolean"
+     },
+     "height_m": {
+      "description": "Vehicle height in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "length_m": {
+      "description": "Vehicle length in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "tunnel_code": {
+      "description": "ADR 8.6.4 tunnel restriction code of the load, e.g. \"B\", \"C5000D\",\n\"B/D\", or \"(\u2014)\"/\"none\" for explicitly unrestricted. Leave unset if\nunknown: a hazmat load without a code is conservatively treated as\ncode B (allowed only through category-A tunnels).",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "width_m": {
+      "description": "Vehicle width in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "costing": {
+    "$ref": "#/$defs/CostingKind",
+    "default": "auto",
+    "description": "Costing model for the route and detour matrix: \"auto\" (default),\n\"truck\", \"bicycle\", \"pedestrian\" or \"motor_scooter\"."
+   },
+   "destination": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/LatLon"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Route destination."
+   },
+   "fill_litres": {
+    "description": "Optional fill size in litres; each result then also carries\n`saving_total` = `saving_per_litre` \u00d7 `fill_litres`.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "fuel": {
+    "description": "Which fuel to price: \"diesel\" (default), \"petrol_95\", \"petrol_98\",\n\"premium_diesel\", \"e85\" or \"lpg\" (aliases \"petrol\", \"unleaded\",\n\"e10\", \"super_unleaded\", \"e5\", \"b7\" and \"sdv\" are accepted).",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "geometry_polyline6": {
+    "description": "An existing route geometry as an encoded polyline6 (the `route`\ntool's `geometry_polyline6`). Provide either this or `origin` +\n`destination`, not both.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "max_detour_minutes": {
+    "description": "Largest acceptable detour in minutes (default 10, at most 120).",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "max_results": {
+    "description": "Maximum results (default 5, at most 25).",
+    "format": "uint32",
+    "minimum": 0,
+    "type": [
+     "integer",
+     "null"
+    ]
+   },
+   "origin": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/LatLon"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Route origin (with `destination`, when no geometry is given)."
+   },
+   "truck": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/TruckSpec"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Truck profile (dimensions + ADR declaration). Requires costing\n\"truck\"; the detours then respect dimensional/ADR restrictions."
+   }
+  },
+  "type": "object"
+ },
+ "name": "cheapest_fuel_along_route",
+ "outputSchema": {
+  "$defs": {
+   "FuelBaseline": {
+    "description": "The cheapest effectively-on-route option in one currency \u2014 what the\ndriver pays by just pulling in without a detour; the reference the\nper-result savings are computed against. Only a fresh price is\neligible, so this is `stale: false` by construction.",
+    "properties": {
+     "brand": {
+      "description": "The baseline station's brand, when known.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "currency": {
+      "description": "ISO 4217 currency this baseline covers.",
+      "type": "string"
+     },
+     "name": {
+      "description": "The baseline station's human label, when known.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "stale": {
+      "description": "True when the baseline price could not be verified fresher than\n24 hours.",
+      "type": "boolean"
+     },
+     "station_id": {
+      "description": "The baseline station's id.",
+      "type": "string"
+     },
+     "updated_at": {
+      "description": "The baseline price's source timestamp, verbatim.",
+      "type": "string"
+     },
+     "value": {
+      "description": "Baseline price per litre.",
+      "format": "double",
+      "type": "number"
+     }
+    },
+    "required": [
+     "currency",
+     "value",
+     "station_id",
+     "updated_at",
+     "stale"
+    ],
+    "type": "object"
+   },
+   "FuelPriceQuote": {
+    "description": "One live pump price: per-litre value in an ISO 4217 currency, with the\nsource's own update timestamp and a 24-hour staleness flag.",
+    "properties": {
+     "currency": {
+      "description": "ISO 4217 code (GBP for the UK sources, EUR for FR/DE).",
+      "type": "string"
+     },
+     "stale": {
+      "description": "True when the price could not be verified fresher than 24 hours:\nunless BOTH the source's own `updated_at` and the snapshot's fetch\ntime fall inside that window, and always when either is missing.\nTreat it as indicative, not bindable \u2014 say \"last seen at X on\n<date>\", never quote it as today's price or as a saving.",
+      "type": "boolean"
+     },
+     "updated_at": {
+      "description": "The source's own price timestamp, verbatim.",
+      "type": "string"
+     },
+     "value": {
+      "description": "Price per litre in `currency`.",
+      "format": "double",
+      "type": "number"
+     }
+    },
+    "required": [
+     "value",
+     "currency",
+     "updated_at",
+     "stale"
+    ],
+    "type": "object"
+   },
+   "FuelStationHit": {
+    "description": "One fuel station along the route, priced with its honest detour.",
+    "properties": {
+     "along_route_position": {
+      "description": "Where along the route the station sits, 0.0 (origin) to 1.0\n(destination).",
+      "format": "double",
+      "type": "number"
+     },
+     "brand": {
+      "description": "Brand where the feed carries one.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "detour_km": {
+      "description": "Extra travel distance in kilometres, when the engine reported\ndistances.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "detour_minutes": {
+      "description": "Extra travel time of refuelling here, in minutes (rounded to 0.1):\n(origin\u2192station) + (station\u2192destination) \u2212 (origin\u2192destination),\nall computed by the routing engine \u2014 never a straight-line guess.",
+      "format": "double",
+      "type": "number"
+     },
+     "detour_s": {
+      "description": "The same detour in raw seconds.",
+      "format": "double",
+      "type": "number"
+     },
+     "lat": {
+      "description": "WGS84 latitude in decimal degrees.",
+      "format": "double",
+      "type": "number"
+     },
+     "lon": {
+      "description": "WGS84 longitude.",
+      "format": "double",
+      "type": "number"
+     },
+     "name": {
+      "description": "Human label: trading name, town or address, where the feed\ncarries one.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "off_route_m": {
+      "description": "Straight-line distance from the station to the route, metres.",
+      "format": "double",
+      "type": "number"
+     },
+     "price": {
+      "$ref": "#/$defs/FuelPriceQuote",
+      "description": "The requested fuel's live pump price at this station."
+     },
+     "saving_per_litre": {
+      "description": "Per-litre saving against the cheapest effectively-on-route station\nin the same currency (negative = dearer than staying on route).\nAbsent when no FRESH station sits on the route itself in this\ncurrency, and always absent on a stale result: an unverifiable\nprice may state a number but never claim a saving.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "saving_total": {
+      "description": "`saving_per_litre` \u00d7 the request's `fill_litres`, when both exist.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "source": {
+      "description": "Which national feed the station came from (\"uk-fuelfinder\", \"uk\",\n\"fr\", \"de\").",
+      "type": "string"
+     },
+     "station_id": {
+      "description": "Source-scoped stable station id.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "station_id",
+     "source",
+     "lat",
+     "lon",
+     "price",
+     "detour_minutes",
+     "detour_s",
+     "along_route_position",
+     "off_route_m"
+    ],
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "baseline": {
+    "description": "The cheapest effectively-on-route option per currency (empty when\nno station sits on the route itself).",
+    "items": {
+     "$ref": "#/$defs/FuelBaseline"
+    },
+    "type": "array"
+   },
+   "candidate_cap": {
+    "description": "The matrix fan-out cap in force.",
+    "format": "uint",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "candidates_considered": {
+    "description": "Stations selling the fuel that passed the corridor pre-filter.",
+    "format": "uint",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "candidates_costed": {
+    "description": "Candidates actually priced through the engine (fan-out capped at\n`candidate_cap`, cheapest kept).",
+    "format": "uint",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "costing": {
+    "description": "The costing the detours were priced with.",
+    "type": "string"
+   },
+   "fuel": {
+    "description": "The normalised fuel code that was priced (e.g. \"diesel\").",
+    "type": "string"
+   },
+   "fuel_attribution": {
+    "description": "Attribution string for the fuel-price data sources actually\nreturned \u2014 display it with the prices (a licence obligation).",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "max_detour_minutes": {
+    "description": "The detour budget applied, minutes.",
+    "format": "double",
+    "type": "number"
+   },
+   "results": {
+    "description": "Stations within the detour budget, cheapest first (price, then\ndetour).",
+    "items": {
+     "$ref": "#/$defs/FuelStationHit"
+    },
+    "type": "array"
+   },
+   "route_distance_m": {
+    "description": "Direct origin\u2192destination distance in metres.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "route_duration_s": {
+    "description": "Direct origin\u2192destination travel time in seconds (same estimator\nas the detour legs), when routable.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "route_length_m": {
+    "description": "Length of the route geometry in metres.",
+    "format": "double",
+    "type": "number"
+   },
+   "say": {
+    "description": "**Always present.** The whole answer as one short spoken line,\ncomposed by the gateway: the number, the detour, and the honest\nqualifier where one applies. Safe to read to a driver verbatim,\nand safe on an empty result, where it names the cause rather than\nimplying there is no fuel on the road. A stale price's line states\nthe figure and the day it was last seen and claims no saving.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "fuel",
+   "costing",
+   "route_length_m",
+   "candidates_considered",
+   "candidates_costed",
+   "candidate_cap",
+   "max_detour_minutes",
+   "baseline",
+   "results",
+   "say"
+  ],
+  "type": "object"
+ }
+}

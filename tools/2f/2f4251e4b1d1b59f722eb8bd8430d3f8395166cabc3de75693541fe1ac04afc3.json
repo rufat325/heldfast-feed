@@ -1,0 +1,285 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Search ClinVar (NCBI E-utilities) for a gene and return its classified variants \u2014 clinical significance, review status with a 0\u20134 star rating, associated conditions, molecular consequences, submission counts, and gnomAD-compatible identifiers (canonical SPDI, rsIDs, GRCh38 variant ID for gnomad_get_variant) \u2014 turning the variant-level significance gnomAD joins into a gene-panel curation view. Optionally filter by clinical_significance (e.g. pathogenic) and a minimum star rating. Each call returns one window of up to 500 ClinVar records: total_found is the ClinVar candidate count for the search terms, taken before the significance and star filters narrow each window, and next_offset continues through the rest via offset. A window too large to inline is staged on a DataCanvas table named clinvar_variants, returned as canvas_id and table_name beside an inline preview \u2014 call gnomad_dataframe_describe for its columns, then gnomad_dataframe_query to rank or count across the window. A window that fits inline stages no table unless canvas_id is supplied. Keyless, but honors NCBI_API_KEY for a higher rate limit. When the canvas is disabled the tool returns a capped inline preview. Credit: ClinVar, NCBI.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "canvas_id": {
+    "description": "Optional canvas ID from a prior call, to reuse the same canvas. When supplied, each search writes its window to the clinvar_variants table on that canvas, replacing (not appending to) the previous one \u2014 even when the window fits inline; a window with no rows removes the table. An Ensembl gene ID searches nothing and leaves the canvas as it was. Omit to stage on a fresh canvas only when the window is too large to inline.",
+    "pattern": "^[A-Za-z0-9_-]{10}$",
+    "type": "string"
+   },
+   "clinical_significance": {
+    "description": "Filter by ClinVar clinical significance term (e.g. pathogenic, likely_pathogenic, uncertain significance), matched as whole words; underscores read as spaces. Blank means no filter.",
+    "type": "string"
+   },
+   "gene": {
+    "description": "Gene HGNC symbol (e.g. PCSK9). ClinVar indexes HGNC symbols only \u2014 Ensembl gene IDs (ENSG\u2026) are not resolved here, unlike the other gnomAD tools; resolve one to its symbol via ensembl_lookup_gene.",
+    "minLength": 2,
+    "type": "string"
+   },
+   "limit": {
+    "default": 500,
+    "description": "ClinVar records to fetch in this window (1\u2013500). Counted before the clinical_significance and min_review_stars filters, so a window can return fewer rows.",
+    "maximum": 500,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "min_review_stars": {
+    "description": "Keep only variants with at least this gold-star review rating (0\u20134).",
+    "maximum": 4,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "offset": {
+    "default": 0,
+    "description": "Zero-based position of the first ClinVar record in this window. Pass next_offset from the previous call to continue.",
+    "maximum": 2147483647,
+    "minimum": 0,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "gene"
+  ],
+  "type": "object"
+ },
+ "name": "gnomad_search_clinvar",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "preview",
+     "canvas_id",
+     "table_name",
+     "spilled",
+     "total",
+     "total_found",
+     "truncated",
+     "next_offset",
+     "unavailable_ids"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "canvas_id": {
+    "description": "Canvas holding table_name (or the canvas_id you supplied) \u2014 pass it to gnomad_dataframe_describe, then gnomad_dataframe_query. Empty when this call used no canvas: the window fit inline and no canvas_id was supplied, the gene was an Ensembl ID (nothing was searched), or the canvas is disabled.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `upstream_unavailable`: NCBI E-utilities is unreachable, failing, or rate-limiting after retries. `upstream_timeout`: Every attempt to reach NCBI E-utilities timed out. `upstream_access`: NCBI E-utilities refused the request (access denied). `invalid_upstream_response`: NCBI E-utilities kept answering with a response that failed validation. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "upstream_unavailable",
+         "upstream_timeout",
+         "upstream_access",
+         "invalid_upstream_response"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "next_offset": {
+    "description": "offset for the next window; null when this window reaches the end.",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "notice": {
+    "description": "Guidance on completeness (the offset that continues the list, or an offset past the end), no-match results, a capped preview when the canvas is disabled, the staged table with its next steps (gnomad_dataframe_describe, then gnomad_dataframe_query), and which identifier to pass to gnomad_get_variant.",
+    "type": "string"
+   },
+   "preview": {
+    "description": "Inline preview rows \u2014 the immediate answer; the window's every row unless spilled.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One ClinVar variant row \u2014 also the canvas table column set.",
+     "properties": {
+      "accession": {
+       "description": "ClinVar accession (e.g. VCV004855003).",
+       "type": "string"
+      },
+      "canonical_spdi": {
+       "description": "Canonical SPDI of the variant (GRCh38, e.g. NC_000001.11:55039973:G:T); null for multi-allele records, CNVs, and records without one.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "clinical_significance": {
+       "description": "Germline classification (e.g. Pathogenic); null when none.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "clinvar_variation_id": {
+       "description": "ClinVar VariationID (uid).",
+       "type": "string"
+      },
+      "conditions": {
+       "description": "Associated conditions/traits, semicolon-joined.",
+       "type": "string"
+      },
+      "gold_stars": {
+       "description": "0\u20134 star review rating derived from review status.",
+       "type": "number"
+      },
+      "grch38_variant_id": {
+       "description": "gnomAD variant ID (chrom-pos-ref-alt, GRCh38) for gnomad_get_variant with the GRCh38 datasets (gnomad_r4, gnomad_r3). Set for SNVs, MNVs, and delins; null for deletions, insertions, duplications, mitochondrial variants, and multi-allele records.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "last_evaluated": {
+       "description": "Date the classification was last evaluated; null when unknown.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "molecular_consequences": {
+       "description": "Molecular consequences, semicolon-joined.",
+       "type": "string"
+      },
+      "obj_type": {
+       "description": "Variant object type (e.g. single nucleotide variant).",
+       "type": "string"
+      },
+      "protein_change": {
+       "description": "Protein change(s), comma-joined as ClinVar reports them.",
+       "type": "string"
+      },
+      "review_status": {
+       "description": "ClinVar review-status text; null when none.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "rsids": {
+       "description": "dbSNP rsIDs (e.g. rs11591147), semicolon-joined; empty when none. One rsID can match several gnomAD variants, so prefer grch38_variant_id for gnomad_get_variant.",
+       "type": "string"
+      },
+      "submission_count": {
+       "description": "Number of submitted (SCV) records.",
+       "type": "number"
+      },
+      "title": {
+       "description": "Variant title (HGVS expression).",
+       "type": "string"
+      }
+     },
+     "required": [
+      "clinvar_variation_id",
+      "accession",
+      "title",
+      "obj_type",
+      "clinical_significance",
+      "review_status",
+      "gold_stars",
+      "last_evaluated",
+      "molecular_consequences",
+      "protein_change",
+      "conditions",
+      "submission_count",
+      "canonical_spdi",
+      "rsids",
+      "grch38_variant_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "spilled": {
+    "description": "True when this window's rows exceeded the inline preview budget, so the preview holds only the first rows and table_name holds them all.",
+    "type": "boolean"
+   },
+   "table_name": {
+    "description": "Canvas table this call staged (clinvar_variants), holding this window's rows \u2014 inspect it with gnomad_dataframe_describe, then query it with gnomad_dataframe_query. Empty when this call staged no table.",
+    "type": "string"
+   },
+   "total": {
+    "description": "Rows in this window that passed the filters, including any beyond the preview.",
+    "type": "number"
+   },
+   "total_found": {
+    "description": "ClinVar records matching the gene and filter terms across every window, counted before the post-fetch significance and star filters.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when ClinVar records remain past this window; continue with next_offset.",
+    "type": "boolean"
+   },
+   "unavailable_ids": {
+    "description": "VariationIDs in this window that ClinVar returned no summary for, so they have no row; empty when none.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "title": "gnomad-genetics-mcp-server: search clinvar"
+}

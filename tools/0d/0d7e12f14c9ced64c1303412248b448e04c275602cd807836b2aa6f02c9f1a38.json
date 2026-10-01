@@ -1,0 +1,269 @@
+{
+ "annotations": {
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Query a FAOSTAT domain's data cube by area(s), item(s), element(s), and year range, returning observations (area, item, element, year, value, unit, and the data-quality flag). Resolve codes first with faostat_resolve_codes \u2014 the cube is unqueryable without them. Aggregate regions (World, continents, economic groupings) are EXCLUDED by default so a naive SUM does not double-count a region with its member countries; set include_aggregates=true to get the regional roll-ups, or pass explicit area_codes to query exactly what you name. Small result sets return inline; large ones spill to a DataCanvas table (returned canvas_id + table_name) \u2014 call faostat_dataframe_describe for its columns, then faostat_dataframe_query for GROUP BY / ranking / time-series analysis. Every row carries its flag \u2014 commonly A=Official, B=time-series break, E=Estimated, I=Imputed, M=Missing (value cannot exist), T=Unofficial, X=from an international organization, plus others FAOSTAT defines per domain \u2014 so honor it, treat any unrecognized flag as informational, and never assume an estimated, imputed, or unrecognized value is official.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "area_codes": {
+    "description": "Area codes from faostat_resolve_codes. When set, aggregates are NOT auto-excluded \u2014 the codes are honored verbatim.",
+    "items": {
+     "maximum": 9007199254740991,
+     "minimum": -9007199254740991,
+     "type": "integer"
+    },
+    "type": "array"
+   },
+   "canvas_id": {
+    "description": "Canvas ID to stage onto, as returned by a prior faostat_query_observations / faostat_commodity_profile call \u2014 exactly 10 characters of letters, digits, hyphens, and underscores. Omit to stage onto this session\u2019s canvas, created on the first spill and reused by every later call, so tables staged earlier in the session sit alongside this one.",
+    "pattern": "^[A-Za-z0-9_-]{10}$",
+    "type": "string"
+   },
+   "domain": {
+    "description": "FAOSTAT domain code (e.g. \"QCL\"). Must be indexed locally.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "element_codes": {
+    "description": "Element codes from faostat_resolve_codes (e.g. 5510 Production).",
+    "items": {
+     "maximum": 9007199254740991,
+     "minimum": -9007199254740991,
+     "type": "integer"
+    },
+    "type": "array"
+   },
+   "include_aggregates": {
+    "default": false,
+    "description": "When false (default), exclude aggregate-region rows (codes \u2265 5000 plus a few curated sub-threshold roll-ups such as China=351) so sums are not double-counted. Set true for World/continent/grouping roll-ups. Ignored when explicit area_codes are passed.",
+    "type": "boolean"
+   },
+   "item_codes": {
+    "description": "Item codes from faostat_resolve_codes.",
+    "items": {
+     "maximum": 9007199254740991,
+     "minimum": -9007199254740991,
+     "type": "integer"
+    },
+    "type": "array"
+   },
+   "limit": {
+    "default": 200,
+    "description": "Max observations returned inline \u2014 also the preview size when the result stages to a canvas table. Rows past it are never dropped silently: a match larger than limit stages in full to a DataCanvas table (canvas_id + table_name), and when no table is staged the notice reports how many matched so you can raise limit or narrow the filters. Max 1000.",
+    "maximum": 1000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "year_end": {
+    "description": "Inclusive end year (e.g. 2022).",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "year_start": {
+    "description": "Inclusive start year (e.g. 2000).",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "domain"
+  ],
+  "type": "object"
+ },
+ "name": "faostat_query_observations",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "domain",
+     "observations",
+     "spilled",
+     "truncated",
+     "totalCount"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "canvas_id": {
+    "description": "Canvas ID holding the staged table (present when spilled) \u2014 pass it with table_name to faostat_dataframe_describe for the columns and types, then to faostat_dataframe_query for SQL.",
+    "type": "string"
+   },
+   "domain": {
+    "description": "The domain code echoed back.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `domain_not_indexed`: The domain is not in the local mirror selection (FAOSTAT_DOMAINS) \u2014 whether a valid FAOSTAT code or not. `index_not_ready`: The domain mirror is cold \u2014 its initial sync has never completed. `canvas_disabled`: The result is too large to inline but DataCanvas is off, so it cannot be staged for SQL. `canvas_not_found`: The result is large enough to stage and canvas_id does not resolve to a live canvas \u2014 unknown, expired, or owned by another tenant. A result that fits inline stages nothing and never consults canvas_id. `invalid_year_range`: year_start is greater than year_end \u2014 a self-contradictory range that can never match. `query_timeout`: The call's mirror reads \u2014 time queued behind other calls plus execution \u2014 ran past the 45-second per-call ceiling. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "domain_not_indexed",
+         "index_not_ready",
+         "canvas_disabled",
+         "canvas_not_found",
+         "invalid_year_range",
+         "query_timeout"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Guidance on empty results, aggregate exclusion, or how to reach the spilled set.",
+    "type": "string"
+   },
+   "observations": {
+    "description": "Inline observations (preview when the full set spilled to a canvas table).",
+    "items": {
+     "additionalProperties": false,
+     "description": "One observation. The flag is load-bearing \u2014 never drop or ignore it.",
+     "properties": {
+      "area": {
+       "description": "Area name.",
+       "type": "string"
+      },
+      "area_code": {
+       "description": "Area code.",
+       "type": "number"
+      },
+      "element": {
+       "description": "Element (metric) name.",
+       "type": "string"
+      },
+      "element_code": {
+       "description": "Element code.",
+       "type": "number"
+      },
+      "flag": {
+       "description": "Data-quality flag \u2014 commonly A=Official, B=time-series break, E=Estimated, I=Imputed, M=Missing (value cannot exist), T=Unofficial, X=from an international organization, plus others FAOSTAT defines per domain; treat any unrecognized flag as informational, never assume official. Null when unflagged.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "item": {
+       "description": "Item name.",
+       "type": "string"
+      },
+      "item_code": {
+       "description": "Item code.",
+       "type": "number"
+      },
+      "unit": {
+       "description": "Unit of measure; null when unspecified.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "value": {
+       "description": "Observed value; null when the cell is empty.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "year": {
+       "description": "Observation year.",
+       "type": "number"
+      }
+     },
+     "required": [
+      "area_code",
+      "area",
+      "item_code",
+      "item",
+      "element_code",
+      "element",
+      "year",
+      "value",
+      "unit",
+      "flag"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "spilled": {
+    "description": "True when the full result was staged on a DataCanvas table.",
+    "type": "boolean"
+   },
+   "staged_row_count": {
+    "description": "Rows actually staged on the canvas table (present when spilled). Equals the full match count unless truncated, in which case it is the 50,000-row cap.",
+    "type": "number"
+   },
+   "table_name": {
+    "description": "Canvas table holding the staged result set (present when spilled; a PREFIX of the match when truncated) \u2014 pass it as name to faostat_dataframe_describe, then reference it in faostat_dataframe_query SQL.",
+    "type": "string"
+   },
+   "totalCount": {
+    "description": "Observations matched. Exact when the result was returned inline or fully staged. A floor \u2014 more matched \u2014 in two cases, both named by the notice: the match exceeded the 50,000-row staging cap (truncated is then true), or staging failed and the response fell back to an inline page.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when the staged table hit the 50,000-row staging cap \u2014 the staged set is a PREFIX of the match, not the complete result. Partition the query by year or code ranges to capture the rest.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "faostat-mcp-server: query observations"
+}

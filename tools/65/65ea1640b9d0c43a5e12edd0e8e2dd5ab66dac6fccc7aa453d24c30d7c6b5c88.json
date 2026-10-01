@@ -1,0 +1,511 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Screen Universe by Factor Scores"
+ },
+ "description": "Rank companies by cross-sectional factor scores from factor_scores.parquet. Returns the underlying factors (roe, gross_margin, operating_margin, net_profit_margin, revenue_growth_yoy, fcf_to_assets, debt_to_equity, asset_turnover, current_ratio, piotroski_f_score) plus their percentile ranks (1.0 = best in universe, 0.0 = worst). `composite_rank` (the default sort) is a one-number multi-factor shortcut; sort by a specific *_rank column for a single factor. Two modes: full-universe (omit ticker) or single-entity (ticker set \u2014 spot-check ONE company's factor profile). Sector filter is SIC-derived (GICS-aligned, not licensed GICS \u2014 see `get_pit_universe`). Use this *instead of* `get_financial_ratios` when you want CROSS-SECTIONAL comparison (rank vs peers); use `get_financial_ratios` when you want one company's ratios over time. Supports survivorship-free POINT-IN-TIME screening via `as_of_date` (see the param). Full-universe screens omit rows that don't join to a company (null symbol); pass `exclude_outliers=true` to also drop shell-company rows with implausible factors. Available on every plan \u2014 sample returns the subset covered by the sample bucket.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "as_of_date": {
+    "description": "Point-in-time cutoff (YYYY-MM-DD). When set, the screen is reconstructed as of this date via factor_scores.accepted_at \u2014 each entity ranked at its latest-knowable period, zero look-ahead, survivorship-free. Omit for the latest snapshot.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   },
+   "exclude_outliers": {
+    "default": false,
+    "description": "Optional data-quality guard (default false). When true, additionally drops rows with implausible raw factor values (non-finite, or e.g. asset_turnover > 50x, |FCF/assets| > 10) from shell companies with near-zero denominators. Rows that do not join to a company (null symbol) are ALWAYS omitted in full-universe mode, regardless of this flag.",
+    "type": "boolean"
+   },
+   "limit": {
+    "default": 25,
+    "description": "Number of results to return (1-100). Defaults to 25.",
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "offset": {
+    "default": 0,
+    "description": "Zero-based row offset for paging within the requested `limit` window. At most 250 rows are inlined per call; if the response carries a `truncation` envelope, pass its `next_offset` here. Defaults to 0.",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "sector": {
+    "description": "Filter to a specific sector (case-insensitive partial match). E.g. 'Technology', 'Healthcare'.",
+    "maxLength": 64,
+    "minLength": 1,
+    "type": "string"
+   },
+   "sort_by": {
+    "default": "composite_rank",
+    "description": "Which factor rank to sort by (see the enum). Defaults to composite_rank. An unrecognized column is rejected with INVALID_ARGUMENT (no silent fallback).",
+    "enum": [
+     "roe_rank",
+     "gross_margin_rank",
+     "operating_margin_rank",
+     "net_profit_margin_rank",
+     "revenue_growth_yoy_rank",
+     "fcf_to_assets_rank",
+     "debt_to_equity_rank",
+     "asset_turnover_rank",
+     "current_ratio_rank",
+     "piotroski_f_score_rank",
+     "composite_rank"
+    ],
+    "type": "string"
+   },
+   "ticker": {
+    "description": "If provided, show only this ticker's factor scores (single-entity mode). Omit to screen the full universe.",
+    "maxLength": 10,
+    "minLength": 1,
+    "pattern": "^[A-Za-z0-9.\\-]+$",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "screen_universe",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "_meta": {
+    "additionalProperties": false,
+    "description": "Provenance envelope \u2014 data lineage for every MCP response",
+    "properties": {
+     "as_of_date": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "cost_usd": {
+      "additionalProperties": false,
+      "description": "Per-call cost transparency. Omitted for subscription-only tools that have no PAYG-equivalent price.",
+      "properties": {
+       "amount_usd": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "basis": {
+        "description": "payg_charge = real agent-pay charge. payg_rate_card = indicative price, not billed.",
+        "enum": [
+         "payg_charge",
+         "payg_rate_card"
+        ],
+        "type": "string"
+       },
+       "billed": {
+        "description": "true = this amount was actually charged via PAYG for this call. false = indicative PAYG-equivalent value; your plan already covers this call for free.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "amount_usd",
+       "billed",
+       "basis"
+      ],
+      "type": "object"
+     },
+     "data_plan": {
+      "description": "Access plan: sample | sp500 | pro | full",
+      "type": "string"
+     },
+     "data_quality": {
+      "additionalProperties": false,
+      "description": "Server-side invariants run on this response",
+      "properties": {
+       "notes": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "validation_failed": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "detail": {
+           "type": "string"
+          },
+          "rule": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "rule",
+          "detail"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "validation_passed": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "validation_passed",
+       "validation_failed",
+       "notes"
+      ],
+      "type": "object"
+     },
+     "fundamentals_as_of": {
+      "description": "ISO timestamp when the FINANCIAL STATEMENTS were last rebuilt in bulk. Use THIS \u2014 not `last_updated` \u2014 when telling a user how current the cross-sectional fundamentals are. The snapshot is republished on every weekday price refresh while the statements are carried forward unchanged, so `last_updated` can be far more recent than the numbers it sits next to. It is a floor for a single filer, not a ceiling: a filer with a live partition receives its filing, facts and ratios intraday (minutes after EDGAR dissemination), so an entity-scoped read may carry a filing newer than this; cross-sectional ranks (factor scores, earnings signals) refresh with the weekly bulk export.",
+      "type": "string"
+     },
+     "last_updated": {
+      "description": "ISO timestamp when the snapshot was exported",
+      "type": "string"
+     },
+     "latency_ms": {
+      "description": "Wall-clock milliseconds this tool call took, measured server-side around the handler.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "limit_warnings": {
+      "description": "Soft-warning array for partial fulfillment. Each entry carries a stable subcode + remediation.options[]. AI agents pattern-match on subcode.",
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "code": {
+         "const": "LIMIT_EXCEEDED",
+         "type": "string"
+        },
+        "current_plan": {
+         "type": "string"
+        },
+        "extensions": {
+         "additionalProperties": {},
+         "type": "object"
+        },
+        "limit_type": {
+         "type": "string"
+        },
+        "limit_value": {},
+        "remediation": {
+         "additionalProperties": true,
+         "properties": {
+          "contact_sales": {
+           "type": "string"
+          },
+          "default_action": {
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "additionalProperties": {},
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "pricing_page": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "options",
+          "default_action",
+          "pricing_page",
+          "contact_sales"
+         ],
+         "type": "object"
+        },
+        "requested_value": {},
+        "returned_value": {},
+        "subcode": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "subcode",
+        "limit_type",
+        "current_plan",
+        "remediation"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "payg_override": {
+      "additionalProperties": false,
+      "description": "Set when this single response was paid for via the agent-pay PAYG flow \u2014 the rate-limit / depth-limit checks were bypassed for this call only.",
+      "properties": {
+       "amount_cents": {
+        "type": "number"
+       },
+       "entity_scope_hash": {
+        "type": "string"
+       },
+       "meter": {
+        "type": "string"
+       },
+       "quote_id": {
+        "type": "string"
+       },
+       "retry_token_hash": {
+        "type": "string"
+       },
+       "ticker_count": {
+        "type": "number"
+       },
+       "tool": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "quote_id",
+       "tool",
+       "meter",
+       "amount_cents",
+       "ticker_count",
+       "entity_scope_hash",
+       "retry_token_hash"
+      ],
+      "type": "object"
+     },
+     "pit_safe": {
+      "description": "true iff a zero-look-ahead point-in-time cut was applied to every returned figure",
+      "type": "boolean"
+     },
+     "price_as_of": {
+      "description": "ISO timestamp when the price surfaces were last refreshed.",
+      "type": "string"
+     },
+     "rate_limit": {
+      "additionalProperties": false,
+      "description": "Caller's remaining budget",
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "remaining": {
+        "type": "integer"
+       },
+       "reset_at": {
+        "description": "ISO 8601 timestamp when the window resets",
+        "type": "string"
+       },
+       "window": {
+        "enum": [
+         "minute",
+         "hour"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "limit",
+       "remaining",
+       "reset_at",
+       "window"
+      ],
+      "type": "object"
+     },
+     "request_id": {
+      "description": "Per-request correlation id (8-char)",
+      "type": "string"
+     },
+     "result_count": {
+      "type": "integer"
+     },
+     "schema_version": {
+      "description": "Parquet schema version from manifest.json",
+      "type": "string"
+     },
+     "snapshot": {
+      "description": "Snapshot directory name (e.g. snapshot_20260420)",
+      "type": "string"
+     },
+     "source": {
+      "const": "SEC EDGAR",
+      "type": "string"
+     },
+     "ticker": {
+      "type": "string"
+     },
+     "truncation": {
+      "additionalProperties": false,
+      "description": "Set when fewer rows were returned than requested \u2014 explains why and points to a remedy",
+      "properties": {
+       "current_plan": {
+        "type": "string"
+       },
+       "plan_limit": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "reason": {
+        "enum": [
+         "PLAN_LIMIT",
+         "DATA_NOT_AVAILABLE",
+         "FISCAL_YEAR_BOUNDARY_FILTER",
+         "OTHER"
+        ],
+        "type": "string"
+       },
+       "requested": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "returned": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "upgrade_required_for": {
+        "type": "string"
+       },
+       "upgrade_url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "requested",
+       "returned",
+       "reason"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "data_plan",
+     "schema_version",
+     "snapshot",
+     "last_updated",
+     "source",
+     "pit_safe"
+    ],
+    "type": "object"
+   },
+   "as_of_date": {
+    "description": "Present only when a point-in-time as_of_date was supplied",
+    "type": "string"
+   },
+   "data": {
+    "description": "Ranked factor-score rows for the screened universe",
+    "items": {
+     "additionalProperties": true,
+     "properties": {},
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "lineage": {
+    "additionalProperties": false,
+    "description": "Provenance for pipeline-derived values (ratio.parquet / factor_scores.parquet): source table + pipeline computed_at, plus a pointer to the tools that return filing-level lineage. NOT point-in-time (recomputed on each pipeline run).",
+    "properties": {
+     "computed_at": {
+      "type": "string"
+     },
+     "derivation": {
+      "const": "pipeline_computed",
+      "type": "string"
+     },
+     "note": {
+      "type": "string"
+     },
+     "pit_safe": {
+      "const": false,
+      "type": "boolean"
+     },
+     "source_table": {
+      "type": "string"
+     },
+     "verify_with": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "source_table",
+     "derivation",
+     "pit_safe",
+     "note",
+     "verify_with"
+    ],
+    "type": "object"
+   },
+   "note": {
+    "type": "string"
+   },
+   "pit_safe": {
+    "description": "Present (and true) only when as_of_date was supplied \u2014 the screen was filtered by factor_scores.accepted_at with zero look-ahead",
+    "type": "boolean"
+   },
+   "plan": {
+    "description": "Caller's data plan used to scope the screen",
+    "type": "string"
+   },
+   "results_returned": {
+    "type": "integer"
+   },
+   "sector_filter": {
+    "description": "Present only when a sector filter was applied",
+    "type": "string"
+   },
+   "sort_by": {
+    "type": "string"
+   },
+   "ticker": {
+    "description": "Present only when a single-ticker lookup was requested",
+    "type": "string"
+   },
+   "truncation": {
+    "additionalProperties": false,
+    "description": "Present only when the inline-row cap withheld rows. Page with `next_offset` (keep the same `limit`) or pull the full set via get_compute_ready_stream.",
+    "properties": {
+     "hint": {
+      "type": "string"
+     },
+     "next_offset": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "returned": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "total_available": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "truncated": {
+      "const": true,
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "truncated",
+     "returned",
+     "total_available",
+     "next_offset",
+     "hint"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "_meta",
+   "plan",
+   "sort_by",
+   "results_returned",
+   "data"
+  ],
+  "type": "object"
+ },
+ "title": "Screen Universe by Factor Scores"
+}

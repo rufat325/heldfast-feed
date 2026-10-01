@@ -1,0 +1,263 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Resolve legal citations (e.g., \"410 U.S. 113\", \"93 S. Ct. 705\") to opinion cluster IDs and case metadata. Enables workflows that start from a known citation rather than a search query. CourtListener extracts every citation it finds in the submitted text, so passing a passage returns one entry per citation, each with its own resolution status \u2014 an unresolved or ambiguous citation is reported in the results, not raised as an error. Supports standard US reporter formats. Costs one request against CourtListener's per-citation quota, plus one ordinary request per distinct docket whose court is resolved \u2014 max_court_lookups bounds that second half (default 4, set 0 to skip court resolution entirely). CourtListener meters this endpoint by citations submitted rather than by call, so a long passage spends proportionally more of that quota. Requires authentication \u2014 uses the CourtListener /citation-lookup/ endpoint.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "citation": {
+    "description": "Text to extract citations from \u2014 normally a single citation (e.g., \"410 U.S. 113\", \"347 U.S. 483\", \"93 S. Ct. 705\"), but any passage works and every citation in it is resolved. Supports standard reporter formats. Up to 64000 characters, which is CourtListener's own ceiling; a longer passage is rejected here rather than spending a request to be refused upstream.",
+    "type": "string"
+   },
+   "max_court_lookups": {
+    "default": 4,
+    "description": "How many distinct dockets this call may spend a request on to resolve cluster courts. The lookup itself is metered separately by CourtListener (per citation submitted), so this budget is drawn entirely from the ordinary per-request allowance \u2014 published free tier 5/min, 50/hour, 125/day, varying by token tier. 0 skips court resolution and costs nothing beyond the lookup; 20 is the ceiling. Clusters past the budget come back with court null and court_resolution \"over_budget\".",
+    "maximum": 20,
+    "minimum": 0,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "citation"
+  ],
+  "type": "object"
+ },
+ "name": "courtlistener_lookup_citation",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "matches",
+     "queriedCitation"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `not_found`: CourtListener could not parse any citation out of the submitted text. A citation that parses but matches nothing is a result with status 404, not this error. `rate_limited`: 429 from CourtListener, or no request slot opened within the wait budget. `empty_citation`: citation is empty or whitespace-only after trimming \u2014 no request is sent. `citation_too_long`: citation exceeds the 64000-character ceiling CourtListener accepts \u2014 no request is sent. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "not_found",
+         "rate_limited",
+         "empty_citation",
+         "citation_too_long"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "matches": {
+    "description": "One entry per citation CourtListener extracted from the input, in the order they appear.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One citation found in the submitted text and everything it resolved to.",
+     "properties": {
+      "citation": {
+       "description": "The citation as CourtListener matched it in the submitted text.",
+       "type": "string"
+      },
+      "clusters": {
+       "description": "Cases this citation resolved to \u2014 empty when status is not 200 or 300, and more than one when status is 300.",
+       "items": {
+        "additionalProperties": false,
+        "description": "An opinion cluster this citation resolved to.",
+        "properties": {
+         "case_name": {
+          "description": "Case name; null if not recorded.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "citations": {
+          "description": "All known citation strings for this case.",
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "cite_count": {
+          "description": "Times other opinions cite this case \u2014 a rough authority weight. Null if not recorded.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "cluster_id": {
+          "description": "Opinion cluster ID \u2014 pass to courtlistener_get_opinion. Null when upstream sent no ID.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "court": {
+          "description": "Court display name. The citation-lookup payload carries no court, so this is resolved from the cluster's docket \u2014 one extra request each, capped by max_court_lookups (default 4 distinct dockets per call). Null when that lookup was skipped past the budget, failed, or the cluster has no docket_id; court_resolution says which. Pass docket_id to courtlistener_get_docket, or cluster_id to courtlistener_get_opinion, to resolve one.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "court_id": {
+          "description": "Court identifier for the `court` filter on the search tools (e.g. \"scotus\"); null under the same conditions as `court`.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "court_resolution": {
+          "description": "Why court/court_id are or are not populated: \"resolved\" the docket lookup returned a court; \"no_docket\" the cluster carries no docket_id, so nothing can be resolved; \"lookup_failed\" a request was spent on the docket and it yielded no court; \"over_budget\" no request was spent because max_court_lookups ran out or the walk stopped on a rate limit \u2014 raise max_court_lookups or fetch that docket directly.",
+          "enum": [
+           "resolved",
+           "no_docket",
+           "lookup_failed",
+           "over_budget"
+          ],
+          "type": "string"
+         },
+         "date_filed": {
+          "description": "Date the opinion was filed; null if not recorded.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "docket_id": {
+          "description": "Linked docket \u2014 pass to courtlistener_get_docket. Null if not recorded.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "judges": {
+          "description": "Free-text judge names; null or empty if not recorded.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "precedential_status": {
+          "description": "Publication status (e.g. \"Published\", \"Unpublished\"); null if not recorded.",
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "cluster_id",
+         "case_name",
+         "court",
+         "court_id",
+         "court_resolution",
+         "date_filed",
+         "docket_id",
+         "citations",
+         "cite_count",
+         "precedential_status",
+         "judges"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "error_message": {
+       "description": "CourtListener's explanation when status is not 200; empty string otherwise.",
+       "type": "string"
+      },
+      "normalized_citation": {
+       "description": "Canonical citation form used by CourtListener; null if not resolved.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "status": {
+       "description": "Resolution status for this citation alone: 200 one case, 300 several candidates, 400 unrecognized reporter, 404 no case found, 429 past the per-request citation cap. Not the status of the request, which succeeded.",
+       "type": "number"
+      },
+      "status_label": {
+       "description": "status decoded to a label.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "citation",
+      "normalized_citation",
+      "status",
+      "status_label",
+      "error_message",
+      "clusters"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "notice": {
+    "description": "Caveats on this result: a recovery hint when no citation in the input resolved to a case, and counts of the clusters whose court went unresolved \u2014 split by whether the per-call docket budget ran out or an attempted lookup returned nothing, since only the first is worth retrying with a larger budget. Absent when none applies.",
+    "type": "string"
+   },
+   "queriedCitation": {
+    "description": "The citation string that was looked up.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Lookup Legal Citation"
+}

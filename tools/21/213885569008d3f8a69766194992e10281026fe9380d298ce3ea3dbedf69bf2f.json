@@ -1,0 +1,528 @@
+{
+ "description": "Find the best EV charge points along a route, with the REAL extra travel time of stopping at each one \u2014 never a straight-line guess. Provide `origin` + `destination` (a route is computed) or an existing route's `geometry_polyline6`, plus optional `connectors` (\"ccs\", \"type2\", \"chademo\", \"type1\", \"tesla\", \"domestic\", \"other\"), `min_kw` (e.g. 50 for rapid only), `available_only` and `max_detour_minutes` (default 10). Charge points come from operator-published feeds, are costed through the routing engine with your costing (a `truck` profile makes detours respect dimensional/ADR restrictions) and ranked most powerful first, since minutes off the clock are bought with kilowatts. Each result carries max_power_kw, connector_standards, best_connector, evse_count, detour_minutes/detour_km and, where a live feed backs it, available_now. IMPORTANT: there is no national charge-point registry \u2014 every deployment covers only the operators it has onboarded, so ALWAYS show the returned `coverage_note` alongside the results. An empty `results` means \"none from these operators within the detour budget\", NEVER \"there are no chargers here\". Statuses are live only when availability_live is true; otherwise they are the values captured at the last ingest and must not be described as current. `say` is ALWAYS present and is the whole answer as one short spoken line, composed by the gateway with the coverage already inside the claim rather than appended to it: it scopes its superlative to the operators this deployment holds, and an empty result's line says the emptiness is about those operators. Prefer reading it verbatim to writing your own summary. Requires the MapMap gateway; answers a clear error when the deployment has no charge-point dataset. Display the returned charging_attribution with the results.",
+ "inputSchema": {
+  "$defs": {
+   "CostingKind": {
+    "description": "Costing models exposed by the MCP tools (a deliberate subset of the\nValhalla costing list), serialised in snake_case exactly as Valhalla\nnames them.",
+    "oneOf": [
+     {
+      "const": "auto",
+      "description": "Standard car costing.",
+      "type": "string"
+     },
+     {
+      "const": "truck",
+      "description": "Truck costing; honours dimensional limits and, when a `truck`\nprofile is supplied, ADR dangerous-goods restrictions.",
+      "type": "string"
+     },
+     {
+      "const": "bicycle",
+      "description": "Bicycle costing; tune it with a `bicycle` options object.",
+      "type": "string"
+     },
+     {
+      "const": "pedestrian",
+      "description": "Pedestrian (walking) costing; tune it with a `pedestrian` options\nobject (lit streets, wheelchair/blind, hiking difficulty).",
+      "type": "string"
+     },
+     {
+      "const": "motor_scooter",
+      "description": "Motor scooter (moped) costing: like auto but prefers lower-speed\nroads and may use ways closed to larger motor vehicles.",
+      "type": "string"
+     }
+    ]
+   },
+   "LatLon": {
+    "anyOf": [
+     {
+      "properties": {
+       "lat": {
+        "description": "Latitude in decimal degrees (\u221290 to 90).",
+        "format": "double",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude in decimal degrees (\u2212180 to 180).",
+        "format": "double",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "GeoJSON position [lon, lat]: longitude FIRST.",
+      "items": {
+       "format": "double",
+       "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     }
+    ],
+    "description": "A WGS84 coordinate in decimal degrees: a {lat, lon} object (preferred), or a GeoJSON [lon, lat] array with LONGITUDE FIRST, the same order as every polygon field on this server."
+   },
+   "TruckSpec": {
+    "description": "Truck profile for routing: physical dimensions plus the ADR\ndangerous-goods declaration. Omitted dimensions default to the EU\nmaximum authorised dimensions of Council Directive 96/53/EC (4.0 m\nheight, 2.55 m width, 16.5 m length, 40 t gross weight).",
+    "properties": {
+     "gross_weight_t": {
+      "description": "Gross combination weight in metric tonnes.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "hazmat": {
+      "default": false,
+      "description": "Whether the vehicle carries dangerous goods (ADR). Defaults to\nfalse.",
+      "type": "boolean"
+     },
+     "height_m": {
+      "description": "Vehicle height in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "length_m": {
+      "description": "Vehicle length in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "tunnel_code": {
+      "description": "ADR 8.6.4 tunnel restriction code of the load, e.g. \"B\", \"C5000D\",\n\"B/D\", or \"(\u2014)\"/\"none\" for explicitly unrestricted. Leave unset if\nunknown: a hazmat load without a code is conservatively treated as\ncode B (allowed only through category-A tunnels).",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "width_m": {
+      "description": "Vehicle width in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "available_only": {
+    "description": "Keep only charge points with a bay reported free right now. Needs\nthe deployment to have a live availability feed; without one the\ncall is refused rather than silently returning nothing.",
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "connectors": {
+    "description": "Keep only charge points offering at least one of these connector\nstandards: \"type2\", \"type1\", \"ccs\", \"chademo\", \"tesla\", \"domestic\"\nor \"other\". Omitted \u21d2 every standard.",
+    "items": {
+     "type": "string"
+    },
+    "type": [
+     "array",
+     "null"
+    ]
+   },
+   "costing": {
+    "$ref": "#/$defs/CostingKind",
+    "default": "auto",
+    "description": "Costing model for the route and detour matrix: \"auto\" (default),\n\"truck\", \"bicycle\", \"pedestrian\" or \"motor_scooter\"."
+   },
+   "destination": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/LatLon"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Route destination."
+   },
+   "geometry_polyline6": {
+    "description": "An existing route geometry as an encoded polyline6 (the `route`\ntool's `geometry_polyline6`). Provide either this or `origin` +\n`destination`, not both.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "max_detour_minutes": {
+    "description": "Largest acceptable detour in minutes (default 10, at most 120).",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "max_results": {
+    "description": "Maximum results (default 5, at most 25).",
+    "format": "uint32",
+    "minimum": 0,
+    "type": [
+     "integer",
+     "null"
+    ]
+   },
+   "min_kw": {
+    "description": "Keep only charge points whose best connector is rated at least this\nmany kW (e.g. 50 for rapid charging only).",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "origin": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/LatLon"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Route origin (with `destination`, when no geometry is given)."
+   },
+   "truck": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/TruckSpec"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Truck profile (dimensions + ADR declaration). Requires costing\n\"truck\"; the detours then respect dimensional/ADR restrictions."
+   }
+  },
+  "type": "object"
+ },
+ "name": "cheapest_charging_along_route",
+ "outputSchema": {
+  "$defs": {
+   "ChargerConnector": {
+    "description": "The highest-rated connector at a charge point.",
+    "properties": {
+     "dc": {
+      "description": "Whether this connector delivers DC (rapid) rather than AC.",
+      "type": "boolean"
+     },
+     "power_kw": {
+      "description": "Rated power in kW, where the operator publishes enough to know it.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "power_kw_source": {
+      "description": "\"declared\" when the operator published the rating, \"derived\" when\nit was computed from voltage \u00d7 amperage \u00d7 phases. Never present\nthe two as the same thing to a user.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "standard": {
+      "description": "Normalised standard: \"type2\", \"type1\", \"ccs\", \"chademo\", \"tesla\",\n\"domestic\" or \"other\".",
+      "type": "string"
+     }
+    },
+    "required": [
+     "standard",
+     "dc"
+    ],
+    "type": "object"
+   },
+   "ChargerHit": {
+    "description": "One charge point along the route, with its real engine-computed detour.",
+    "properties": {
+     "along_route_position": {
+      "description": "How far along the route the charge point sits, 0.0\u20131.0.",
+      "format": "double",
+      "type": "number"
+     },
+     "available_now": {
+      "description": "Whether a bay is free right now. Present only where a live\navailability feed backs the claim \u2014 absent means unknown, never\n\"occupied\".",
+      "type": [
+       "boolean",
+       "null"
+      ]
+     },
+     "best_connector": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/ChargerConnector"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The highest-rated connector at the site."
+     },
+     "charger_id": {
+      "description": "Operator-scoped stable id.",
+      "type": "string"
+     },
+     "connector_standards": {
+      "description": "Every distinct connector standard at the site.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "detour_km": {
+      "description": "Extra distance of the detour in kilometres, when the engine\nreported distances.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "detour_minutes": {
+      "description": "Real extra travel time of stopping here, minutes.",
+      "format": "double",
+      "type": "number"
+     },
+     "detour_s": {
+      "description": "The same detour in seconds.",
+      "format": "double",
+      "type": "number"
+     },
+     "evse_count": {
+      "description": "Number of charging positions (EVSEs) at the site.",
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "lat": {
+      "description": "WGS84 latitude in decimal degrees.",
+      "format": "double",
+      "type": "number"
+     },
+     "lon": {
+      "description": "WGS84 longitude in decimal degrees.",
+      "format": "double",
+      "type": "number"
+     },
+     "max_power_kw": {
+      "description": "Highest rated power at the site, kW.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "name": {
+      "description": "Site name, where the operator publishes one.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "off_route_m": {
+      "description": "Straight-line offset from the route geometry, metres.",
+      "format": "double",
+      "type": "number"
+     },
+     "operator": {
+      "description": "Operator display name.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "source": {
+      "description": "Which operator feed this came from.",
+      "type": "string"
+     },
+     "status_live": {
+      "description": "Whether the status came from a live feed rather than the last\ningest.",
+      "type": "boolean"
+     },
+     "updated_at": {
+      "description": "When the operator last updated this record.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "charger_id",
+     "source",
+     "lat",
+     "lon",
+     "connector_standards",
+     "evse_count",
+     "status_live",
+     "detour_minutes",
+     "detour_s",
+     "along_route_position",
+     "off_route_m"
+    ],
+    "type": "object"
+   },
+   "ChargingSource": {
+    "description": "One operator's coverage and licence, as published by the deployment.",
+    "properties": {
+     "chargers": {
+      "description": "How many charge points this operator contributes.",
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "coverage_note": {
+      "description": "Plain-language statement of what this operator's feed does and\ndoes not cover.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "licence": {
+      "description": "Licence or statutory basis of the feed.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "operator": {
+      "description": "Operator display name.",
+      "type": "string"
+     },
+     "source_id": {
+      "description": "Operator id.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "source_id",
+     "operator",
+     "chargers"
+    ],
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "availability_live": {
+    "description": "Whether statuses are live (a bring-your-own availability feed) or\nthe values captured at the last ingest.",
+    "type": "boolean"
+   },
+   "availability_note": {
+    "description": "Plain-language explanation of what the statuses mean here.",
+    "type": "string"
+   },
+   "candidate_cap": {
+    "description": "The matrix fan-out cap in force.",
+    "format": "uint",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "candidates_considered": {
+    "description": "Charge points matching the filters that passed the corridor\npre-filter.",
+    "format": "uint",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "candidates_costed": {
+    "description": "Candidates actually costed through the engine (fan-out capped at\n`candidate_cap`, most powerful kept).",
+    "format": "uint",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "charging_attribution": {
+    "description": "Attribution string for the charge-point operators actually\nreturned \u2014 display it with the results (a licence obligation).",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "costing": {
+    "description": "The costing the detours were computed with.",
+    "type": "string"
+   },
+   "coverage_note": {
+    "description": "**Always present.** What this deployment's charge-point dataset\ndoes and does not cover. An empty `results` means \"none from these\noperators within the budget\" \u2014 never \"there are no chargers here\".\nShow this to the user alongside the results.",
+    "type": "string"
+   },
+   "max_detour_minutes": {
+    "description": "The detour budget applied, minutes.",
+    "format": "double",
+    "type": "number"
+   },
+   "note": {
+    "description": "Why `results` is empty, when it is \u2014 the cause, not a bare list.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "results": {
+    "description": "Charge points within the detour budget, most powerful first\n(power, then detour).",
+    "items": {
+     "$ref": "#/$defs/ChargerHit"
+    },
+    "type": "array"
+   },
+   "route_distance_m": {
+    "description": "Direct origin\u2192destination distance in metres.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "route_duration_s": {
+    "description": "Direct origin\u2192destination travel time in seconds (same estimator\nas the detour legs), when routable.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "route_length_m": {
+    "description": "Length of the route geometry in metres.",
+    "format": "double",
+    "type": "number"
+   },
+   "say": {
+    "description": "**Always present.** The whole answer as one short spoken line,\ncomposed by the gateway. Coverage is inside the claim rather than\nappended to it: the line scopes its superlative to the operators\nthis deployment holds, and an empty result's line says the\nemptiness is about those operators, never about the road. Safe to\nread to a driver verbatim.",
+    "type": "string"
+   },
+   "sources": {
+    "description": "Every operator in the dataset, with its own coverage note and\nlicence. Present even when `results` is empty.",
+    "items": {
+     "$ref": "#/$defs/ChargingSource"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "costing",
+   "route_length_m",
+   "candidates_considered",
+   "candidates_costed",
+   "candidate_cap",
+   "max_detour_minutes",
+   "results",
+   "coverage_note",
+   "sources",
+   "availability_live",
+   "availability_note",
+   "say"
+  ],
+  "type": "object"
+ }
+}

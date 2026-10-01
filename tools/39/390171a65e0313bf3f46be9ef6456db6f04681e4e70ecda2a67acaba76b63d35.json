@@ -1,0 +1,325 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Query an IMF SDMX dataflow by dimension key over a time range. Returns observations with time_period, value, and status, plus the unit, scale, and decimals of each series \u2014 a key resolving to several series carries one entry per series in series_metadata, since unit and scale differ between them. Requires imf_get_database first to obtain the correct key_format and valid dimension codes. Country codes are ISO 3-letter (USA, GBR, DEU \u2014 not US, GB, DE). Key format: dot-separated codes in DSD keyPosition order (e.g. USA.NGDP_RPCH.A for WEO). Every position must carry a code: use + to combine codes (e.g. USA+GBR.NGDP_RPCH.A) and * to match every code at a position (e.g. *.NGDP_RPCH.A for all countries); * stands alone and cannot join a + list. Codes are matched case-insensitively and checked against each dimension's codelist before the query \u2014 an unknown code is rejected with the nearest valid codes. Codelists from imf_get_database enumerate the code universe, not actual coverage \u2014 valid codes can still return no_data if the combination has no series. start_period and end_period must be valid period strings (YYYY, YYYY-SN, YYYY-QN, YYYY-MM, or a calendar-valid YYYY-MM-DD) with start_period no later than end_period; malformed or reversed ranges are rejected. A bound covers the whole period it names, so end_period 2023 includes 2023-M12 and 2023-Q4. last_n_observations keeps each series' last N observations \u2014 1 is each series' latest value, the cheap way to ask many countries for their latest figure. Values are in base units everywhere, staged canvas rows included: scale is the power of ten the IMF publishes a series in (value / 10^scale is the published figure), never a factor still to apply. A response is held to 100,000 serialized characters. With DataCanvas enabled (CANVAS_PROVIDER_TYPE=duckdb), a larger result (multi-country, long time range) spills to it: call imf_dataframe_describe first to inspect staged tables and columns, then imf_dataframe_query for SQL analysis. Without DataCanvas, a larger result returns its earliest observations with truncated=true, and retrieval_guidance names the last period returned and how to narrow the query.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "agency_id": {
+    "description": "Agency ID, e.g. IMF.RES or IMF.STA. Auto-detected from dataflow list when omitted.",
+    "type": "string"
+   },
+   "canvas_id": {
+    "description": "Existing canvas ID to accumulate results into across multiple queries. This selects the destination only; it does not force staging. Use output_mode=\"canvas\" to stage an under-budget result.",
+    "pattern": "^[A-Za-z0-9_-]{10}$",
+    "type": "string"
+   },
+   "dataflow_id": {
+    "description": "Dataflow identifier from imf_list_databases, e.g. WEO, BOP, CPI. Matched case-insensitively; the response echoes the catalog spelling.",
+    "type": "string"
+   },
+   "end_period": {
+    "description": "End of time range (inclusive). Same formats as start_period, and must not be earlier than it. The bound covers the whole period it names, so end_period 2023 admits 2023-M12 and 2023-Q4. Observations after this period are excluded from the result.",
+    "type": "string"
+   },
+   "key": {
+    "description": "Dot-separated dimension codes in DSD keyPosition order. Call imf_get_database to get key_format and valid codes first. Use + to combine codes at one position (e.g. USA+GBR.NGDP_RPCH.A). Use * to match every code at a position \u2014 *.NGDP_RPCH.A returns the indicator for all countries, and CAN.*.A every indicator for Canada. Every position needs a code or a *; an empty segment (USA..A) is rejected. A * stands alone at its position \u2014 combined with other codes (USA+*) it is rejected. Codes are trimmed and matched case-insensitively (usa resolves to USA), and the response echoes the canonical key. A code missing from its dimension's codelist is rejected before the query, naming the nearest valid codes. Country codes are ISO 3-letter: USA not US, GBR not GB, DEU not DE.",
+    "type": "string"
+   },
+   "last_n_observations": {
+    "description": "Keep only each series' last N observations, an integer from 1 to 10,000; 1 returns each series' latest value. Latest is per series: series end at different periods, and a WEO series ends in its projection years (e.g. 2031), so set end_period to stop at a past year. With start_period or end_period, the last N inside that range. A series with fewer than N observations is returned whole. Omit to return every observation.",
+    "maximum": 10000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "output_mode": {
+    "default": "auto",
+    "description": "Result placement. auto returns an under-budget result inline and spills only when needed. canvas explicitly stages the full result, using canvas_id when supplied or allocating a fresh canvas.",
+    "enum": [
+     "auto",
+     "canvas"
+    ],
+    "type": "string"
+   },
+   "start_period": {
+    "description": "Start of time range (inclusive). Accepts any of YYYY (annual), YYYY-SN (semi-annual, e.g. 2023-S1), YYYY-QN (quarterly, e.g. 2023-Q1), YYYY-MM (monthly), or a calendar-valid YYYY-MM-DD (daily), whatever the dataflow's frequency. The bound covers the whole period it names, so start_period 2023 admits 2023-M01 and 2023-Q1. Observations before this period are excluded from the result.",
+    "type": "string"
+   },
+   "version": {
+    "description": "Dataflow version. Auto-detected from dataflow list when omitted.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "dataflow_id",
+   "key"
+  ],
+  "type": "object"
+ },
+ "name": "imf_query_dataset",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "dataflow_id",
+     "key",
+     "observations",
+     "series_attributes",
+     "observation_count",
+     "staged",
+     "truncated",
+     "source"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "canvas_id": {
+    "description": "DataCanvas session ID \u2014 present when staged=true. Pass first to imf_dataframe_describe, then to imf_dataframe_query.",
+    "type": "string"
+   },
+   "dataflow_id": {
+    "description": "Dataflow identifier that was queried, in its catalog spelling, e.g. WEO.",
+    "type": "string"
+   },
+   "end_period": {
+    "description": "Latest period covered; absent when the full available range was used.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `dataflow_not_found`: dataflow_id does not match any known dataflow on api.imf.org. `no_data`: Key is structurally valid but the dataflow holds no series for this code combination, or the dataflow publishes no series at all. `no_data_in_range`: The key returned observations but start_period/end_period excluded every one of them. `key_dimension_mismatch`: Number of dot-separated segments in key does not match the dataflow's DSD dimension count. `empty_key_segment`: A dot-separated position in key is empty or blank, which matches no series upstream. `wildcard_in_code_list`: A key position combines * with other codes in a + list, where the portal ignores the * and returns only the listed codes. `invalid_key_code`: A key code is not in its dimension's codelist, checked before any data request. `invalid_period_format`: start_period or end_period is not one of the recognized period formats. `invalid_period_range`: start_period is later than end_period. `structure_unavailable`: The dataflow structure (DSD) cannot be fetched after the dataflow catalog resolved successfully. `canvas_unavailable`: output_mode=\"canvas\" was requested but DataCanvas is disabled. `response_too_large`: The fixed part of the result \u2014 full series_metadata, plus the retrieval handle when staging \u2014 exceeds the response budget before any observation can be included. `dataflow_list_unavailable`: The dataflow catalog that dataflow_id is resolved against could not be fetched \u2014 fires before the DSD and data lookups are attempted. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "dataflow_not_found",
+         "no_data",
+         "no_data_in_range",
+         "key_dimension_mismatch",
+         "empty_key_segment",
+         "wildcard_in_code_list",
+         "invalid_key_code",
+         "invalid_period_format",
+         "invalid_period_range",
+         "structure_unavailable",
+         "canvas_unavailable",
+         "response_too_large",
+         "dataflow_list_unavailable"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "key": {
+    "description": "Dimension key used in the query, trimmed and with each code in its codelist spelling, e.g. USA.NGDP_RPCH.A.",
+    "type": "string"
+   },
+   "last_n_observations": {
+    "description": "The last_n_observations input, echoed when set: observations holds each series' last N in the range. Absent when every observation was returned.",
+    "type": "number"
+   },
+   "notice": {
+    "description": "Populated when a period bound was set but some observations carry a time_period label the range filter does not recognize. Composes with retrieval_guidance, staged or not, when both apply.",
+    "type": "string"
+   },
+   "observation_count": {
+    "description": "Total observations in the result, after any last_n_observations selection.",
+    "type": "number"
+   },
+   "observations": {
+    "description": "Inline observations, oldest period first. When truncated=true this is the budget-limited time-ascending prefix of the result; observation_count remains the full count.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A single time-series observation.",
+     "properties": {
+      "series_key": {
+       "description": "Dot-separated dimension codes identifying this series, e.g. USA.NGDP_RPCH.A. Matches the single-country equivalent of the query key \u2014 useful when a query covers multiple countries.",
+       "type": "string"
+      },
+      "status": {
+       "description": "Observation status flag exactly as the dataflow publishes it, e.g. T, B, C, or NA; null when the observation carries none. The flags are not a shared vocabulary across dataflows. A null value with no status, or whose only status is the not-available marker NA or n.a. (any letter case), is omitted as padding; a null value with any other status is returned.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "time_period": {
+       "description": "Time label as emitted by the upstream API. Annual: YYYY (e.g. 2023). Semi-annual: YYYY-SN (e.g. 2023-S1). Quarterly: YYYY-QN (e.g. 2023-Q1). Monthly: YYYY-MNN (e.g. 2023-M01, not YYYY-MM). Daily: YYYY-MM-DD (e.g. 2023-01-05). Every one of these is also accepted as a start_period/end_period bound, so a label from this field can be passed straight back in.",
+       "type": "string"
+      },
+      "value": {
+       "description": "Observation value in base units, e.g. 29298025000000 for US GDP of $29.3 trillion; null when missing. The series' scale is already reflected in it: never apply scale to this value.",
+       "type": [
+        "number",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "series_key",
+      "time_period",
+      "value",
+      "status"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "retrieval_guidance": {
+    "description": "Present on every staged result, where it names the imf_dataframe_describe-before-imf_dataframe_query retrieval workflow, and on a result truncated without DataCanvas, where it names the last time_period returned and how to narrow the query for the rest.",
+    "type": "string"
+   },
+   "series_attributes": {
+    "additionalProperties": false,
+    "description": "Attributes of the first series in the result \u2014 the same series as series_metadata[0]. A key with + or * resolves to several series whose scale and unit differ, and this field describes only the first of them: read series_metadata for the rest, and never apply these values to another series_key.",
+    "properties": {
+     "decimals": {
+      "description": "Number of decimal places shown.",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "scale": {
+      "description": "Power of ten the IMF publishes this series in, as the upstream code: \"9\" is billions, \"6\" millions, \"0\" units. Observation values are already in base units, so the published figure is value / 10^scale.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "unit": {
+      "description": "Unit of measure as the upstream code, e.g. PT (percent), USD, XDC (domestic currency), NUM (count). Null when the response carries no unit for the series \u2014 many dataflows publish none.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "unit",
+     "scale",
+     "decimals"
+    ],
+    "type": "object"
+   },
+   "series_metadata": {
+    "description": "Per-series attributes, one entry per distinct series_key in the result. Present only when the query resolved to more than one series; a single-series query carries its values in series_attributes instead. Unit and scale differ across series in one query \u2014 WEO NGDPD is USD published in billions (scale 9) while NGDP_RPCH is PT at scale 0 \u2014 so interpret each series against its own entry.",
+    "items": {
+     "additionalProperties": false,
+     "description": "Unit, scale, and decimals for one series in the result.",
+     "properties": {
+      "decimals": {
+       "description": "Number of decimal places shown for this series.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "scale": {
+       "description": "Power of ten the IMF publishes this series in, as the upstream code: \"9\" is billions, \"0\" units. This series' observation values are already in base units.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "series_key": {
+       "description": "Series these attributes belong to, matching observations[].series_key.",
+       "type": "string"
+      },
+      "unit": {
+       "description": "Unit of measure for this series as the upstream code, e.g. PT (percent), USD, XDC (domestic currency). Null when the response carries none for it.",
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "series_key",
+      "unit",
+      "scale",
+      "decimals"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "source": {
+    "description": "Attribution string required by IMF data terms: \"Source: International Monetary Fund, <dataflow name>, <link>\".",
+    "type": "string"
+   },
+   "staged": {
+    "description": "True when the complete observation set is stored on DataCanvas. canvas_id and table_name are present whenever true.",
+    "type": "boolean"
+   },
+   "start_period": {
+    "description": "Earliest period covered; absent when the full available range was used.",
+    "type": "string"
+   },
+   "table_name": {
+    "description": "DuckDB table name on the canvas \u2014 present when staged=true; reference in SQL via FROM <table_name>.",
+    "type": "string"
+   },
+   "truncated": {
+    "description": "True only when observations is an incomplete preview of observation_count. A result can be staged=true and truncated=false when every observation also fits inline, and staged=false and truncated=true when DataCanvas is not enabled and the full result exceeds the response budget.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Imf Query Dataset"
+}

@@ -1,0 +1,623 @@
+{
+ "description": "Plan a whole electric-vehicle journey, charge stops included. Give `origin` and `destination` (plus optional `waypoints`) and a `vehicle` \u2014 a published profile (\"small_hatch\", \"saloon\", \"suv\", \"van\") and/or inline figures (battery_kwh, mass_kg, drag_area_m2, aux_kw, connectors) \u2014 with `start_soc` (default 0.9), `min_arrival_soc` (default 0.1), `reserve_soc` (default 0.1, the floor the charge must never drop below mid-route), optional `connectors` and `min_kw` filters and `ambient_temperature_c`. Energy comes from a published road-load physics model over the route's own legs; charge times are integrated over the vehicle's charging curve capped by the charge point, NOT energy divided by peak power, which is the single biggest error in naive EV planners. Returns the stops with arrive/depart state of charge, charge time and detour, a per-leg state-of-charge trace, and the journey's driving and charging time. IMPORTANT: when no plan exists \u2014 a charger desert, a connector mismatch, a gap wider than the car's range \u2014 the answer comes back with `feasible: false`, a `reason` and the furthest point on the route the car can actually reach. That is an ANSWER, not an error to retry: report the reason and never describe it as a plan. `gradient_data` says whether elevation was available: \"absent\" means consumption was modelled on the flat and under-reads a hilly route. There is no national charge-point registry, so ALWAYS show the returned `coverage_note` \u2014 an infeasible plan means \"none from these operators\", never \"there are no chargers here\" \u2014 and statuses are current only when `availability_live` is true. Requires the MapMap gateway; answers a clear error when the deployment has no charge-point dataset. Display the returned charging_attribution with the plan.",
+ "inputSchema": {
+  "$defs": {
+   "EvVehicleSpec": {
+    "description": "The vehicle for `plan_ev_route`: one of the published defaults by name,\ninline figures, or a named default with inline figures over it.",
+    "properties": {
+     "aux_kw": {
+      "description": "Auxiliary load in kW \u2014 lights, electronics, cabin conditioning.\nWinter heating is several times the mild-weather default.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "battery_kwh": {
+      "description": "Gross nominal battery capacity, kWh.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "connectors": {
+      "description": "Connectors the vehicle accepts: \"type1\", \"type2\", \"ccs1\", \"ccs2\",\n\"chademo\", \"tesla\", \"gbt\".",
+      "items": {
+       "type": "string"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "drag_area_m2": {
+      "description": "Drag area (drag coefficient \u00d7 frontal area), m\u00b2.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "mass_kg": {
+      "description": "Kerb mass, kg.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "name": {
+      "description": "Display name for the vehicle in the answer.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "profile": {
+      "description": "A published default profile: \"small_hatch\", \"saloon\", \"suv\" or\n\"van\". On its own it selects that vehicle; alongside any inline\nfigure below it is the base the figure overrides.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "usable_fraction": {
+      "description": "Fraction of the gross pack the vehicle will actually use, 0\u20131.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   },
+   "LatLon": {
+    "anyOf": [
+     {
+      "properties": {
+       "lat": {
+        "description": "Latitude in decimal degrees (\u221290 to 90).",
+        "format": "double",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude in decimal degrees (\u2212180 to 180).",
+        "format": "double",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "GeoJSON position [lon, lat]: longitude FIRST.",
+      "items": {
+       "format": "double",
+       "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     }
+    ],
+    "description": "A WGS84 coordinate in decimal degrees: a {lat, lon} object (preferred), or a GeoJSON [lon, lat] array with LONGITUDE FIRST, the same order as every polygon field on this server."
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "ambient_temperature_c": {
+    "description": "Ambient temperature in \u00b0C. Derates traction energy from a published\nstudy; cabin heating belongs in the vehicle's `aux_kw`.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "connectors": {
+    "description": "Keep only charge points offering at least one of these connector\nstandards: \"type2\", \"type1\", \"ccs\", \"chademo\", \"tesla\", \"domestic\",\n\"other\". This narrows the vehicle's own set, never widens it.",
+    "items": {
+     "type": "string"
+    },
+    "type": [
+     "array",
+     "null"
+    ]
+   },
+   "destination": {
+    "$ref": "#/$defs/LatLon",
+    "description": "Where it ends."
+   },
+   "max_detour_minutes": {
+    "description": "How far off the route a charge point may sit, as a detour in\nminutes (default 15, at most 120).",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "min_arrival_soc": {
+    "description": "Lowest acceptable state of charge on arrival (default 0.1).",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "min_kw": {
+    "description": "Keep only charge points with a usable connector rated at least this\nmany kW (e.g. 50 for rapid charging only).",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "origin": {
+    "$ref": "#/$defs/LatLon",
+    "description": "Where the journey starts."
+   },
+   "reserve_soc": {
+    "description": "The floor the state of charge must never fall below mid-route\n(default 0.1). Distinct from the arrival figure.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "start_soc": {
+    "description": "State of charge at the start, 0\u20131 (default 0.9).",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "vehicle": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/EvVehicleSpec"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "The vehicle. Omitted \u21d2 the published \"saloon\" default, and the\nanswer says which vehicle it used."
+   },
+   "waypoints": {
+    "description": "Intermediate points the route must pass through, in order (at most\n8). Charge stops are inserted around them.",
+    "items": {
+     "$ref": "#/$defs/LatLon"
+    },
+    "type": [
+     "array",
+     "null"
+    ]
+   }
+  },
+  "required": [
+   "origin",
+   "destination"
+  ],
+  "type": "object"
+ },
+ "name": "plan_ev_route",
+ "outputSchema": {
+  "$defs": {
+   "EvPlanLeg": {
+    "description": "One driving leg of the plan, with its state-of-charge bookkeeping.",
+    "properties": {
+     "consumed_wh": {
+      "description": "Battery energy the leg spends, Wh.",
+      "format": "double",
+      "type": "number"
+     },
+     "distance_m": {
+      "description": "Engine-computed distance, metres.",
+      "format": "double",
+      "type": "number"
+     },
+     "duration_s": {
+      "description": "Engine-computed driving time, seconds.",
+      "format": "double",
+      "type": "number"
+     },
+     "end_soc": {
+      "description": "State of charge at the end.",
+      "format": "double",
+      "type": "number"
+     },
+     "from": {
+      "description": "Where the leg starts: \"origin\" or a charge point's id.",
+      "type": "string"
+     },
+     "min_soc": {
+      "description": "Lowest state of charge anywhere within the leg.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "regen_wh": {
+      "description": "Battery energy regenerative braking gives back, Wh.",
+      "format": "double",
+      "type": "number"
+     },
+     "start_soc": {
+      "description": "State of charge at the start of the leg.",
+      "format": "double",
+      "type": "number"
+     },
+     "to": {
+      "description": "Where it ends: a charge point's id or \"destination\".",
+      "type": "string"
+     }
+    },
+    "required": [
+     "from",
+     "to",
+     "duration_s",
+     "distance_m",
+     "start_soc",
+     "end_soc",
+     "consumed_wh",
+     "regen_wh"
+    ],
+    "type": "object"
+   },
+   "EvPlanSocPoint": {
+    "description": "One point on the state-of-charge trace.",
+    "properties": {
+     "along_route_position": {
+      "description": "How far along the route this point sits, 0.0\u20131.0.",
+      "format": "double",
+      "type": "number"
+     },
+     "at": {
+      "description": "\"origin\", a charge point's id, or \"destination\".",
+      "type": "string"
+     },
+     "departing_soc": {
+      "description": "State of charge on leaving, at a charge stop.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "soc": {
+      "description": "State of charge on arrival at this point.",
+      "format": "double",
+      "type": "number"
+     }
+    },
+    "required": [
+     "at",
+     "soc",
+     "along_route_position"
+    ],
+    "type": "object"
+   },
+   "EvPlanStop": {
+    "description": "One charge stop in the plan.",
+    "properties": {
+     "along_route_position": {
+      "description": "How far along the route this stop sits, 0.0\u20131.0.",
+      "format": "double",
+      "type": "number"
+     },
+     "arrive_soc": {
+      "description": "State of charge on arrival. Never below the reserve floor.",
+      "format": "double",
+      "type": "number"
+     },
+     "available_now": {
+      "description": "Whether a bay is free right now. Present only where a live\navailability feed backs the claim \u2014 absent means unknown, never\n\"occupied\".",
+      "type": [
+       "boolean",
+       "null"
+      ]
+     },
+     "charge_s": {
+      "description": "Time plugged in, seconds \u2014 integrated over the vehicle's charging\ncurve capped by the charge point, not energy \u00f7 peak power.",
+      "format": "double",
+      "type": "number"
+     },
+     "charger_id": {
+      "description": "Operator-scoped stable id.",
+      "type": "string"
+     },
+     "charger_kw": {
+      "description": "That connector's rated power, kW \u2014 what the charge time was\ncomputed against.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "connector_standard": {
+      "description": "The connector the plan charges on.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "dc": {
+      "description": "Whether the connector delivers DC (rapid) rather than AC.",
+      "type": "boolean"
+     },
+     "depart_soc": {
+      "description": "State of charge on departure.",
+      "format": "double",
+      "type": "number"
+     },
+     "detour_s": {
+      "description": "Extra driving time this stop costs against going straight past it,\nseconds.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "lat": {
+      "description": "WGS84 latitude in decimal degrees.",
+      "format": "double",
+      "type": "number"
+     },
+     "lon": {
+      "description": "WGS84 longitude in decimal degrees.",
+      "format": "double",
+      "type": "number"
+     },
+     "name": {
+      "description": "Site name, where the operator publishes one.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "off_route_m": {
+      "description": "Straight-line offset from the route geometry, metres.",
+      "format": "double",
+      "type": "number"
+     },
+     "operator": {
+      "description": "Operator display name.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "power_kw_source": {
+      "description": "\"declared\" when the operator published the rating, \"derived\" when it\nwas computed from voltage \u00d7 amperage \u00d7 phases. Never present the two\nas the same thing to a user.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "source": {
+      "description": "Which operator feed this came from.",
+      "type": "string"
+     },
+     "status_live": {
+      "description": "Whether the status came from a live feed rather than the last\ningest.",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "charger_id",
+     "source",
+     "lat",
+     "lon",
+     "dc",
+     "arrive_soc",
+     "depart_soc",
+     "charge_s",
+     "along_route_position",
+     "off_route_m",
+     "status_live"
+    ],
+    "type": "object"
+   },
+   "EvPlanSummary": {
+    "description": "The plan at a glance.",
+    "properties": {
+     "arrival_soc": {
+      "description": "State of charge on arrival, when the journey is feasible.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "energy_kwh": {
+      "description": "Net battery energy the journey costs, kWh.",
+      "format": "double",
+      "type": "number"
+     },
+     "start_soc": {
+      "description": "State of charge the journey starts at.",
+      "format": "double",
+      "type": "number"
+     },
+     "stops": {
+      "description": "How many charge stops the plan contains. Zero on a journey the car\nmakes on its own \u2014 and zero on an infeasible one.",
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "total_charge_s": {
+      "description": "Time spent plugged in, seconds.",
+      "format": "double",
+      "type": "number"
+     },
+     "total_distance_m": {
+      "description": "Distance of the planned journey, metres.",
+      "format": "double",
+      "type": "number"
+     },
+     "total_drive_s": {
+      "description": "Time spent driving, seconds.",
+      "format": "double",
+      "type": "number"
+     },
+     "total_duration_s": {
+      "description": "Driving plus charging, seconds \u2014 the number a user cares about.",
+      "format": "double",
+      "type": "number"
+     }
+    },
+    "required": [
+     "stops",
+     "total_drive_s",
+     "total_charge_s",
+     "total_duration_s",
+     "total_distance_m",
+     "start_soc",
+     "energy_kwh"
+    ],
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "availability_live": {
+    "description": "Whether charge-point statuses came from a live availability feed. A\nstatic planner is the default: without a feed, nothing in this\nanswer is a claim about which bays are free right now.",
+    "type": "boolean"
+   },
+   "charging_attribution": {
+    "description": "Attribution string for the charge-point operators actually used \u2014\ndisplay it with the plan (a licence obligation).",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "coverage_note": {
+    "description": "**Always present.** What this deployment's charge-point dataset does\nand does not cover. An infeasible plan means \"none from these\noperators\", never \"there are no chargers here\". Show this alongside\nthe answer.",
+    "type": "string"
+   },
+   "feasible": {
+    "description": "**Whether the journey is possible at all.** False means no plan\nexists \u2014 a charger desert, a connector mismatch, or a gap wider than\nthe car's range. Report the `reason` and the furthest reachable\npoint; never describe an infeasible answer as a plan.",
+    "type": "boolean"
+   },
+   "furthest_reachable_lat": {
+    "description": "Latitude of that furthest reachable point.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "furthest_reachable_lon": {
+    "description": "Longitude of that furthest reachable point.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "furthest_reachable_position": {
+    "description": "How far along the route the vehicle can get unaided, 0.0\u20131.0, when\nno plan exists.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "geometry_polyline6": {
+    "description": "The planned journey's geometry as an encoded polyline6, through the\ncharge stops.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "gradient_data": {
+    "description": "\"complete\", \"partial\" or \"absent\". **\"absent\" means the deployment\nhad no elevation data and consumption was modelled on the flat**,\nwhich under-reads a hilly route. Say so rather than presenting the\nfigure as measured.",
+    "type": "string"
+   },
+   "legs": {
+    "description": "The driving legs, in order.",
+    "items": {
+     "$ref": "#/$defs/EvPlanLeg"
+    },
+    "type": "array"
+   },
+   "profile_source": {
+    "description": "\"default\" when a published profile supplied the figures, \"inline\"\nwhen the caller did.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "reason": {
+    "description": "The same cause in plain language, for the user.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "reason_code": {
+    "description": "Machine token for why no plan exists, when none does:\n\"no_chargers_in_corridor\", \"connector_mismatch\", \"out_of_range\",\n\"dead_end\", \"below_min_kw\", \"chargers_unrated\", \"stop_limit\",\n\"dataset_empty\", \"no_charge_curve\" or \"unroutable\".",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "route_distance_m": {
+    "description": "Distance of the planned route, metres.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "route_duration_s": {
+    "description": "Driving time of the planned route, seconds.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "soc_trace": {
+    "description": "State of charge at every point of the journey.",
+    "items": {
+     "$ref": "#/$defs/EvPlanSocPoint"
+    },
+    "type": "array"
+   },
+   "stops": {
+    "description": "The charge stops, in visit order. Always empty when `feasible` is\nfalse: a journey that cannot be completed has no stop list.",
+    "items": {
+     "$ref": "#/$defs/EvPlanStop"
+    },
+    "type": "array"
+   },
+   "summary": {
+    "$ref": "#/$defs/EvPlanSummary",
+    "description": "The plan at a glance."
+   },
+   "vehicle": {
+    "description": "The vehicle the plan was computed for.",
+    "type": [
+     "string",
+     "null"
+    ]
+   }
+  },
+  "required": [
+   "feasible",
+   "summary",
+   "stops",
+   "legs",
+   "soc_trace",
+   "gradient_data",
+   "coverage_note",
+   "availability_live"
+  ],
+  "type": "object"
+ }
+}

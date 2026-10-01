@@ -1,0 +1,204 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Korean Company Financials (DART)"
+ },
+ "description": "Fetch financial statements of a Korean company from OpenDART (fnlttSinglAcntAll: full single-company statements) and normalize them to standard metrics. Amounts are raw KRW (no scaling); EPS is KRW per share.\n\nNot this tool for: US statements (get_edgar_financials), a KR-vs-US pair on one screen (compare_financials_kr_us), or ranking many companies at once (query_db, which reads the stored table and covers KR/US/TW/JP/EU). This tool requests one Korean company's statements through the DART adapter; results may be reused from a process-local cache for up to 24 hours. When FinBridge's own database already has this exact company/year/report/basis with account-level detail and no newer filing receipt, it answers from the database instead of calling DART (served_from: finbridge_db) \u2014 saved to conserve the shared daily DART quota; a 'statement'/'account_query' filter always goes live since the DB keeps only the top reported rows. data_as_of.generated_at is response creation time, not source retrieval time. Peer comparisons use separately dated database snapshots.\n\nArgs:\n  - corp: Company: Korean name (e.g. '\uc0bc\uc131\uc804\uc790'), 6-digit stock code (e.g. '005930'), or 8-digit DART corp_code (e.g. '00126380')\n  - year: business year 2015-2026 (default: last year). Annual reports are filed ~March of the following year (FY2025 filed 2026-03).\n  - report: 'annual' | 'q1' | 'half' | 'q3' (default 'annual')\n  - fs: 'consolidated' | 'separate' (default 'consolidated'). If consolidated statements do not exist, automatically retries separate and says so in notes.\n  - statement: optional BS/IS/CIS/CF/SCE account-group filter\n  - account_query: optional case-insensitive account name or account_id substring\n  - account_limit: returned account rows, 1-200 (default 40)\n  - as_of: optional YYYY-MM-DD. Adds point_in_time: the version of this period/basis that was public on that day.\n  - response_format: 'markdown' (default, tables) or 'json' (compact)\n\nReturns structured {normalized, accounts}:\n  - normalized: {company:{name,id,ticker}, basis, periods:[{period, fiscal_year, currency:'KRW', metrics:{revenue, gross_profit, operating_income, net_income, eps_diluted, assets, liabilities, equity, cash_and_equivalents, operating_cash_flow}}], notes}. Annual reports include the prior-year comparative as a second period.\n  - accounts: selected reported statement rows with statement, account id/detail, reported order, currency, current and previous amounts.\n  - statement_groups: counts and reported order ranges by BS/IS/CIS/CF/SCE. These are flat DART groups, not an inferred XBRL hierarchy.\n  - sum_checks: known balance-sheet equations with pass/fail/not_tested, operands, currency, tolerance and receipt-number evidence.\n  - preserved_revisions: bounded numeric filing versions for the exact database company, requested period and actual statement basis. Includes provider, metric units, publication-day evidence, latest observation, unknown first-seen state, and explicit comparison uncertainty.\n  - revision_links: original filing <-> amendment filings for this period/basis, linked only by DART report names ([\uae30\uc7ac\uc815\uc815]/[\ucca8\ubd80\uc815\uc815] prefix, same title, one original, later receipt numbers). restated_items lists each metric whose value changed with original_value, amended_value, both receipt numbers, both publication dates and both DART URLs. Exact 1,000^k ratios are flagged as suspected unit errors, not restatements. Unlinkable cases return a reason instead of a guess.\n  - point_in_time (only with as_of): the last preserved version with publication_date <= as_of (no look-ahead; latest-value fallback is never used). status found | uncertain (an amendment public by as_of has no preserved values) | not_yet_filed | original_not_preserved | no_versions | unavailable.\n  - earnings_disclosures (only when stored filings exist for this period): figures the company itself disclosed, next to its periodic-report figures. preliminary_vs_reported = the last \uc601\uc5c5(\uc7a0\uc815)\uc2e4\uc801 filing published on or before the periodic report vs that report's original values (difference, difference_pct, within_rounding = within half the preliminary table's unit; window_ambiguous/scale_suspect assert nothing), with every preliminary version, its amendment link (only when exactly one earlier original exists) and unreadable filings. outlook_vs_reported = single-number items from \uc601\uc5c5\uc2e4\uc801\ub4f1\uc5d0\ub300\ud55c\uc804\ub9dd/\uc7a5\ub798\uc0ac\uc5c5\u318d\uacbd\uc601\uacc4\ud68d for this exact period with achievement_pct = reported \u00f7 disclosed \u00d7 100, or a status explaining why nothing is computed (basis_not_stated, definition_may_differ, period_not_reported_directly \u2026). history = counts of those filings and their amendments since recorded_from. Facts only \u2014 no forecast, estimate or recommendation.\n\nExamples:\n  - {corp: '\uc0bc\uc131\uc804\uc790', year: 2024} -> FY2024+FY2023, revenue ~3.0e14 KRW\n  - {corp: '005930', year: 2025, report: 'q1'} -> Q1 2025 (3-month income-statement figures)\n  - {corp: '010130', year: 2024, as_of: '2025-06-30'} -> FY2024 as known on 2025-06-30 (before the 2026-08-13 amendment)\n\nUse for KR-listed company fundamentals. Don't use for US companies (get_edgar_financials) or for filings text (get_dart_filings).\nErrors: 'no data' (DART status 013) -> try another year/report or fs='separate'; unknown company -> run search_dart_company first.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "account_limit": {
+    "default": 40,
+    "description": "Maximum returned account rows (default 40).",
+    "maximum": 200,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "account_query": {
+    "description": "Optional account name/account_id substring.",
+    "maxLength": 100,
+    "minLength": 1,
+    "type": "string"
+   },
+   "as_of": {
+    "description": "Optional YYYY-MM-DD. Return point_in_time: the preserved version of this period that was public on that day.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   },
+   "corp": {
+    "description": "Company: Korean name (e.g. '\uc0bc\uc131\uc804\uc790'), 6-digit stock code (e.g. '005930'), or 8-digit DART corp_code (e.g. '00126380')",
+    "minLength": 1,
+    "type": "string"
+   },
+   "fs": {
+    "default": "consolidated",
+    "description": "Statement scope: consolidated(\uc5f0\uacb0, CFS) or separate(\ubcc4\ub3c4, OFS). Default consolidated.",
+    "enum": [
+     "consolidated",
+     "separate"
+    ],
+    "type": "string"
+   },
+   "report": {
+    "default": "annual",
+    "description": "Report type: annual(\uc0ac\uc5c5\ubcf4\uace0\uc11c) | q1(1\ubd84\uae30) | half(\ubc18\uae30) | q3(3\ubd84\uae30). Default annual.",
+    "enum": [
+     "annual",
+     "q1",
+     "half",
+     "q3"
+    ],
+    "type": "string"
+   },
+   "response_format": {
+    "default": "markdown",
+    "description": "'markdown' for tables, 'json' for compact machine-readable output",
+    "enum": [
+     "markdown",
+     "json"
+    ],
+    "type": "string"
+   },
+   "statement": {
+    "description": "Optional statement-group filter.",
+    "enum": [
+     "BS",
+     "IS",
+     "CIS",
+     "CF",
+     "SCE"
+    ],
+    "type": "string"
+   },
+   "year": {
+    "default": 2025,
+    "description": "Business year (bsns_year), 2015-2026. Default: last year (2025).",
+    "maximum": 2026,
+    "minimum": 2015,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "corp"
+  ],
+  "type": "object"
+ },
+ "name": "get_dart_financials",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "account_selection": {
+    "additionalProperties": true,
+    "properties": {},
+    "type": "object"
+   },
+   "accounts": {
+    "items": {},
+    "type": "array"
+   },
+   "data_as_of": {
+    "anyOf": [
+     {
+      "additionalProperties": true,
+      "properties": {},
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "disclosed_date": {
+    "$ref": "#/properties/served_from"
+   },
+   "earnings_disclosures": {
+    "additionalProperties": true,
+    "properties": {},
+    "type": "object"
+   },
+   "live_dart_status": {
+    "$ref": "#/properties/served_from"
+   },
+   "normalized": {
+    "additionalProperties": true,
+    "properties": {},
+    "type": "object"
+   },
+   "peer_comparison": {
+    "anyOf": [
+     {
+      "additionalProperties": true,
+      "properties": {},
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "plan_limit": {
+    "additionalProperties": true,
+    "properties": {},
+    "type": "object"
+   },
+   "point_in_time": {
+    "additionalProperties": true,
+    "properties": {},
+    "type": "object"
+   },
+   "preserved_revisions": {
+    "additionalProperties": true,
+    "properties": {},
+    "type": "object"
+   },
+   "receipt_id": {
+    "$ref": "#/properties/served_from"
+   },
+   "receipt_url": {
+    "$ref": "#/properties/served_from"
+   },
+   "revision_links": {
+    "additionalProperties": true,
+    "properties": {},
+    "type": "object"
+   },
+   "served_from": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "statement_groups": {
+    "items": {
+     "additionalProperties": true,
+     "properties": {},
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "stored_as_of": {
+    "$ref": "#/properties/served_from"
+   },
+   "sum_checks": {
+    "items": {
+     "additionalProperties": true,
+     "properties": {},
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "normalized"
+  ],
+  "type": "object"
+ },
+ "title": "Korean Company Financials (DART)"
+}

@@ -1,0 +1,1016 @@
+{
+ "description": "Re-plan a fleet part-way through its shift. Send the day back; nothing is stored. MapMap holds NO dispatch state \u2014 no plan, no vehicle position, no completion log \u2014 so a re-plan is not a delta against something we remember: you pass the ORIGINAL `optimise_routes` problem in full, plus `progress` (per vehicle: `completed_stop_ids` IN THE ORDER SERVED, an optional `current_position`, and `unavailable: true` for a breakdown or an end of hours) and/or `changes` (`cancel_job_ids`, `add_jobs`, `add_shipments`), and get a fresh plan for what is left. That costs bandwidth and buys the absence of a server-side plan that can go stale, leak, or fall out of step with the telematics platform that actually owns the truth \u2014 and it makes a re-plan reproducible: the same body always yields the same answer. Completed stops are LOCKED by construction: they are removed from the problem entirely and each vehicle starts from where it actually is, so the solver cannot move a stop that has already happened \u2014 a guarantee the solver cannot break, rather than a hint it is free to ignore. At least one progress entry or one change is required. Returns the same plan shape as `optimise_routes` for the REMAINING work, plus a `replan` block: the prefix locked per vehicle, where each re-plans from and how that was decided, stops released from a vehicle that can no longer serve them, tasks forced unassigned, and a note for every id that did not resolve. Read that block \u2014 a stop that vanished from the plan is named there rather than left for a dispatcher to notice at four in the afternoon; a cancelled id that matched nothing is reported there too rather than refused. Multi-trip vehicles cannot be re-planned: a completion does not say which trip it belongs to, so a problem whose vehicles declare `reloads` is refused with what to send instead. Billed on the remaining problem, not the original. Requires the MapMap gateway.",
+ "inputSchema": {
+  "$defs": {
+   "CostingKind": {
+    "description": "Costing models exposed by the MCP tools (a deliberate subset of the\nValhalla costing list), serialised in snake_case exactly as Valhalla\nnames them.",
+    "oneOf": [
+     {
+      "const": "auto",
+      "description": "Standard car costing.",
+      "type": "string"
+     },
+     {
+      "const": "truck",
+      "description": "Truck costing; honours dimensional limits and, when a `truck`\nprofile is supplied, ADR dangerous-goods restrictions.",
+      "type": "string"
+     },
+     {
+      "const": "bicycle",
+      "description": "Bicycle costing; tune it with a `bicycle` options object.",
+      "type": "string"
+     },
+     {
+      "const": "pedestrian",
+      "description": "Pedestrian (walking) costing; tune it with a `pedestrian` options\nobject (lit streets, wheelchair/blind, hiking difficulty).",
+      "type": "string"
+     },
+     {
+      "const": "motor_scooter",
+      "description": "Motor scooter (moped) costing: like auto but prefers lower-speed\nroads and may use ways closed to larger motor vehicles.",
+      "type": "string"
+     }
+    ]
+   },
+   "EmissionsFuel": {
+    "description": "What a vehicle burns, in clean-air-zone scheme terms.",
+    "oneOf": [
+     {
+      "const": "petrol",
+      "description": "Petrol, including petrol hybrids (schemes rate a hybrid by its\ncombustion engine's approval).",
+      "type": "string"
+     },
+     {
+      "const": "diesel",
+      "description": "Diesel, including diesel hybrids.",
+      "type": "string"
+     },
+     {
+      "const": "electric",
+      "description": "Battery-electric.",
+      "type": "string"
+     },
+     {
+      "const": "hydrogen",
+      "description": "Hydrogen fuel cell.",
+      "type": "string"
+     },
+     {
+      "const": "gas",
+      "description": "LPG or CNG; rated as petrol by every scheme in the dataset.",
+      "type": "string"
+     }
+    ]
+   },
+   "EmissionsSpec": {
+    "description": "A vehicle's emission declaration, for clean-air / low-emission zone\nassessment.",
+    "properties": {
+     "euro_standard": {
+      "description": "Its Euro emission standard, 1\u20136. Heavy-duty approvals are written\nin Roman numerals (Euro VI); declare Euro VI as `6`. Required for\nany combustion fuel \u2014 without it no zone can be resolved, and a\nhalf-declared vehicle is indistinguishable from an undeclared one.\nOptional only for `electric` or `hydrogen`.",
+      "format": "uint8",
+      "maximum": 255,
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "fuel": {
+      "$ref": "#/$defs/EmissionsFuel",
+      "description": "What it burns."
+     },
+     "vehicle_category": {
+      "$ref": "#/$defs/EmissionsVehicleCategory",
+      "description": "What kind of vehicle this is, in scheme terms."
+     }
+    },
+    "required": [
+     "vehicle_category",
+     "fuel"
+    ],
+    "type": "object"
+   },
+   "EmissionsVehicleCategory": {
+    "description": "What a vehicle is, in clean-air-zone scheme terms.\n\nDeclaring this turns \"charge depends on vehicle emissions\" into an\nanswer. Without it a zone can only be named, never priced.",
+    "oneOf": [
+     {
+      "const": "car",
+      "description": "A private car.",
+      "type": "string"
+     },
+     {
+      "const": "van",
+      "description": "A van or light goods vehicle up to 3.5 tonnes.",
+      "type": "string"
+     },
+     {
+      "const": "minibus",
+      "description": "A minibus (typically 8+ passenger seats, up to 5 tonnes).",
+      "type": "string"
+     },
+     {
+      "const": "hgv",
+      "description": "A heavy goods vehicle over 3.5 tonnes.",
+      "type": "string"
+     },
+     {
+      "const": "bus",
+      "description": "A bus over 5 tonnes.",
+      "type": "string"
+     },
+     {
+      "const": "coach",
+      "description": "A coach over 5 tonnes.",
+      "type": "string"
+     },
+     {
+      "const": "taxi",
+      "description": "A licensed hackney carriage.",
+      "type": "string"
+     },
+     {
+      "const": "phv",
+      "description": "A private hire vehicle.",
+      "type": "string"
+     },
+     {
+      "const": "motorcycle",
+      "description": "A motorcycle, moped or tricycle.",
+      "type": "string"
+     },
+     {
+      "const": "motorhome",
+      "description": "A motor caravan or campervan.",
+      "type": "string"
+     }
+    ]
+   },
+   "LatLon": {
+    "anyOf": [
+     {
+      "properties": {
+       "lat": {
+        "description": "Latitude in decimal degrees (\u221290 to 90).",
+        "format": "double",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude in decimal degrees (\u2212180 to 180).",
+        "format": "double",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "GeoJSON position [lon, lat]: longitude FIRST.",
+      "items": {
+       "format": "double",
+       "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     }
+    ],
+    "description": "A WGS84 coordinate in decimal degrees: a {lat, lon} object (preferred), or a GeoJSON [lon, lat] array with LONGITUDE FIRST, the same order as every polygon field on this server."
+   },
+   "OptimiseJobSpec": {
+    "description": "One single-stop job of an optimisation problem.",
+    "properties": {
+     "delivery": {
+      "description": "Quantities delivered to the job (matches vehicle `capacity`).",
+      "items": {
+       "format": "int64",
+       "type": "integer"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "id": {
+      "description": "Caller-chosen job id, echoed back in steps and `unassigned`.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "location": {
+      "$ref": "#/$defs/LatLon",
+      "description": "Job location."
+     },
+     "pickup": {
+      "description": "Quantities picked up at the job (matches vehicle `capacity`).",
+      "items": {
+       "format": "int64",
+       "type": "integer"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "service_s": {
+      "description": "On-site service time in seconds.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "skills": {
+      "description": "Skills the job requires.",
+      "items": {
+       "format": "uint32",
+       "minimum": 0,
+       "type": "integer"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "time_windows": {
+      "description": "Acceptable `[start, end]` windows in seconds.",
+      "items": {
+       "items": {
+        "format": "int64",
+        "type": "integer"
+       },
+       "type": "array"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "id",
+     "location"
+    ],
+    "type": "object"
+   },
+   "OptimiseShipmentSpec": {
+    "description": "A pickup+delivery pair that must ride the same vehicle, pickup first.",
+    "properties": {
+     "amount": {
+      "description": "Quantities moved (matches vehicle `capacity`).",
+      "items": {
+       "format": "int64",
+       "type": "integer"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "delivery": {
+      "$ref": "#/$defs/OptimiseShipmentStopSpec",
+      "description": "The delivery end."
+     },
+     "pickup": {
+      "$ref": "#/$defs/OptimiseShipmentStopSpec",
+      "description": "The pickup end."
+     },
+     "skills": {
+      "description": "Skills the shipment requires.",
+      "items": {
+       "format": "uint32",
+       "minimum": 0,
+       "type": "integer"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "pickup",
+     "delivery"
+    ],
+    "type": "object"
+   },
+   "OptimiseShipmentStopSpec": {
+    "description": "One end (pickup or delivery) of a shipment.",
+    "properties": {
+     "id": {
+      "description": "Caller-chosen stop id, echoed back in steps and `unassigned`.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "location": {
+      "$ref": "#/$defs/LatLon",
+      "description": "Stop location."
+     },
+     "service_s": {
+      "description": "On-site service time in seconds.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "id",
+     "location"
+    ],
+    "type": "object"
+   },
+   "OptimiseVehicleSpec": {
+    "description": "One vehicle of an optimisation fleet.",
+    "properties": {
+     "capacity": {
+      "description": "Multidimensional capacity (same length as job `delivery`/`pickup`).",
+      "items": {
+       "format": "int64",
+       "type": "integer"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "end": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/LatLon"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "End location; omitted, the route ends at its last stop."
+     },
+     "id": {
+      "description": "Caller-chosen vehicle id, echoed back on its route.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "reloads": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/ReloadsSpec"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Let this vehicle return to a depot, reload and go out again \u2014 the\nwaste-collection tipping round, the van that comes back for a\nsecond wave of parcels."
+     },
+     "skills": {
+      "description": "Skills this vehicle provides.",
+      "items": {
+       "format": "uint32",
+       "minimum": 0,
+       "type": "integer"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "start": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/LatLon"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Start location; at least one of `start`/`end` is required."
+     },
+     "territory_ids": {
+      "description": "Ids of the request's `territories` this vehicle may work in.\nOmitted or empty, the vehicle is UNRESTRICTED and may serve any\ntask, inside a territory or outside every one of them. Listed, the\nvehicle may serve a task only if that task sits inside at least one\nof the named territories.",
+      "items": {
+       "type": "string"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "time_window": {
+      "description": "Working window as `[start, end]` in seconds (any consistent epoch).",
+      "items": {
+       "format": "int64",
+       "type": "integer"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "id"
+    ],
+    "type": "object"
+   },
+   "RelaxSpec": {
+    "description": "What the caller is willing to give up if the first solve leaves work\nunassigned. At least one field is required.",
+    "properties": {
+     "allow_overtime_s": {
+      "description": "Extend every vehicle's shift END by this many seconds. Shift starts\nare never moved earlier \u2014 a driver cannot begin before they begin.",
+      "format": "int64",
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "time_windows_by_s": {
+      "description": "Widen every task time window by this many seconds at EACH end. A\n09:00\u201312:00 window with 1800 becomes 08:30\u201312:30.",
+      "format": "int64",
+      "type": [
+       "integer",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   },
+   "ReloadsSpec": {
+    "description": "A vehicle's multi-trip reload plan.",
+    "properties": {
+     "depot": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/LatLon"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Where the vehicle reloads. Omitted, its own `start` is used (or its\n`end` if it declared only that)."
+     },
+     "max_trips": {
+      "description": "How many trips this vehicle may run in its shift, 2\u20135. A BUDGET,\nnot a prediction: the shift is cut into that many fixed windows\nbefore the solve, so asking for five trips on a shift that supports\nthree shrinks every window to a fifth and can make the whole day\nworse. Ask for the number of trips you actually expect to run.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "reload_time_s": {
+      "description": "Seconds at the depot between trips \u2014 tipping, reloading, the\nweighbridge. Held out of the shift before it is partitioned, so it\nis never accidentally spent driving.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "max_trips"
+    ],
+    "type": "object"
+   },
+   "ReplanChangesSpec": {
+    "description": "What has changed about the work since the plan was made.",
+    "properties": {
+     "add_jobs": {
+      "description": "New single-stop jobs, in exactly the `optimise_routes` job shape.",
+      "items": {
+       "$ref": "#/$defs/OptimiseJobSpec"
+      },
+      "type": "array"
+     },
+     "add_shipments": {
+      "description": "New pickup+delivery pairs, in exactly the `optimise_routes`\nshipment shape.",
+      "items": {
+       "$ref": "#/$defs/OptimiseShipmentSpec"
+      },
+      "type": "array"
+     },
+     "cancel_job_ids": {
+      "description": "Ids of jobs that no longer need doing. A job already reported\ncompleted cannot be cancelled; the response says so rather than\nsilently dropping it.",
+      "items": {
+       "format": "uint64",
+       "minimum": 0,
+       "type": "integer"
+      },
+      "type": "array"
+     }
+    },
+    "type": "object"
+   },
+   "ReplanProgressSpec": {
+    "description": "One vehicle's progress through its shift.",
+    "properties": {
+     "completed_stop_ids": {
+      "description": "Ids of the stops this vehicle has already served, IN THE ORDER IT\nSERVED THEM. Each is a job id or a shipment pickup/delivery id.\nThis is the locked prefix: it already happened, so no re-plan may\nmove it.",
+      "items": {
+       "format": "uint64",
+       "minimum": 0,
+       "type": "integer"
+      },
+      "type": "array"
+     },
+     "current_position": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/LatLon"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Where the vehicle is now; becomes its start for the re-plan.\nOmitted, its last completed stop is used; with neither, its\noriginal start."
+     },
+     "unavailable": {
+      "description": "The vehicle has dropped out of the shift \u2014 breakdown, illness, end\nof hours. It leaves the fleet for the re-plan; what it already\ncompleted stays completed.",
+      "type": [
+       "boolean",
+       "null"
+      ]
+     },
+     "vehicle": {
+      "description": "The vehicle this progress belongs to \u2014 an `id` from `vehicles`.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "vehicle"
+    ],
+    "type": "object"
+   },
+   "TerritorySpec": {
+    "description": "One named territory: a polygon that bounds which vehicle may serve\nwhich stop.",
+    "properties": {
+     "id": {
+      "description": "Caller-chosen id, echoed back and referenced by\n`vehicles[].territory_ids`. Must be unique within the request.",
+      "type": "string"
+     },
+     "polygon": {
+      "description": "The outer ring as GeoJSON `[lon, lat]` positions \u2014 longitude\nFIRST. Closed or open; an unclosed ring is closed for you.",
+      "items": {
+       "items": {
+        "format": "double",
+        "type": "number"
+       },
+       "maxItems": 2,
+       "minItems": 2,
+       "type": "array"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "id",
+     "polygon"
+    ],
+    "type": "object"
+   },
+   "TruckSpec": {
+    "description": "Truck profile for routing: physical dimensions plus the ADR\ndangerous-goods declaration. Omitted dimensions default to the EU\nmaximum authorised dimensions of Council Directive 96/53/EC (4.0 m\nheight, 2.55 m width, 16.5 m length, 40 t gross weight).",
+    "properties": {
+     "gross_weight_t": {
+      "description": "Gross combination weight in metric tonnes.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "hazmat": {
+      "default": false,
+      "description": "Whether the vehicle carries dangerous goods (ADR). Defaults to\nfalse.",
+      "type": "boolean"
+     },
+     "height_m": {
+      "description": "Vehicle height in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "length_m": {
+      "description": "Vehicle length in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "tunnel_code": {
+      "description": "ADR 8.6.4 tunnel restriction code of the load, e.g. \"B\", \"C5000D\",\n\"B/D\", or \"(\u2014)\"/\"none\" for explicitly unrestricted. Leave unset if\nunknown: a hazmat load without a code is conservatively treated as\ncode B (allowed only through category-A tunnels).",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "width_m": {
+      "description": "Vehicle width in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "avoid_zones": {
+    "description": "Keep the optimisation's travel-time matrix out of every zone the\ndeclared vehicle would be charged or banned in. Requires\n`emissions`.",
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "changes": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/ReplanChangesSpec"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Changes to the work itself. Optional, on the same condition."
+   },
+   "costing": {
+    "$ref": "#/$defs/CostingKind",
+    "default": "auto",
+    "description": "Costing model for the travel-time matrix: \"auto\" (default),\n\"truck\", \"bicycle\", \"pedestrian\" or \"motor_scooter\"."
+   },
+   "emissions": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/EmissionsSpec"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "The fleet's emission declaration, for UK clean-air / low-emission\nzone assessment. On its own it annotates: the response's `zones`\nblock names every zone containing one of the problem's own\nlocations and what this vehicle would pay there. With\n`avoid_zones` it also steers the internal travel-time matrix away\nfrom those zones, so the plan itself changes."
+   },
+   "jobs": {
+    "description": "Single-stop jobs (at least one job or shipment overall).",
+    "items": {
+     "$ref": "#/$defs/OptimiseJobSpec"
+    },
+    "type": "array"
+   },
+   "progress": {
+    "description": "Per-vehicle progress. Optional, but at least one progress entry or\none change is required \u2014 a re-plan that reports nothing new is the\noriginal problem.",
+    "items": {
+     "$ref": "#/$defs/ReplanProgressSpec"
+    },
+    "type": "array"
+   },
+   "relax_if_unassigned": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/RelaxSpec"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Re-solve ONCE with these relaxations if the first solve leaves work\nunassigned, and say honestly which plan came back. At most one\nsecond solve, never beyond the caps you state, and the relaxed plan\nis returned only if it assigns MORE work than the first \u2014 giving\naway constraints for nothing is strictly worse than not giving them\naway. Breaks are never widened, nor are capacities, skills,\nterritories or task caps: only time windows move, and only by the\nstated amounts. Bills as two solves when the second one runs."
+   },
+   "shipments": {
+    "description": "Pickup+delivery pairs.",
+    "items": {
+     "$ref": "#/$defs/OptimiseShipmentSpec"
+    },
+    "type": "array"
+   },
+   "territories": {
+    "description": "Fleet territories: named polygons that bound which vehicle may\nserve which stop, referenced by `vehicles[].territory_ids`. These\nare request data \u2014 caller-drawn rounds, validated per call and\nnever stored. Nothing to do with clean-air zones or with the\noffline map packages of the same word.",
+    "items": {
+     "$ref": "#/$defs/TerritorySpec"
+    },
+    "type": [
+     "array",
+     "null"
+    ]
+   },
+   "truck": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/TruckSpec"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Truck profile (dimensions + ADR declaration). Requires costing\n\"truck\"; the travel-time matrix then respects dimensional and\ndangerous-goods restrictions, so the whole plan is truck-legal."
+   },
+   "vehicles": {
+    "description": "The fleet (at least one vehicle, each with a start and/or end).",
+    "items": {
+     "$ref": "#/$defs/OptimiseVehicleSpec"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "vehicles"
+  ],
+  "type": "object"
+ },
+ "name": "replan_routes",
+ "outputSchema": {
+  "$defs": {
+   "LatLon": {
+    "anyOf": [
+     {
+      "properties": {
+       "lat": {
+        "description": "Latitude in decimal degrees (\u221290 to 90).",
+        "format": "double",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude in decimal degrees (\u2212180 to 180).",
+        "format": "double",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "GeoJSON position [lon, lat]: longitude FIRST.",
+      "items": {
+       "format": "double",
+       "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     }
+    ],
+    "description": "A WGS84 coordinate in decimal degrees: a {lat, lon} object (preferred), or a GeoJSON [lon, lat] array with LONGITUDE FIRST, the same order as every polygon field on this server."
+   },
+   "OptimiseSummary": {
+    "description": "Solution summary of the `optimise_routes` tool.",
+    "properties": {
+     "cost": {
+      "description": "Solver cost of the plan (travel seconds under the default model).",
+      "format": "int64",
+      "type": "integer"
+     },
+     "distance_m": {
+      "description": "Total travel distance in metres, when reported.",
+      "format": "int64",
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "duration_s": {
+      "description": "Total travel time in seconds.",
+      "format": "int64",
+      "type": "integer"
+     },
+     "routes": {
+      "description": "Number of vehicle routes in the plan.",
+      "format": "int64",
+      "type": "integer"
+     },
+     "service_s": {
+      "description": "Total service time in seconds.",
+      "format": "int64",
+      "type": "integer"
+     },
+     "unassigned": {
+      "description": "Number of unassigned tasks.",
+      "format": "int64",
+      "type": "integer"
+     },
+     "waiting_time_s": {
+      "description": "Total waiting time in seconds.",
+      "format": "int64",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "cost",
+     "routes",
+     "unassigned",
+     "duration_s",
+     "service_s",
+     "waiting_time_s"
+    ],
+    "type": "object"
+   },
+   "OptimisedRoute": {
+    "description": "One vehicle's optimised route.",
+    "properties": {
+     "distance_m": {
+      "description": "Total travel distance in metres, when reported.",
+      "format": "int64",
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "duration_s": {
+      "description": "Total travel time in seconds.",
+      "format": "int64",
+      "type": "integer"
+     },
+     "service_s": {
+      "description": "Total on-site service time in seconds.",
+      "format": "int64",
+      "type": "integer"
+     },
+     "steps": {
+      "description": "Ordered steps: start, tasks in visit order, end.",
+      "items": {
+       "$ref": "#/$defs/OptimisedStep"
+      },
+      "type": "array"
+     },
+     "vehicle": {
+      "description": "The vehicle id from the request.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "waiting_time_s": {
+      "description": "Total waiting time in seconds.",
+      "format": "int64",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "vehicle",
+     "duration_s",
+     "service_s",
+     "waiting_time_s",
+     "steps"
+    ],
+    "type": "object"
+   },
+   "OptimisedStep": {
+    "description": "One step of an optimised vehicle route.",
+    "properties": {
+     "arrival_s": {
+      "description": "Arrival time in seconds (same epoch as the request's windows).",
+      "format": "int64",
+      "type": "integer"
+     },
+     "duration_s": {
+      "description": "Cumulative travel time when the step begins, in seconds.",
+      "format": "int64",
+      "type": "integer"
+     },
+     "id": {
+      "description": "The job/shipment-stop id, absent on start/end steps.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "load": {
+      "description": "Vehicle load after the step, when reported.",
+      "items": {
+       "format": "int64",
+       "type": "integer"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "location": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/LatLon"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The step's location resolved back to coordinates."
+     },
+     "service_s": {
+      "description": "On-site service time in seconds.",
+      "format": "int64",
+      "type": "integer"
+     },
+     "type": {
+      "description": "Step kind: \"start\", \"job\", \"pickup\", \"delivery\", \"break\" or \"end\".",
+      "type": "string"
+     },
+     "waiting_time_s": {
+      "description": "Waiting time before the step in seconds.",
+      "format": "int64",
+      "type": "integer"
+     }
+    },
+    "required": [
+     "type",
+     "arrival_s",
+     "duration_s",
+     "service_s",
+     "waiting_time_s"
+    ],
+    "type": "object"
+   },
+   "UnassignedTask": {
+    "description": "One unassigned task of an optimisation solution.",
+    "properties": {
+     "id": {
+      "description": "The task id from the request.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "location": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/LatLon"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The task's location, when known."
+     },
+     "type": {
+      "description": "Task kind: \"job\", \"pickup\" or \"delivery\".",
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "type"
+    ],
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "profile": {
+    "description": "The matrix costing profile the plan was computed with (\"auto\",\n\"truck\", \"bicycle\", \"pedestrian\" or \"motor_scooter\").",
+    "type": "string"
+   },
+   "relaxation": {
+    "description": "The relaxation report: the caps requested, whether a second solve\nran, whether ITS plan is the one returned, what was widened, and\nwhat is still unassigned. Present only when `relax_if_unassigned`\nwas declared.\n\nAlways read `second_solve` and `relaxed_plan_used` before telling\nanyone the day fits. A plan produced under relaxation has had\npromises moved, and the block is what says so."
+   },
+   "reloads": {
+    "description": "The multi-trip split: each vehicle's trips, their windows, the\ndepot each returns to, and the stated approximation. Present only\nwhen a vehicle declared `reloads`.\n\nRead the `basis` inside it before quoting arrival times. The trip\nwindows are fixed BEFORE the solve, so a lorry that tips early\ncannot lend the spare time to its next trip: stops can come back\nunassigned that a truly sequential model would have served. The\nplan is feasible, never optimistic \u2014 it cannot put a vehicle in two\nplaces at once \u2014 but it is not optimal. Re-plan after each tip\nthrough `replan_routes` for the tighter answer."
+   },
+   "replan": {
+    "description": "What the re-plan locked and why: the prefix held per vehicle, where\neach vehicle re-plans from and how that was decided, stops released\nfrom a vehicle that could no longer serve them, tasks forced\nunassigned, and a note for every id that did not resolve.\n\nRead it. A stop that vanished from the plan is named here rather\nthan left for the dispatcher to notice at four in the afternoon."
+   },
+   "routes": {
+    "description": "One optimised route per used vehicle.",
+    "items": {
+     "$ref": "#/$defs/OptimisedRoute"
+    },
+    "type": "array"
+   },
+   "summary": {
+    "$ref": "#/$defs/OptimiseSummary",
+    "description": "Solution summary."
+   },
+   "territories": {
+    "description": "How the territories bound the plan: which vehicle was eligible for\nwhat, and any task no eligible vehicle existed for. Present only\nwhen `territories` was declared."
+   },
+   "unassigned": {
+    "description": "Tasks the solver could not assign to any vehicle.",
+    "items": {
+     "$ref": "#/$defs/UnassignedTask"
+    },
+    "type": "array"
+   },
+   "zones": {
+    "description": "Clean-air / low-emission zones touching the problem's own\nlocations, and what the declared vehicle pays in each. Present only\nwhen `emissions` was declared."
+   }
+  },
+  "required": [
+   "profile",
+   "summary",
+   "unassigned",
+   "routes",
+   "replan"
+  ],
+  "type": "object"
+ }
+}

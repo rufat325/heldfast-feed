@@ -1,0 +1,305 @@
+{
+ "_meta": {
+  "com.mongodb/maxRequestPayloadBytes": 52428800,
+  "com.mongodb/transport": "stdio"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "export"
+ },
+ "description": "Export a query or aggregation results in the specified EJSON format.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "collection": {
+    "description": "Collection name",
+    "type": "string"
+   },
+   "connectionId": {
+    "description": "The connection to run the operation against. Use the id returned by one of the connect tools.",
+    "type": "string"
+   },
+   "database": {
+    "description": "Database name",
+    "type": "string"
+   },
+   "exportTarget": {
+    "description": "The export target along with its arguments.",
+    "items": {
+     "oneOf": [
+      {
+       "properties": {
+        "arguments": {
+         "description": "The arguments for 'find' operation.",
+         "properties": {
+          "filter": {
+           "additionalProperties": {},
+           "description": "The query filter, matching the syntax of the query argument of db.collection.find()",
+           "properties": {},
+           "type": "object"
+          },
+          "limit": {
+           "type": "number"
+          },
+          "projection": {
+           "additionalProperties": {},
+           "description": "The projection, matching the syntax of the projection argument of db.collection.find()",
+           "properties": {},
+           "type": "object"
+          },
+          "sort": {
+           "additionalProperties": {
+            "anyOf": [
+             {
+              "const": 1,
+              "type": "number"
+             },
+             {
+              "const": -1,
+              "type": "number"
+             },
+             {
+              "const": "asc",
+              "type": "string"
+             },
+             {
+              "const": "desc",
+              "type": "string"
+             },
+             {
+              "const": "ascending",
+              "type": "string"
+             },
+             {
+              "const": "descending",
+              "type": "string"
+             },
+             {
+              "properties": {
+               "$meta": {
+                "type": "string"
+               }
+              },
+              "required": [
+               "$meta"
+              ],
+              "type": "object"
+             }
+            ],
+            "description": "The sort key and its direction"
+           },
+           "description": "A document, describing the sort order, matching the syntax of the sort argument of cursor.sort(). The keys of the object are the fields to sort on, while the values are the sort directions (1 for ascending, -1 for descending).",
+           "propertyNames": {
+            "type": "string"
+           },
+           "type": "object"
+          }
+         },
+         "type": "object"
+        },
+        "name": {
+         "const": "find",
+         "description": "The literal name 'find' to represent a find cursor as target.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "name",
+        "arguments"
+       ],
+       "type": "object"
+      },
+      {
+       "properties": {
+        "arguments": {
+         "description": "The arguments for 'aggregate' operation.",
+         "properties": {
+          "pipeline": {
+           "description": "An array of aggregation stages to execute.\n\nIf the user has asked for a vector search, `$vectorSearch` **MUST** be the first stage\nof the pipeline (or the first stage of a `$unionWith` sub-pipeline only when explicitly\ncombining unrelated result sets \u2014 for hybrid full-text + vector search, use `$rankFusion`\nor `$scoreFusion` instead, see below).\n\nIf the user has asked for lexical/Atlas search, use `$search` instead of `$text`.\n### Usage Rules for `$vectorSearch`\n- **Index Type Detection:**\n  Use the collection-indexes tool to determine if the target field has a classic vector index (type: 'vector') or an auto-embed index (type: 'autoEmbed').\n- **Classic Vector Search (type: 'vector'):**\n  Use 'queryVector' with embeddings as an array of numbers.\n- **Auto-Embed Vector Search (type: 'autoEmbed'):**\n  Use 'query' - MongoDB automatically generates embeddings at query time. Do NOT use 'queryVector' or 'embeddingParameters' for auto-embed indexes.\n- **Unset embeddings:**\n  Unless the user explicitly requests the embeddings, add an `$unset` stage **at the end of the pipeline** to remove the embedding field and avoid context limits. **The $unset stage in this situation is mandatory**.\n- **Pre-filtering:**\n  If the user requests additional filtering, include filters in `$vectorSearch.filter` only for pre-filter fields in the vector index.\n  NEVER include fields in $vectorSearch.filter that are not part of the vector index.\n- **Post-filtering:**\n  For all remaining filters, add a $match stage after $vectorSearch.\n- If unsure which fields are filterable, use the collection-indexes tool to determine valid prefilter fields.\n- If no requested filters are valid prefilters, omit the filter key from $vectorSearch.\n\n### Usage Rules for `$search`\n- Include the index name, unless you know for a fact there's a default index. If unsure, use the collection-indexes tool to determine the index name.\n- The `$search` stage supports multiple operators, such as 'autocomplete', 'text', 'geoWithin', and others. Choose the appropriate operator based on the user's query. If unsure of the exact syntax, consult the MongoDB Atlas Search documentation, which can be found here: https://www.mongodb.com/docs/atlas/atlas-search/operators-and-collectors/\n\n### Usage Rules for `$rankFusion` and `$scoreFusion` (Hybrid Search)\nUse these stages when the user wants to combine full-text (`$search`) and vector\n(`$vectorSearch`) retrieval into a single fused result set. **Prefer native\nfusion over a `$unionWith` + `$group` workaround** \u2014 the workaround averages\nincompatible score scales and produces wrong rankings.\n\n**Which stage to use:**\n- `$rankFusion` (MongoDB 8.0+) \u2014 Reciprocal Rank Fusion. The recommended default.\n  Normalizes scores across incompatible scales automatically. No score tuning needed.\n- `$scoreFusion` (MongoDB 8.2+) \u2014 Score-based fusion. Use when the user needs explicit\n  per-pipeline weights, score normalisation (sigmoid / minMaxScaler), or a custom\n  combination expression.\n\n**Construction rules:**\n- `$rankFusion` / `$scoreFusion` MUST be the first stage of the top-level pipeline.\n- Sub-pipelines go inside `input.pipelines` as a named map (not an array). Each name\n  must be non-empty, must not start with `$`, and must not contain `.` or null bytes.\n- Allowed stages inside sub-pipelines: `$search`, `$vectorSearch`, `$match`, `$sort`,\n  `$geoNear`, `$skip`, `$limit`. `$project` and `$unset` are NOT allowed inside sub-pipelines.\n- Do field shaping (`$project` / `$unset`) only AFTER the fusion stage, at the root.\n- Both a vectorSearch (or autoEmbed) index AND a search (lexical) index must exist on\n  the collection. Use the collection-indexes tool to confirm both before running a hybrid query.\n- Add a `$limit` stage after the fusion stage to cap the final result set.\n- Add `$unset` at the end to remove embedding fields and avoid context bloat.\n\n### Usage Rules for `$rerank` (Native Reranking)\nUse this stage when the user wants to reorder a set of candidate documents using a cross-encoder reranker model.\n\n**Construction rules:**\n- `$rerank` can be any stage in the pipeline on an Atlas cluster running MongoDB 8.3 or higher.\n- It is recommended to use `$rerank` after a sorted pipeline, e.g. `$search`, `$vectorSearch`, `$rankFusion`, `$scoreFusion`, or [`$match`, `$sort`].\n- $rerank must be enabled via the Native Reranking Project Setting\n- Set `numDocsToRerank` as the number of documents passed into `$rerank`. This will also limit the number of documents returned by `$rerank`\n- Set `path` as a field name or an array of field names that exist in all documents. Use `$match` or `$set` before `$rerank` to validate no fields are missing.\n- Add `$addFields` after `$rerank` to retrieve the reranker score.\n\n**`$rerank` example (recommended default):**\n```javascript\n[\n  {\n    $match: {\n      description: { $exists: true },\n      name: { $exists: true }\n    }\n  },\n  {\n    $sort: {\n      lastUpdated: -1\n    }\n  },\n  {\n    $rerank: {\n      query: {\n        text: \"query text including instructions\"\n      },\n      model: \"rerank-2.5\",\n      numDocsToRerank: 100,\n      path: [\"description\", \"name\"]\n    }\n  },\n  {\n    $addFields: {\n      rerankScore: { $meta: \"score\" }\n    }\n  }\n]\n```\n",
+           "items": {
+            "anyOf": [
+             {
+              "properties": {
+               "$vectorSearch": {
+                "anyOf": [
+                 {
+                  "description": "Classic vector search using 'queryVector'. Use this when the indexed field has a classic vector index (type: 'vector'). Note to LLM: Use the collection-indexes tool to verify the target field has a classic vector index before using 'queryVector'.",
+                  "properties": {
+                   "exact": {
+                    "default": false,
+                    "description": "When true, uses an ENN algorithm, otherwise uses ANN. Using ENN is not compatible with numCandidates, in that case, numCandidates must be left empty.",
+                    "type": "boolean"
+                   },
+                   "filter": {
+                    "additionalProperties": {},
+                    "description": "MQL filter that can only use filter fields from the index definition. Note to LLM: If unsure, use the `collection-indexes` tool to learn which fields can be used for filtering.",
+                    "properties": {},
+                    "type": "object"
+                   },
+                   "index": {
+                    "description": "Name of the index, as retrieved from the `collection-indexes` tool.",
+                    "type": "string"
+                   },
+                   "limit": {
+                    "default": 10,
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                   },
+                   "numCandidates": {
+                    "description": "Number of candidates for the ANN algorithm. Mandatory when exact is false.",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                   },
+                   "path": {
+                    "description": "Field, in dot notation, where to search. There must be a vector search index for that field.",
+                    "type": "string"
+                   },
+                   "queryVector": {
+                    "description": "The vector embeddings to search for when using classic vector search indexes (type: 'vector'). Provide embeddings as an array of numbers. Use this for classic vector indexes. For auto-embed indexes (type: 'autoEmbed'), use 'query' instead.",
+                    "items": {
+                     "type": "number"
+                    },
+                    "type": "array"
+                   }
+                  },
+                  "required": [
+                   "index",
+                   "path",
+                   "queryVector"
+                  ],
+                  "type": "object"
+                 },
+                 {
+                  "description": "Auto-embed vector search using 'query'. Use this when the indexed field has an auto-embed index (type: 'autoEmbed'). Note to LLM: Use the collection-indexes tool to verify the target field has an auto-embed index before using 'query'.",
+                  "properties": {
+                   "exact": {
+                    "default": false,
+                    "description": "When true, uses an ENN algorithm, otherwise uses ANN. Using ENN is not compatible with numCandidates, in that case, numCandidates must be left empty.",
+                    "type": "boolean"
+                   },
+                   "filter": {
+                    "additionalProperties": {},
+                    "description": "MQL filter that can only use filter fields from the index definition. Note to LLM: If unsure, use the `collection-indexes` tool to learn which fields can be used for filtering.",
+                    "properties": {},
+                    "type": "object"
+                   },
+                   "index": {
+                    "description": "Name of the index, as retrieved from the `collection-indexes` tool.",
+                    "type": "string"
+                   },
+                   "limit": {
+                    "default": 10,
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                   },
+                   "model": {
+                    "description": "The embedding model to use for generating embeddings from the query text. If not specified, defaults to the model configured in the auto-embed index definition.",
+                    "enum": [
+                     "voyage-4",
+                     "voyage-4-large",
+                     "voyage-4-lite",
+                     "voyage-code-3"
+                    ],
+                    "type": "string"
+                   },
+                   "numCandidates": {
+                    "description": "Number of candidates for the ANN algorithm. Mandatory when exact is false.",
+                    "exclusiveMinimum": 0,
+                    "maximum": 9007199254740991,
+                    "type": "integer"
+                   },
+                   "path": {
+                    "description": "Field, in dot notation, where to search. There must be a vector search index for that field.",
+                    "type": "string"
+                   },
+                   "query": {
+                    "description": "The query to search for when using auto-embed indexes (type: 'autoEmbed'). MongoDB will automatically generate embeddings for the text at query time. Use this for auto-embed indexes, not 'queryVector'.",
+                    "properties": {
+                     "text": {
+                      "description": "The text query to search for.",
+                      "type": "string"
+                     }
+                    },
+                    "required": [
+                     "text"
+                    ],
+                    "type": "object"
+                   }
+                  },
+                  "required": [
+                   "index",
+                   "path",
+                   "query"
+                  ],
+                  "type": "object"
+                 }
+                ]
+               }
+              },
+              "required": [
+               "$vectorSearch"
+              ],
+              "type": "object"
+             },
+             {
+              "additionalProperties": {},
+              "properties": {},
+              "type": "object"
+             }
+            ]
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "pipeline"
+         ],
+         "type": "object"
+        },
+        "name": {
+         "const": "aggregate",
+         "description": "The literal name 'aggregate' to represent an aggregation cursor as target.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "name",
+        "arguments"
+       ],
+       "type": "object"
+      }
+     ]
+    },
+    "type": "array"
+   },
+   "exportTitle": {
+    "description": "A short description to uniquely identify the export.",
+    "type": "string"
+   },
+   "jsonExportFormat": {
+    "default": "relaxed",
+    "description": "The format to be used when exporting collection data as EJSON with default being relaxed.\nrelaxed: A string format that emphasizes readability and interoperability at the expense of type preservation. That is, conversion from relaxed format to BSON can lose type information.\ncanonical: A string format that emphasizes type preservation at the expense of readability and interoperability. That is, conversion from canonical to BSON will generally preserve type information except in certain specific cases.",
+    "enum": [
+     "relaxed",
+     "canonical"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "connectionId",
+   "database",
+   "collection",
+   "exportTitle",
+   "exportTarget"
+  ],
+  "type": "object"
+ },
+ "name": "export"
+}

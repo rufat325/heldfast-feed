@@ -1,0 +1,552 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false,
+  "title": "Generate DCF Workbook"
+ },
+ "description": "Render a forward DCF result into a professional Excel workbook (Summary + 5\u00d75 Sensitivity heatmap + Inputs sheet). Native conditional formatting \u2014 no chart images needed. Returns a 15-minute presigned R2 download URL.\n\nSERVER-TRUST: the DCF is re-derived in-Worker from the supplied `inputs_echo` (the math is pure + deterministic) and the workbook renders Valuein's recomputed figures \u2014 never the caller's claimed values. If the claimed figures disagree, the workbook is still produced but stamped with a visible correction banner and the response `verification.status` is 'corrected'. A fabricated per-share value can never appear as Valuein-authoritative.\n\nPair with `compute_dcf` for a typical analyst flow: agent calls `compute_dcf({ticker, ...})`, then passes the structured result straight to `generate_dcf_xlsx({ticker, dcf_result, ...})` to materialise a shareable file.\n\nTier: pro+.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "company_name": {
+    "description": "Optional \u2014 surfaces on the cover row. Falls back to ticker only.",
+    "maxLength": 120,
+    "type": "string"
+   },
+   "dcf_result": {
+    "additionalProperties": false,
+    "description": "Structured DCF result \u2014 typically the `result` field returned by `compute_dcf`.",
+    "properties": {
+     "enterprise_value": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "equity_value": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "inputs_echo": {
+      "additionalProperties": false,
+      "properties": {
+       "fcf_base_total_usd": {
+        "type": "number"
+       },
+       "net_debt": {
+        "type": "number"
+       },
+       "shares_outstanding": {
+        "exclusiveMinimum": 0,
+        "type": "number"
+       },
+       "stage1_growth_rate": {
+        "type": "number"
+       },
+       "stage1_years": {
+        "type": "integer"
+       },
+       "terminal_growth_rate": {
+        "type": "number"
+       },
+       "wacc": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "fcf_base_total_usd",
+       "shares_outstanding",
+       "net_debt",
+       "stage1_growth_rate",
+       "wacc",
+       "terminal_growth_rate",
+       "stage1_years"
+      ],
+      "type": "object"
+     },
+     "reason": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "sensitivity_table": {
+      "items": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "terminal_growth_rate": {
+          "type": "number"
+         },
+         "value_per_share_cents": {
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "wacc": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "wacc",
+         "terminal_growth_rate",
+         "value_per_share_cents"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "type": "array"
+     },
+     "terminal_value_pct": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "value_per_share_cents": {
+      "type": [
+       "number",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "value_per_share_cents",
+     "enterprise_value",
+     "equity_value",
+     "terminal_value_pct",
+     "inputs_echo",
+     "sensitivity_table",
+     "reason"
+    ],
+    "type": "object"
+   },
+   "ticker": {
+    "description": "Stock ticker symbol of the company the DCF workbook is built for, e.g. AAPL.",
+    "maxLength": 10,
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "ticker",
+   "dcf_result"
+  ],
+  "type": "object"
+ },
+ "name": "generate_dcf_xlsx",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "_meta": {
+    "additionalProperties": false,
+    "description": "Provenance envelope \u2014 data lineage for every MCP response",
+    "properties": {
+     "as_of_date": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "cost_usd": {
+      "additionalProperties": false,
+      "description": "Per-call cost transparency. Omitted for subscription-only tools that have no PAYG-equivalent price.",
+      "properties": {
+       "amount_usd": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "basis": {
+        "description": "payg_charge = real agent-pay charge. payg_rate_card = indicative price, not billed.",
+        "enum": [
+         "payg_charge",
+         "payg_rate_card"
+        ],
+        "type": "string"
+       },
+       "billed": {
+        "description": "true = this amount was actually charged via PAYG for this call. false = indicative PAYG-equivalent value; your plan already covers this call for free.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "amount_usd",
+       "billed",
+       "basis"
+      ],
+      "type": "object"
+     },
+     "data_plan": {
+      "description": "Access plan: sample | sp500 | pro | full",
+      "type": "string"
+     },
+     "data_quality": {
+      "additionalProperties": false,
+      "description": "Server-side invariants run on this response",
+      "properties": {
+       "notes": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "validation_failed": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "detail": {
+           "type": "string"
+          },
+          "rule": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "rule",
+          "detail"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "validation_passed": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "validation_passed",
+       "validation_failed",
+       "notes"
+      ],
+      "type": "object"
+     },
+     "fundamentals_as_of": {
+      "description": "ISO timestamp when the FINANCIAL STATEMENTS were last rebuilt in bulk. Use THIS \u2014 not `last_updated` \u2014 when telling a user how current the cross-sectional fundamentals are. The snapshot is republished on every weekday price refresh while the statements are carried forward unchanged, so `last_updated` can be far more recent than the numbers it sits next to. It is a floor for a single filer, not a ceiling: a filer with a live partition receives its filing, facts and ratios intraday (minutes after EDGAR dissemination), so an entity-scoped read may carry a filing newer than this; cross-sectional ranks (factor scores, earnings signals) refresh with the weekly bulk export.",
+      "type": "string"
+     },
+     "last_updated": {
+      "description": "ISO timestamp when the snapshot was exported",
+      "type": "string"
+     },
+     "latency_ms": {
+      "description": "Wall-clock milliseconds this tool call took, measured server-side around the handler.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "limit_warnings": {
+      "description": "Soft-warning array for partial fulfillment. Each entry carries a stable subcode + remediation.options[]. AI agents pattern-match on subcode.",
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "code": {
+         "const": "LIMIT_EXCEEDED",
+         "type": "string"
+        },
+        "current_plan": {
+         "type": "string"
+        },
+        "extensions": {
+         "additionalProperties": {},
+         "type": "object"
+        },
+        "limit_type": {
+         "type": "string"
+        },
+        "limit_value": {},
+        "remediation": {
+         "additionalProperties": true,
+         "properties": {
+          "contact_sales": {
+           "type": "string"
+          },
+          "default_action": {
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "additionalProperties": {},
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "pricing_page": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "options",
+          "default_action",
+          "pricing_page",
+          "contact_sales"
+         ],
+         "type": "object"
+        },
+        "requested_value": {},
+        "returned_value": {},
+        "subcode": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "subcode",
+        "limit_type",
+        "current_plan",
+        "remediation"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "payg_override": {
+      "additionalProperties": false,
+      "description": "Set when this single response was paid for via the agent-pay PAYG flow \u2014 the rate-limit / depth-limit checks were bypassed for this call only.",
+      "properties": {
+       "amount_cents": {
+        "type": "number"
+       },
+       "entity_scope_hash": {
+        "type": "string"
+       },
+       "meter": {
+        "type": "string"
+       },
+       "quote_id": {
+        "type": "string"
+       },
+       "retry_token_hash": {
+        "type": "string"
+       },
+       "ticker_count": {
+        "type": "number"
+       },
+       "tool": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "quote_id",
+       "tool",
+       "meter",
+       "amount_cents",
+       "ticker_count",
+       "entity_scope_hash",
+       "retry_token_hash"
+      ],
+      "type": "object"
+     },
+     "pit_safe": {
+      "description": "true iff a zero-look-ahead point-in-time cut was applied to every returned figure",
+      "type": "boolean"
+     },
+     "price_as_of": {
+      "description": "ISO timestamp when the price surfaces were last refreshed.",
+      "type": "string"
+     },
+     "rate_limit": {
+      "additionalProperties": false,
+      "description": "Caller's remaining budget",
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "remaining": {
+        "type": "integer"
+       },
+       "reset_at": {
+        "description": "ISO 8601 timestamp when the window resets",
+        "type": "string"
+       },
+       "window": {
+        "enum": [
+         "minute",
+         "hour"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "limit",
+       "remaining",
+       "reset_at",
+       "window"
+      ],
+      "type": "object"
+     },
+     "request_id": {
+      "description": "Per-request correlation id (8-char)",
+      "type": "string"
+     },
+     "result_count": {
+      "type": "integer"
+     },
+     "schema_version": {
+      "description": "Parquet schema version from manifest.json",
+      "type": "string"
+     },
+     "snapshot": {
+      "description": "Snapshot directory name (e.g. snapshot_20260420)",
+      "type": "string"
+     },
+     "source": {
+      "const": "SEC EDGAR",
+      "type": "string"
+     },
+     "ticker": {
+      "type": "string"
+     },
+     "truncation": {
+      "additionalProperties": false,
+      "description": "Set when fewer rows were returned than requested \u2014 explains why and points to a remedy",
+      "properties": {
+       "current_plan": {
+        "type": "string"
+       },
+       "plan_limit": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "reason": {
+        "enum": [
+         "PLAN_LIMIT",
+         "DATA_NOT_AVAILABLE",
+         "FISCAL_YEAR_BOUNDARY_FILTER",
+         "OTHER"
+        ],
+        "type": "string"
+       },
+       "requested": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "returned": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "upgrade_required_for": {
+        "type": "string"
+       },
+       "upgrade_url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "requested",
+       "returned",
+       "reason"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "data_plan",
+     "schema_version",
+     "snapshot",
+     "last_updated",
+     "source",
+     "pit_safe"
+    ],
+    "type": "object"
+   },
+   "content_type": {
+    "type": "string"
+   },
+   "expires_at": {
+    "type": "string"
+   },
+   "expires_in_seconds": {
+    "type": "integer"
+   },
+   "filename": {
+    "type": "string"
+   },
+   "r2_key": {
+    "type": "string"
+   },
+   "size_bytes": {
+    "type": "integer"
+   },
+   "url": {
+    "type": "string"
+   },
+   "verification": {
+    "additionalProperties": false,
+    "description": "Server-trust record. status='verified' when the caller's figures matched the server re-derivation; 'corrected' when they did not (the workbook shows the SERVER figures + a banner). `mismatches` lists every field that disagreed.",
+    "properties": {
+     "mismatches": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "claimed": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "derived": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "field": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "field",
+        "claimed",
+        "derived"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "note": {
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "verified",
+       "corrected"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "note",
+     "mismatches"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "_meta",
+   "url",
+   "r2_key",
+   "filename",
+   "content_type",
+   "size_bytes",
+   "expires_in_seconds",
+   "expires_at",
+   "verification"
+  ],
+  "type": "object"
+ },
+ "title": "Generate DCF Workbook (xlsx)"
+}

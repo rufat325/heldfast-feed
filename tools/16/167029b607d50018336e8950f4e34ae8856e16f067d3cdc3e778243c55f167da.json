@@ -1,0 +1,645 @@
+{
+ "description": "Turn an itinerary into one navigable multi-stop route. Provide a `start` and `stops` (each a `location` {lat, lon} or a free-text `name` to geocode, plus optional `dwell_minutes` time at the stop), optional `depart_at` (RFC 3339) for absolute ETAs, `optimise: true` to reorder stops for the shortest day (VROOM solver), and `return_to_start`. Costing \"auto\", \"truck\" (with a `truck` profile the whole day respects dimensional/ADR restrictions), \"bicycle\", \"pedestrian\" or \"motor_scooter\". Returns the stops in visit order with per-leg duration/distance and arrival/departure times, totals, and the full route geometry (polyline6). Geocoded names carry a `resolution` \u2014 when `ambiguous` is true, check `alternatives` and re-run with an explicit location rather than trusting the guess.",
+ "inputSchema": {
+  "$defs": {
+   "CostingKind": {
+    "description": "Costing models exposed by the MCP tools (a deliberate subset of the\nValhalla costing list), serialised in snake_case exactly as Valhalla\nnames them.",
+    "oneOf": [
+     {
+      "const": "auto",
+      "description": "Standard car costing.",
+      "type": "string"
+     },
+     {
+      "const": "truck",
+      "description": "Truck costing; honours dimensional limits and, when a `truck`\nprofile is supplied, ADR dangerous-goods restrictions.",
+      "type": "string"
+     },
+     {
+      "const": "bicycle",
+      "description": "Bicycle costing; tune it with a `bicycle` options object.",
+      "type": "string"
+     },
+     {
+      "const": "pedestrian",
+      "description": "Pedestrian (walking) costing; tune it with a `pedestrian` options\nobject (lit streets, wheelchair/blind, hiking difficulty).",
+      "type": "string"
+     },
+     {
+      "const": "motor_scooter",
+      "description": "Motor scooter (moped) costing: like auto but prefers lower-speed\nroads and may use ways closed to larger motor vehicles.",
+      "type": "string"
+     }
+    ]
+   },
+   "LatLon": {
+    "anyOf": [
+     {
+      "properties": {
+       "lat": {
+        "description": "Latitude in decimal degrees (\u221290 to 90).",
+        "format": "double",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude in decimal degrees (\u2212180 to 180).",
+        "format": "double",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "GeoJSON position [lon, lat]: longitude FIRST.",
+      "items": {
+       "format": "double",
+       "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     }
+    ],
+    "description": "A WGS84 coordinate in decimal degrees: a {lat, lon} object (preferred), or a GeoJSON [lon, lat] array with LONGITUDE FIRST, the same order as every polygon field on this server."
+   },
+   "PlanDayStopInput": {
+    "description": "One stop of a `plan_day` itinerary: an exact location, or a free-text\nname to geocode (ambiguous matches are flagged in the response, never\nguessed silently).",
+    "properties": {
+     "dwell_minutes": {
+      "description": "Time spent at the stop in minutes (default 0); shifts every later\nETA.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "location": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/LatLon"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Exact coordinates; skips geocoding."
+     },
+     "name": {
+      "description": "Free-text name or address, geocoded when no `location` is given.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   },
+   "TruckSpec": {
+    "description": "Truck profile for routing: physical dimensions plus the ADR\ndangerous-goods declaration. Omitted dimensions default to the EU\nmaximum authorised dimensions of Council Directive 96/53/EC (4.0 m\nheight, 2.55 m width, 16.5 m length, 40 t gross weight).",
+    "properties": {
+     "gross_weight_t": {
+      "description": "Gross combination weight in metric tonnes.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "hazmat": {
+      "default": false,
+      "description": "Whether the vehicle carries dangerous goods (ADR). Defaults to\nfalse.",
+      "type": "boolean"
+     },
+     "height_m": {
+      "description": "Vehicle height in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "length_m": {
+      "description": "Vehicle length in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "tunnel_code": {
+      "description": "ADR 8.6.4 tunnel restriction code of the load, e.g. \"B\", \"C5000D\",\n\"B/D\", or \"(\u2014)\"/\"none\" for explicitly unrestricted. Leave unset if\nunknown: a hazmat load without a code is conservatively treated as\ncode B (allowed only through category-A tunnels).",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "width_m": {
+      "description": "Vehicle width in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "costing": {
+    "$ref": "#/$defs/CostingKind",
+    "default": "auto",
+    "description": "Costing model: \"auto\" (default), \"truck\", \"bicycle\", \"pedestrian\"\nor \"motor_scooter\"."
+   },
+   "depart_at": {
+    "description": "Departure time as RFC 3339 (e.g. \"2026-07-18T09:00:00Z\"); when\ngiven, every ETA is also returned as an absolute timestamp.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "optimise": {
+    "default": false,
+    "description": "Reorder the stops for the shortest day (VROOM solver; requires the\noptimisation sidecar). Default false: visit in the given order.",
+    "type": "boolean"
+   },
+   "return_to_start": {
+    "default": false,
+    "description": "End the day back at the start (default false).",
+    "type": "boolean"
+   },
+   "start": {
+    "$ref": "#/$defs/PlanDayStopInput",
+    "description": "Where the day starts (name or location; `dwell_minutes` ignored)."
+   },
+   "stops": {
+    "description": "The stops to visit (1\u201320). Visited in the given order unless\n`optimise` is true.",
+    "items": {
+     "$ref": "#/$defs/PlanDayStopInput"
+    },
+    "type": "array"
+   },
+   "truck": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/TruckSpec"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Truck profile (dimensions + ADR declaration). Requires costing\n\"truck\"."
+   }
+  },
+  "required": [
+   "start",
+   "stops"
+  ],
+  "type": "object"
+ },
+ "name": "plan_day",
+ "outputSchema": {
+  "$defs": {
+   "GeocodeHit": {
+    "description": "One geocoding result.",
+    "properties": {
+     "city": {
+      "description": "City or town, when known.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "country": {
+      "description": "Country, when known.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "label": {
+      "description": "Human-readable one-line label assembled from the address parts.",
+      "type": "string"
+     },
+     "lat": {
+      "description": "Latitude in decimal degrees.",
+      "format": "double",
+      "type": "number"
+     },
+     "lon": {
+      "description": "Longitude in decimal degrees.",
+      "format": "double",
+      "type": "number"
+     },
+     "match": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/GeocodeMatch"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "How far this hit can be trusted to be the place that was asked\nfor \u2014 see [`GeocodeMatch`]. Present whenever the MapMap gateway\nanswered; absent on a deployment falling back to the direct Photon\ngeocoder, and absent on the gateway's own fast paths (a pasted\ncoordinate pair, a bare UK outward code, a category browse), which\nanswer without a ranking to report on."
+     },
+     "name": {
+      "description": "Place name, when the source feature has one.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "postcode": {
+      "description": "Postcode, when known.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "type": {
+      "description": "Feature type, e.g. \"house\", \"street\", \"city\" (falls back to the\nOSM value when the endpoint does not classify).",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "label",
+     "lat",
+     "lon"
+    ],
+    "type": "object"
+   },
+   "GeocodeMatch": {
+    "description": "How well one geocoding result answers what was actually asked.\n\nGeocoding's real failure mode is not \"no answer\" but a confident answer\nto a different question: a plausible row on the wrong street, with\nnothing in the response to say so. This object is that missing say-so,\nand an agent should read it before acting on an address.\n\nHow to read it:\n\n* Any component `unmatched` or `inferred` on the TOP hit means the\n  answer does not carry the address that was asked for \u2014 an `unmatched`\n  postcode means the result has no postcode at all, `inferred` means it\n  has a different one. Neither is a match. Say so rather than presenting\n  the hit as the address, and reach for `verify_places` when the address\n  came from a model or a user and needs checking rather than using.\n* A small `score_gap` means the ranking barely chose between this hit\n  and the runner-up, which is exactly when to show the alternatives\n  instead of picking one for the user.",
+    "properties": {
+     "components": {
+      "$ref": "#/$defs/GeocodeMatchComponents",
+      "description": "Per-component verdict on this hit: one entry for each structured\ncomponent supplied, and empty when the query was free text only."
+     },
+     "score_gap": {
+      "description": "The top result's score minus the runner-up's, rounded to 3 decimal\nplaces. `0` for a single result, and `0` from the `photon` source,\nwhich publishes no per-result score \u2014 so a `0` is \"no signal\", not\n\"a tie\".",
+      "format": "double",
+      "type": "number"
+     },
+     "source": {
+      "description": "Which backend answered: \"mapmap-index\" (the first-party index) or\n\"photon\".",
+      "type": "string"
+     }
+    },
+    "required": [
+     "components",
+     "score_gap",
+     "source"
+    ],
+    "type": "object"
+   },
+   "GeocodeMatchComponents": {
+    "description": "Per-component verdicts inside a [`GeocodeMatch`]. Each is one of\n\"matched\", \"inferred\" or \"unmatched\"; a component that was not supplied\nis absent entirely.\n\n* \"matched\" \u2014 the result's own field carries the value asked for (case-\n  and accent-insensitive, and by containment, so `city: \"London\"`\n  matches \"City of London\").\n* \"inferred\" \u2014 the result carries a value for that component, but not\n  the one asked for. It reached the page through ranking, as when a\n  street is found by its transliterated name and displayed under its\n  canonical one.\n* \"unmatched\" \u2014 the result carries no value for that component at all.",
+    "properties": {
+     "city": {
+      "description": "Verdict on the supplied `city`.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "country": {
+      "description": "Verdict on the supplied `country`.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "housenumber": {
+      "description": "Verdict on the supplied `housenumber`.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "postcode": {
+      "description": "Verdict on the supplied `postcode`.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "street": {
+      "description": "Verdict on the supplied `street`.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   },
+   "LatLon": {
+    "anyOf": [
+     {
+      "properties": {
+       "lat": {
+        "description": "Latitude in decimal degrees (\u221290 to 90).",
+        "format": "double",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude in decimal degrees (\u2212180 to 180).",
+        "format": "double",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "GeoJSON position [lon, lat]: longitude FIRST.",
+      "items": {
+       "format": "double",
+       "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     }
+    ],
+    "description": "A WGS84 coordinate in decimal degrees: a {lat, lon} object (preferred), or a GeoJSON [lon, lat] array with LONGITUDE FIRST, the same order as every polygon field on this server."
+   },
+   "PlanStart": {
+    "description": "The day's starting point as resolved.",
+    "properties": {
+     "location": {
+      "$ref": "#/$defs/LatLon",
+      "description": "The start's resolved coordinates."
+     },
+     "name": {
+      "description": "The start's name, when one was given.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "resolution": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/StopResolution"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Geocoding details when the start was given as a name."
+     }
+    },
+    "required": [
+     "location"
+    ],
+    "type": "object"
+   },
+   "PlannedStop": {
+    "description": "One planned stop with its leg and ETAs.",
+    "properties": {
+     "arrival_at": {
+      "description": "Absolute arrival time (RFC 3339), when `depart_at` was given.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "arrival_offset_s": {
+      "description": "Arrival, as seconds after departure from the start.",
+      "format": "double",
+      "type": "number"
+     },
+     "departure_at": {
+      "description": "Absolute departure time (RFC 3339), when `depart_at` was given.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "departure_offset_s": {
+      "description": "Departure (arrival + dwell), as seconds after the day's start.",
+      "format": "double",
+      "type": "number"
+     },
+     "dwell_minutes": {
+      "description": "Dwell time applied at this stop, minutes.",
+      "format": "double",
+      "type": "number"
+     },
+     "input_index": {
+      "description": "Index of this stop in the request's `stops` array (visit order may\ndiffer when optimised).",
+      "format": "uint",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "location": {
+      "$ref": "#/$defs/LatLon",
+      "description": "The stop's resolved coordinates."
+     },
+     "name": {
+      "description": "The stop's name (from the request or the geocoder).",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "resolution": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/StopResolution"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Geocoding details when the stop was given as a name."
+     },
+     "travel_distance_m": {
+      "description": "Distance of the leg arriving at this stop, metres.",
+      "format": "double",
+      "type": "number"
+     },
+     "travel_duration_s": {
+      "description": "Travel time of the leg arriving at this stop, seconds.",
+      "format": "double",
+      "type": "number"
+     }
+    },
+    "required": [
+     "input_index",
+     "location",
+     "dwell_minutes",
+     "travel_duration_s",
+     "travel_distance_m",
+     "arrival_offset_s",
+     "departure_offset_s"
+    ],
+    "type": "object"
+   },
+   "ReturnLeg": {
+    "description": "The return leg of a `return_to_start` plan.",
+    "properties": {
+     "arrival_at": {
+      "description": "Absolute arrival time (RFC 3339), when `depart_at` was given.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "arrival_offset_s": {
+      "description": "Arrival back at the start, seconds after departure.",
+      "format": "double",
+      "type": "number"
+     },
+     "travel_distance_m": {
+      "description": "Distance back to the start, metres.",
+      "format": "double",
+      "type": "number"
+     },
+     "travel_duration_s": {
+      "description": "Travel time back to the start, seconds.",
+      "format": "double",
+      "type": "number"
+     }
+    },
+    "required": [
+     "travel_duration_s",
+     "travel_distance_m",
+     "arrival_offset_s"
+    ],
+    "type": "object"
+   },
+   "StopResolution": {
+    "description": "How a free-text stop name was resolved to coordinates.",
+    "properties": {
+     "alternatives": {
+      "description": "Up to three alternative matches, best first.",
+      "items": {
+       "$ref": "#/$defs/GeocodeHit"
+      },
+      "type": "array"
+     },
+     "ambiguous": {
+      "description": "True when other plausible matches exist somewhere else \u2014 check\n`alternatives` and re-run with an explicit `location` if the\nchosen one is wrong.",
+      "type": "boolean"
+     },
+     "chosen": {
+      "$ref": "#/$defs/GeocodeHit",
+      "description": "The chosen match (best geocoder hit)."
+     },
+     "query": {
+      "description": "The name that was geocoded.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "query",
+     "chosen",
+     "ambiguous",
+     "alternatives"
+    ],
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "costing": {
+    "description": "The costing the plan was routed with.",
+    "type": "string"
+   },
+   "depart_at": {
+    "description": "The departure time echoed back, when one was given.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "finish_at": {
+    "description": "Absolute end of the day (RFC 3339), when `depart_at` was given.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "finish_offset_s": {
+    "description": "End of the day (last arrival + dwell), seconds after departure.",
+    "format": "double",
+    "type": "number"
+   },
+   "geometry_polyline6": {
+    "description": "Full multi-stop route geometry (polyline6) \u2014 hand it to the map SDK\nor the `route` tool consumers directly.",
+    "type": "string"
+   },
+   "optimised": {
+    "description": "Whether the stop order was optimised (VROOM) or kept as given.",
+    "type": "boolean"
+   },
+   "return_leg": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/ReturnLeg"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "The leg back to the start, when `return_to_start` was set."
+   },
+   "start": {
+    "$ref": "#/$defs/PlanStart",
+    "description": "The day's starting point."
+   },
+   "stops": {
+    "description": "The stops in visit order, each with leg, ETAs and any geocoding\nresolution to double-check.",
+    "items": {
+     "$ref": "#/$defs/PlannedStop"
+    },
+    "type": "array"
+   },
+   "summary": {
+    "description": "One-line human-readable summary of the day.",
+    "type": "string"
+   },
+   "total_distance_m": {
+    "description": "Total travel distance, metres.",
+    "format": "double",
+    "type": "number"
+   },
+   "total_dwell_s": {
+    "description": "Total time at stops, seconds.",
+    "format": "double",
+    "type": "number"
+   },
+   "total_travel_duration_s": {
+    "description": "Total driving/travel time, seconds.",
+    "format": "double",
+    "type": "number"
+   }
+  },
+  "required": [
+   "costing",
+   "optimised",
+   "start",
+   "stops",
+   "total_travel_duration_s",
+   "total_dwell_s",
+   "total_distance_m",
+   "finish_offset_s",
+   "geometry_polyline6",
+   "summary"
+  ],
+  "type": "object"
+ }
+}

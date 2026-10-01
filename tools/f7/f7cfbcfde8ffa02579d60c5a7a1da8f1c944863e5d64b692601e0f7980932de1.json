@@ -1,0 +1,260 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Search SEC filings"
+ },
+ "description": "Search SEC filings (10-K, 10-Q, 8-K, registration statements/prospectuses and press exhibits; S&P 500 coverage, ~10 years) with hybrid semantic + keyword retrieval. TWO MODES. Search mode (pass `query`): results ranked by relevance, highest first. FETCH MODE (omit `query`): no ranking at all \u2014 pass an issuer plus any of form_type / fiscal_year / accession_number / section and get that filing's sections back in filing-date-desc then document order, in tens of milliseconds. Use fetch when you already know WHICH document you want and only need its text. ALWAYS pass `issuer` (ticker, cik or company_name) \u2014 the company the question is about \u2014 plus `fiscal_year` and/or `form_type` when you know them. Scoped calls are fast and precise. A call with no issuer runs as scope=cross_company: slower, ranked by relevance only, and the response sets `quality_caveat` \u2014 check for that field. Use scope=cross_company deliberately only for questions that are genuinely about many companies (\"which filers name NVIDIA as a supplier\"). Built for agents: every hit is a ready-to-cite payload \u2014 exact filing-section text, form type, filing date, accession-numbered citation, source URL and a 0-1 confidence score \u2014 no HTML parsing, no EDGAR pagination. Use for revenue/segment figures, risk factors, M&A and contract terms, customer/supplier concentration, and any claim that must trace to a primary source. Coverage is NOT US-only: Sweden/Bolagsverket, Japan/EDINET, Korea/DART annual reports are included. Those issuers have no US ticker \u2014 pass `issuer.company_name` (e.g. \"Sivers Semiconductors\", \"Samsung Electronics\", \"Ajinomoto\") or scope a whole market with `jurisdiction` ([\"SE\"], [\"JP\"], [\"KR\"]).",
+ "inputSchema": {
+  "properties": {
+   "accession_number": {
+    "description": "Exact SEC accession number. When set, retrieval is hard-scoped to that filing.",
+    "pattern": "^\\d{10}-\\d{2}-\\d{6}$",
+    "type": "string"
+   },
+   "cik": {
+    "description": "Exact SEC CIK values to scope retrieval. Values are normalized to 10 digits.",
+    "items": {
+     "pattern": "^\\d{1,10}$",
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "domain": {
+    "default": "auto",
+    "description": "public_equity = single-company filing search; supply_chain = cross-company supplier/customer relationship evidence; auto (default) = detect from the query.",
+    "enum": [
+     "public_equity",
+     "supply_chain",
+     "auto"
+    ],
+    "type": "string"
+   },
+   "exclude_form_type": {
+    "description": "Exclude filing forms. Company searches already suppress fund/proxy forms by default.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "fields": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "fiscal_year": {
+    "description": "Issuer's fiscal year as the company labels it (NVIDIA FY2027 = year ending Jan 2027). Resolved from XBRL DEI fiscal-year focus where available, else from the issuer's fiscal year-end; an empty year widens \u00b11 with a caveat.",
+    "oneOf": [
+     {
+      "maximum": 2100,
+      "minimum": 1990,
+      "type": "integer"
+     },
+     {
+      "items": {
+       "maximum": 2100,
+       "minimum": 1990,
+       "type": "integer"
+      },
+      "maxItems": 10,
+      "minItems": 1,
+      "type": "array"
+     }
+    ]
+   },
+   "form_type": {
+    "description": "Only return these filing forms, for example [\"20-F\"] or [\"6-K\"].",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "issuer": {
+    "description": "The company the question is about. Pass at least one of ticker (e.g. \"NVDA\"), cik (e.g. \"1045810\"), or company_name (required for non-US issuers, which have no US ticker). Scopes retrieval to that filer: fast and precise. Strongly recommended on every call, and REQUIRED in fetch mode.",
+    "properties": {
+     "cik": {
+      "description": "SEC CIK, any padding.",
+      "pattern": "^(CIK\\s*)?\\d{1,10}$",
+      "type": "string"
+     },
+     "company_name": {
+      "description": "Legal or common company name; the route for non-US issuers.",
+      "type": "string"
+     },
+     "ticker": {
+      "description": "US ticker symbol.",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "jurisdiction": {
+    "description": "Scope to non-US issuer jurisdictions (ISO-3166 alpha-2): \"SE\" (Sweden/Bolagsverket), \"JP\" (Japan/EDINET), \"KR\" (Korea/DART). These carry no US ticker and are otherwise buried by SEC-centric ranking. US filings have an empty jurisdiction tag, so this filter is for non-US scoping only \u2014 omit it to include US (the default). A named non-US issuer surfaces even without this filter, via the company-name anchor.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "limit": {
+    "default": 10,
+    "maximum": 50,
+    "type": "number"
+   },
+   "prefer_recent": {
+    "description": "Prefer newer filings when relevance scores are close. Automatically enabled for latest/current/guidance queries.",
+    "type": "boolean"
+   },
+   "profile": {
+    "default": "hybrid",
+    "description": "Retrieval profile. `hybrid` (default) ranks by the engine's own fused score (saturated lexical + vector cosine), highest first. `bm25` is the lexical-only fallback. `hybrid_rerank` and `hybrid_rerank_tickerprior` are accepted as aliases of `hybrid` for one release \u2014 the cross-encoder they named was removed on 2026-09-11.",
+    "enum": [
+     "bm25",
+     "hybrid",
+     "hybrid_rerank",
+     "hybrid_rerank_tickerprior"
+    ],
+    "type": "string"
+   },
+   "query": {
+    "description": "Natural language search query. OMIT IT for fetch mode: with no query nothing is embedded or scored and the matching sections come back in filing-date-desc then document order. Fetch mode requires an identifier (issuer.ticker / issuer.cik / issuer.company_name / cik[] / accession_number) \u2014 a query-less call without one is rejected.",
+    "type": "string"
+   },
+   "return_format": {
+    "default": "section",
+    "description": "Response shape. 'section' (default) returns the full SEC section the matching chunk belongs to. 'chunk' returns the matching window only. 'both' returns both.",
+    "enum": [
+     "section",
+     "chunk",
+     "both"
+    ],
+    "type": "string"
+   },
+   "scope": {
+    "default": "issuer",
+    "description": "issuer (default): results limited to the resolved company. cross_company: search all filers \u2014 for questions like \"who names NVIDIA as a supplier\". Cross-company results are slower, relevance-ranked only, and always carry `quality_caveat`.",
+    "enum": [
+     "issuer",
+     "cross_company"
+    ],
+    "type": "string"
+   },
+   "section": {
+    "description": "Filing section(s), matched case-insensitively as a substring of the stored label \u2014 \"Item 1A\" matches \"Item 1A. Risk Factors\". In fetch mode this is how you ask for one part of a filing.",
+    "oneOf": [
+     {
+      "type": "string"
+     },
+     {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 20,
+      "type": "array"
+     }
+    ]
+   }
+  },
+  "required": [],
+  "type": "object"
+ },
+ "name": "financial_search",
+ "outputSchema": {
+  "properties": {
+   "domain": {
+    "enum": [
+     "public_equity",
+     "supply_chain",
+     "auto"
+    ],
+    "type": "string"
+   },
+   "latency_ms": {
+    "type": "integer"
+   },
+   "mode": {
+    "description": "\"search\" = ranked by relevance. \"fetch\" = no ranking; sections listed in filing-date-desc then document order, and `total` is the number of matching chunks.",
+    "enum": [
+     "search",
+     "fetch"
+    ],
+    "type": "string"
+   },
+   "quality_caveat": {
+    "description": "Present when the result is not issuer-precise. Read it before trusting cross-company results.",
+    "type": "string"
+   },
+   "query": {
+    "type": "string"
+   },
+   "results": {
+    "items": {
+     "properties": {
+      "as_of_date": {
+       "type": "string"
+      },
+      "citation": {
+       "description": "Accession-numbered citation.",
+       "type": "string"
+      },
+      "confidence": {
+       "maximum": 1,
+       "minimum": 0,
+       "type": "number"
+      },
+      "id": {
+       "type": "string"
+      },
+      "metadata": {
+       "type": "object"
+      },
+      "source": {
+       "type": "string"
+      },
+      "text": {
+       "description": "Exact filing-section (or chunk) text.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "id",
+      "text",
+      "source"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "scope": {
+    "description": "Effective scope after issuer resolution.",
+    "enum": [
+     "issuer",
+     "cross_company"
+    ],
+    "type": "string"
+   },
+   "source": {
+    "type": "string"
+   },
+   "total": {
+    "type": "integer"
+   }
+  },
+  "required": [
+   "query",
+   "mode",
+   "domain",
+   "results",
+   "total",
+   "source",
+   "latency_ms"
+  ],
+  "type": "object"
+ },
+ "x_aether_auth": {
+  "kind": "account_required",
+  "reason": "live SEC search consumes Aether API quota"
+ }
+}

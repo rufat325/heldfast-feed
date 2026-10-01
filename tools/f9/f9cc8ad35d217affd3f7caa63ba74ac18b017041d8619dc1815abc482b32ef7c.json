@@ -1,0 +1,345 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Database advisor (DBA lints)"
+ },
+ "description": "Rolled-up DBA lint pass. One call returns four categories of findings:\n- sequence_exhaustion: SERIAL / BIGSERIAL / IDENTITY sequences whose `last_value` is above `seqExhaustionThreshold` of `max_value`. The classic incident class.\n- wraparound_risk: transaction-ID AND multixact wraparound pressure, the classic pageable incident. `{autovacuum_freeze_max_age, autovacuum_multixact_freeze_max_age, databases[], tables[]}`. Those two cluster GUCs are the divisors both lists are measured against (null if unreadable). Multixact IDs are a SEPARATE 32-bit counter, consumed by row-level locking (`SELECT ... FOR SHARE/UPDATE`, FK checks), so a lock-heavy workload can exhaust them while relfrozenxid stays perfectly healthy -- both counters are checked here. `databases` rows: `{database, xid_age (age(datfrozenxid)), mxid_age (mxid_age(datminmxid)), pct_of_freeze_max_age, pct_of_multixact_freeze_max_age, triggered_by}` -- template databases included, since template0 ages like any other and the cluster horizon is the minimum across all of them. `tables` rows: `{schema, table, relkind, xid_age (age(relfrozenxid)), freeze_max_age, pct_of_freeze_max_age, mxid_age (mxid_age(relminmxid)), multixact_freeze_max_age, pct_of_multixact_freeze_max_age, triggered_by}`, where `freeze_max_age` / `multixact_freeze_max_age` are the EFFECTIVE limits -- a per-table `autovacuum_freeze_max_age` / `autovacuum_multixact_freeze_max_age` storage parameter wins over the GUC. A row is returned when EITHER ratio is at or above `wraparoundThreshold`, and `triggered_by` ('xid' | 'multixact' | 'both') says which one did it: 'xid' means chase freezing/autovacuum, 'multixact' means chase the lock-heavy workload burning members. `mxid_age` and `pct_of_multixact_freeze_max_age` are null on rows whose minmxid is InvalidMultiXactId (no multixact ever recorded); such rows can only be xid-triggered. At pct_of_freeze_max_age 1.0 autovacuum forces an anti-wraparound VACUUM, and near 2.1 billion xids (or 4.2 billion multixacts) the server stops accepting writes. `tables` deliberately includes pg_catalog and pg_toast relations -- the culprit is more often a TOAST table or a system catalog than a user table. On PG18+ table rows also carry `pages` / `all_frozen_pages` / `frozen_page_fraction` from `pg_class.relallfrozen` (visibility-map freeze coverage); those three keys are ABSENT on older servers rather than null.\n- tables_without_primary_key: user tables (plain and partitioned) with no PK defined. Bloat candidates and a sign of design drift; some replication setups also need PKs. Foreign tables are excluded -- PostgreSQL forbids declaring PKs on foreign tables.\n- public_tables_without_rls: tables in `public` (or any schema in `rlsSchemas`) with row-level security disabled. Useful as a security baseline check.\nAny category whose query fails (permission-gated catalogs on managed providers) appends to `_warnings` and returns empty; the other categories still return.\nUse this as the 'what should I be looking at?' starting point, then drill into `pg_unused_indexes`, `pg_table_bloat`, `pg_seq_scan_tables` for the perf side.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "limit": {
+    "default": 50,
+    "description": "Max rows per category (default 50).",
+    "maximum": 500,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "rlsSchemas": {
+    "default": [
+     "public"
+    ],
+    "description": "Schemas where RLS-missing should be flagged. Defaults to ['public'].",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "seqExhaustionThreshold": {
+    "default": 0.5,
+    "description": "Minimum used-fraction (last_value / max_value) to flag a sequence (default 0.5 = 50%).",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "wraparoundThreshold": {
+    "default": 0.5,
+    "description": "Minimum used-fraction to flag a database or table for wraparound risk (default 0.5 = 50%). Applied to BOTH ratios -- age(frozenxid) / autovacuum_freeze_max_age and mxid_age(minmxid) / autovacuum_multixact_freeze_max_age -- and a row is flagged if either one clears it. 1.0 is where autovacuum starts forcing anti-wraparound VACUUMs.",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "name": "pg_advisor",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "_warnings": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "public_tables_without_rls": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "schema": {
+       "type": "string"
+      },
+      "table": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "schema",
+      "table"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "sequence_exhaustion": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "last_value": {
+       "description": "Bigint as a decimal string.",
+       "type": "string"
+      },
+      "max_value": {
+       "description": "Bigint as a decimal string.",
+       "type": "string"
+      },
+      "pct_used": {
+       "description": "last_value / max_value, rounded for display. The FILTER runs at full precision, so a displayed 0.5000 can sit just above the threshold.",
+       "type": "number"
+      },
+      "schema": {
+       "type": "string"
+      },
+      "sequence": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "schema",
+      "sequence",
+      "last_value",
+      "max_value",
+      "pct_used"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "tables_without_primary_key": {
+    "description": "Plain and partitioned tables only; foreign tables cannot have a PK and are excluded.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "schema": {
+       "type": "string"
+      },
+      "table": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "schema",
+      "table"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "wraparound_risk": {
+    "additionalProperties": false,
+    "properties": {
+     "autovacuum_freeze_max_age": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Cluster GUC; the divisor for the xid ratios."
+     },
+     "autovacuum_multixact_freeze_max_age": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Cluster GUC; the divisor for the multixact ratios."
+     },
+     "databases": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "database": {
+         "description": "Template databases included -- template0 ages like any other.",
+         "type": "string"
+        },
+        "mxid_age": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "mxid_age(datminmxid). Null when no multixact was ever recorded."
+        },
+        "pct_of_freeze_max_age": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "pct_of_multixact_freeze_max_age": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "triggered_by": {
+         "description": "'xid' -> chase freezing/autovacuum; 'multixact' -> chase the lock-heavy workload burning members.",
+         "enum": [
+          "xid",
+          "multixact",
+          "both"
+         ],
+         "type": "string"
+        },
+        "xid_age": {
+         "description": "age(datfrozenxid).",
+         "type": "number"
+        }
+       },
+       "required": [
+        "database",
+        "xid_age",
+        "mxid_age",
+        "pct_of_freeze_max_age",
+        "pct_of_multixact_freeze_max_age",
+        "triggered_by"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "tables": {
+      "description": "Deliberately includes pg_catalog and pg_toast -- the culprit is usually one of those.",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "all_frozen_pages": {
+         "description": "PostgreSQL 18+ only, absent below that. relallfrozen.",
+         "type": "number"
+        },
+        "freeze_max_age": {
+         "description": "EFFECTIVE limit: a per-table storage parameter wins over the cluster GUC.",
+         "type": "number"
+        },
+        "frozen_page_fraction": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "PostgreSQL 18+ only, absent below that. Null when relpages is 0, not when coverage is 0."
+        },
+        "multixact_freeze_max_age": {
+         "description": "EFFECTIVE limit, resolved the same way as freeze_max_age.",
+         "type": "number"
+        },
+        "mxid_age": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "mxid_age(relminmxid). Null when no multixact was ever recorded."
+        },
+        "pages": {
+         "description": "PostgreSQL 18+ only, absent below that. relpages.",
+         "type": "number"
+        },
+        "pct_of_freeze_max_age": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "At 1.0 autovacuum forces an anti-wraparound VACUUM."
+        },
+        "pct_of_multixact_freeze_max_age": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "relkind": {
+         "description": "Raw relkind: 'r' heap, 'm' materialized view, 't' TOAST -- the only three checked.",
+         "type": "string"
+        },
+        "schema": {
+         "type": "string"
+        },
+        "table": {
+         "type": "string"
+        },
+        "triggered_by": {
+         "description": "'xid' -> chase freezing/autovacuum; 'multixact' -> chase the lock-heavy workload burning members.",
+         "enum": [
+          "xid",
+          "multixact",
+          "both"
+         ],
+         "type": "string"
+        },
+        "xid_age": {
+         "description": "age(relfrozenxid).",
+         "type": "number"
+        }
+       },
+       "required": [
+        "schema",
+        "table",
+        "relkind",
+        "xid_age",
+        "freeze_max_age",
+        "pct_of_freeze_max_age",
+        "mxid_age",
+        "multixact_freeze_max_age",
+        "pct_of_multixact_freeze_max_age",
+        "triggered_by"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "autovacuum_freeze_max_age",
+     "autovacuum_multixact_freeze_max_age",
+     "databases",
+     "tables"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "sequence_exhaustion",
+   "wraparound_risk",
+   "tables_without_primary_key",
+   "public_tables_without_rls"
+  ],
+  "type": "object"
+ },
+ "title": "Database advisor (DBA lints)"
+}

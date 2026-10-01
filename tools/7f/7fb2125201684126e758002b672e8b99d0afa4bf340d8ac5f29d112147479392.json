@@ -1,0 +1,491 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Compares two raw snapshots of a package.json, package-lock.json (npm v1-v3), yarn.lock (classic v1 or Berry), or pnpm-lock.yaml \u2014 e.g. before/after a PR \u2014 and reports which packages were added, removed, or version-bumped. An npm alias (e.g. `\"totally-safe\": \"npm:minimist@0.0.8\"`) is followed to its real target in every format \u2014 `actualName` names the real package that vulnerability/install-script data attaches to (`name` stays the declared/alias key); this is NOT silently skipped, since doing so would let a vulnerable package hide behind whatever name a project calls it. For every added or bumped package (up to 100 per call), also checks whether its resolved version carries a preinstall/install/postinstall/prepare lifecycle script that the before-version did NOT have (`installScriptIntroduced`, a headline signal \u2014 a routine-looking patch bump quietly adding a postinstall is exactly the shape of a compromised-maintainer supply-chain attack) and batch-checks it against OSV.dev, reporting `vulnerabilityDelta` (introduced/fixed/still-vulnerable/still-clean) rather than just a bare isVulnerable flag. `installScriptIntroduced` is a boolean across all four lifecycle keys, so it treats a bare `\"prepare\": \"husky\"` bump the same as a newly-added network-capable `postinstall` \u2014 read `installScriptKeysIntroduced` (null when only npm-lock's boolean hint was available, not the real scripts object; otherwise the actual key(s) added) to tell those apart before treating a flag as high-severity. `sourceIntegrityChanged` catches a DIFFERENT attack shape than a version bump: a lockfile entry whose resolved tarball URL or integrity hash changed while the version string stayed IDENTICAL \u2014 e.g. a compromised registry mirror or a hand-edited lockfile pointing a legitimate-looking \"lodash@4.17.21\" at a different, unverified artifact \u2014 which a version-only diff would report as \"no change\" (`resolvedUrl`/`integrity` are null when a format doesn't record either, package.json has neither). Scope notes: package.json is diffed as its own declared dependency list only (a manifest has no transitive data at all, and this includes `peerDependencies`, unlike batch_query_vulnerabilities/generate_sbom which exclude them by default \u2014 a diff should catch a peerDependency change just like any other); every lockfile format (package-lock.json, pnpm-lock.yaml, yarn.lock) reports its FULL resolved graph \u2014 direct and transitive alike \u2014 so a transitive-only change (e.g. a nested `qs` bumped while the direct `express` version is untouched) is caught, not just direct dependency changes; check `comparisonNote` when the two snapshots are different formats/scopes. The install-script check is presence-only (read from the registry packument or lockfile metadata, not a tarball content scan) \u2014 use analyze_install_script for a deep-dive on anything flagged here. `projectLifecycleChanges` diffs the SCANNED PROJECT's own root preinstall/install/postinstall/prepare scripts (package.json only \u2014 null when neither snapshot is one) \u2014 independent of the dependency list above, since a PR that only adds a root postinstall (`\"postinstall\": \"curl ... | sh\"`) changes nothing about added/removed/changed and would otherwise be invisible to this tool entirely; `introduced`/`changed` on a preinstall/install/postinstall key is counted in `flaggedCount`. `overridesChanges` similarly diffs package.json's `overrides` (npm), `resolutions` (yarn), or `pnpm.overrides` \u2014 these force a specific version onto a transitive dependency (often to pin past a known vulnerability), so a PR that quietly removes, downgrades, or introduces one is exactly the kind of change a dependency diff should catch, and previously nothing here read this field at all; ANY change here (introduced/removed/changed) is counted in `flaggedCount`, since an override can be a security control being weakened just as easily as an attack forcing a compromised version onto an otherwise-untouched dependency. Ideal for a CI gate reviewing a dependency-changing PR.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "after": {
+    "description": "Raw file content of the \"after\" snapshot \u2014 a package.json, package-lock.json (npm v1-v3), yarn.lock (classic v1 or Berry), or pnpm-lock.yaml. Format is auto-detected; before/after may be different formats.",
+    "maxLength": 8388608,
+    "minLength": 1,
+    "type": "string"
+   },
+   "before": {
+    "description": "Raw file content of the \"before\" snapshot \u2014 a package.json, package-lock.json (npm v1-v3), yarn.lock (classic v1 or Berry), or pnpm-lock.yaml. Format is auto-detected; before/after may be different formats.",
+    "maxLength": 8388608,
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "before",
+   "after"
+  ],
+  "type": "object"
+ },
+ "name": "diff_dependencies",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "added": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "actualName": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "afterVersion": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "beforeVersion": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "changeType": {
+       "anyOf": [
+        {
+         "enum": [
+          "upgrade",
+          "downgrade",
+          "unresolved"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "coexistingVersions": {
+       "anyOf": [
+        {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "hasInstallScript": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "highestSeverity": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "installScriptIntroduced": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "installScriptKeys": {
+       "anyOf": [
+        {
+         "items": {
+          "enum": [
+           "preinstall",
+           "install",
+           "postinstall",
+           "prepare"
+          ],
+          "type": "string"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "installScriptKeysIntroduced": {
+       "anyOf": [
+        {
+         "items": {
+          "enum": [
+           "preinstall",
+           "install",
+           "postinstall",
+           "prepare"
+          ],
+          "type": "string"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "integrity": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "isVulnerable": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "name": {
+       "type": "string"
+      },
+      "npmscanUrl": {
+       "type": "string"
+      },
+      "resolutionNote": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "resolvedUrl": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "sourceIntegrityChanged": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "vulnerabilities": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "aliases": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "fixedVersion": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "id": {
+          "type": "string"
+         },
+         "npmscanUrl": {
+          "type": "string"
+         },
+         "publishedAt": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "severity": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "summary": {
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "id",
+         "summary",
+         "severity",
+         "aliases",
+         "publishedAt",
+         "fixedVersion",
+         "npmscanUrl"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "vulnerabilityDelta": {
+       "anyOf": [
+        {
+         "enum": [
+          "introduced",
+          "fixed",
+          "still-vulnerable",
+          "still-clean",
+          "unknown"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "name",
+      "actualName",
+      "npmscanUrl",
+      "beforeVersion",
+      "afterVersion",
+      "coexistingVersions",
+      "changeType",
+      "hasInstallScript",
+      "installScriptIntroduced",
+      "installScriptKeys",
+      "installScriptKeysIntroduced",
+      "sourceIntegrityChanged",
+      "resolvedUrl",
+      "integrity",
+      "isVulnerable",
+      "highestSeverity",
+      "vulnerabilities",
+      "vulnerabilityDelta",
+      "resolutionNote"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "afterFormat": {
+    "enum": [
+     "package.json",
+     "npm-lock",
+     "yarn-lock",
+     "pnpm-lock"
+    ],
+    "type": "string"
+   },
+   "beforeFormat": {
+    "enum": [
+     "package.json",
+     "npm-lock",
+     "yarn-lock",
+     "pnpm-lock"
+    ],
+    "type": "string"
+   },
+   "changed": {
+    "items": {
+     "$ref": "#/properties/added/items"
+    },
+    "type": "array"
+   },
+   "comparisonNote": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "enrichmentNote": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "flaggedCount": {
+    "type": "number"
+   },
+   "overridesChanges": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "changed": {
+        "additionalProperties": {
+         "additionalProperties": false,
+         "properties": {
+          "after": {
+           "type": "string"
+          },
+          "before": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "before",
+          "after"
+         ],
+         "type": "object"
+        },
+        "type": "object"
+       },
+       "introduced": {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       "removed": {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       }
+      },
+      "required": [
+       "introduced",
+       "removed",
+       "changed"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "projectLifecycleChanges": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "changed": {
+        "additionalProperties": {
+         "additionalProperties": false,
+         "properties": {
+          "after": {
+           "type": "string"
+          },
+          "before": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "before",
+          "after"
+         ],
+         "type": "object"
+        },
+        "type": "object"
+       },
+       "introduced": {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       "removed": {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "type": "object"
+       }
+      },
+      "required": [
+       "introduced",
+       "removed",
+       "changed"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "removed": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "actualName": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "name": {
+       "type": "string"
+      },
+      "npmscanUrl": {
+       "type": "string"
+      },
+      "version": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "name",
+      "actualName",
+      "version",
+      "npmscanUrl"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "summary": {
+    "type": "string"
+   },
+   "totalAdded": {
+    "type": "number"
+   },
+   "totalChanged": {
+    "type": "number"
+   },
+   "totalRemoved": {
+    "type": "number"
+   },
+   "truncated": {
+    "type": "boolean"
+   },
+   "truncationNote": {
+    "type": [
+     "string",
+     "null"
+    ]
+   }
+  },
+  "required": [
+   "summary",
+   "beforeFormat",
+   "afterFormat",
+   "comparisonNote",
+   "added",
+   "removed",
+   "changed",
+   "totalAdded",
+   "totalRemoved",
+   "totalChanged",
+   "flaggedCount",
+   "truncated",
+   "truncationNote",
+   "enrichmentNote",
+   "projectLifecycleChanges",
+   "overridesChanges"
+  ],
+  "type": "object"
+ },
+ "title": "Diff two package.json/lockfile snapshots"
+}

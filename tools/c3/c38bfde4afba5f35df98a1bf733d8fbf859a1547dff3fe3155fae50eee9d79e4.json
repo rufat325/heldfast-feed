@@ -1,0 +1,351 @@
+{
+ "description": "Measure a vehicle's overhead clearance along a route against surveyed point cloud geometry, wherever survey coverage exists. Routes with truck costing (so the search already avoids the height restrictions the map has tagged), then measures that corridor. Give `origin`, `destination` and `height_m`; optional `width_m` asks the corridor-width axis too, and optional `margin_m` adds your operating margin to the vehicle before the verdict. Returns `pass`, `fail`, `indeterminate` or `no_verdict` with the limiting point, the measured headroom, its uncertainty bound (`safe_headroom_m`, `sigma_m`, `sampling_gap_m`) and a link to that exact view in the survey viewer. An `indeterminate` carries `indeterminate_reasons` as codes to branch on and the same reasons as English inside `explanation`; read out the English. A `pass` may carry no limiting point at all, which means the survey found nothing above that corridor, and the width axis may answer `not_assessed` where the corridor edges are too sparsely surveyed while the height axis still answers. Honesty, and it matters here: this measures physical geometry from a dated survey. It is not a signed or posted height, `clearance_enforcement.route_certified` is always false, and the caveat is on every answer including the clear one. Ground the survey did not cover comes back as `not_surveyed_m` and is never judged, so a `pass` is possible over complete coverage and nowhere else; sparse or stale coverage comes back separately as `insufficient_data_m`. Reach for this when a truck route came back unchanged and you need to know whether that means anything: an unchanged route avoids what the map records, which is a different claim from measured headroom, because a structure nobody tagged is routed through like open road. Needs the MapMap gateway (GATEWAY_URL + GATEWAY_API_KEY), which holds the surveys; there is no fallback, and it will not answer from the routing step alone. The mapmap://guide/clearance resource sets out what each answer proves.",
+ "inputSchema": {
+  "$defs": {
+   "LatLon": {
+    "anyOf": [
+     {
+      "properties": {
+       "lat": {
+        "description": "Latitude in decimal degrees (\u221290 to 90).",
+        "format": "double",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude in decimal degrees (\u2212180 to 180).",
+        "format": "double",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "GeoJSON position [lon, lat]: longitude FIRST.",
+      "items": {
+       "format": "double",
+       "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     }
+    ],
+    "description": "A WGS84 coordinate in decimal degrees: a {lat, lon} object (preferred), or a GeoJSON [lon, lat] array with LONGITUDE FIRST, the same order as every polygon field on this server."
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "destination": {
+    "$ref": "#/$defs/LatLon",
+    "description": "Route destination."
+   },
+   "height_m": {
+    "description": "Vehicle height in metres. Required: there is no default vehicle,\nbecause a default vehicle is how somebody gets an answer about a\nlorry that is not theirs.",
+    "format": "double",
+    "type": "number"
+   },
+   "margin_m": {
+    "description": "Operating margin in metres, added to the height before the verdict\nis decided (default 0). Your compliance policy, not ours: the\nmeasured figure and the safe bound are both reported whatever you\nset here, and the margin is echoed back. It is applied to the\nmeasurement, not to the routing step, where the map's own posted\nheights already carry a margin of their own.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "origin": {
+    "$ref": "#/$defs/LatLon",
+    "description": "Route origin."
+   },
+   "width_m": {
+    "description": "Vehicle width in metres. Supplying it asks the width axis as well as\nthe height axis; the width answer is reported separately and is\nnever a headroom.",
+    "format": "double",
+    "type": [
+     "number",
+     "null"
+    ]
+   }
+  },
+  "required": [
+   "origin",
+   "destination",
+   "height_m"
+  ],
+  "type": "object"
+ },
+ "name": "check_clearance_on_route",
+ "outputSchema": {
+  "$defs": {
+   "ClearanceDatasetSummary": {
+    "description": "One survey the report drew on.",
+    "properties": {
+     "dataset": {
+      "description": "The dataset id.",
+      "type": "string"
+     },
+     "stale": {
+      "description": "Whether the clearance field lags the survey it was baked from, or\nhas never been checked against it. Either way no route passes on it.",
+      "type": "boolean"
+     },
+     "survey_dates": {
+      "description": "Capture range, `from/to` in ISO dates.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "dataset",
+     "survey_dates",
+     "stale"
+    ],
+    "type": "object"
+   },
+   "ClearanceEnforcement": {
+    "description": "How a clearance answer was arrived at, and what it therefore does and\ndoes not prove.\n\nThe [`TunnelEnforcement`] pattern, applied to the other safety-adjacent\nanswer this server gives, and for the same reason: a headroom figure\nwith a bound on it reads like permission. It is not one. The block is\ncarried on every response including the clear one, because the clear one\nis the dangerous one.\n\nEvery field is taken verbatim from the gateway's report rather than\nrebuilt here. `vertical_datum` is a property of the survey the figures\ncame from, so this server cannot know it; and copying the caveat text\ninto a second crate is exactly the drift the single-source-of-truth rule\nexists to prevent. When the gateway omits any part of it, the tool\nrefuses the answer rather than emitting a report with a hollow caveat.",
+    "properties": {
+     "basis": {
+      "description": "How the figures were arrived at. Always\n`\"surveyed_pointcloud_within_survey_difference\"`: the difference\nbetween two heights measured in the same survey, on the same date,\nby the same processing. No map tag, no terrain model and no absolute\nvertical datum enters it.",
+      "type": "string"
+     },
+     "caveat": {
+      "description": "What this answer does and does not prove, in one paragraph.",
+      "type": "string"
+     },
+     "route_certified": {
+      "description": "Whether the route has been certified against a structure inventory.\nAlways `false`, and there is no future in which it is true: this is\na measurement with a bound, never a certificate about a route.",
+      "type": "boolean"
+     },
+     "vertical_datum": {
+      "description": "The vertical frame the surveyed figures live in, spelled for a\nreader.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "basis",
+     "route_certified",
+     "vertical_datum",
+     "caveat"
+    ],
+    "type": "object"
+   },
+   "ClearanceWidthSummary": {
+    "description": "The width axis: how wide the clear corridor is, never how tall.\n\nA separate type from [`LimitingPointSummary`] on purpose, with no\nheadroom field on it. These are different physical quantities, and a\nshared type is how the reader of a width answer ends up quoting a\nheadroom.",
+    "properties": {
+     "clear_width_m": {
+      "description": "Free width of the narrowest clear corridor found, metres. Present\nwhere a corridor edge was actually measured.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "reason": {
+      "description": "Why the width axis declined to answer, present for\n`not_assessed`.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "safe_clear_width_m": {
+      "description": "That width less its uncertainty terms, metres: the number the width\nverdict is decided on.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "verdict": {
+      "description": "`pass`, `fail`, `indeterminate`, `no_verdict`, or `not_assessed`\nwhere the geometry or the request did not support an answer.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "verdict"
+    ],
+    "type": "object"
+   },
+   "LimitingPointSummary": {
+    "description": "One measured clearance on the route, with the bounds that qualify it.\n\nThere is no field here for a posted, signed or otherwise legally\nbinding height, and that absence is deliberate. A survey measures the\nphysical gap; a sign records a restriction a road authority posted, set\nbelow the physical gap on purpose. They are different quantities and\nthis server never reports one as the other.",
+    "properties": {
+     "dataset": {
+      "description": "The dataset the measurement came from.",
+      "type": "string"
+     },
+     "headroom_m": {
+      "description": "Measured headroom: the surveyed gap between the road surface and\nthe lowest validated surface above it, metres.",
+      "format": "double",
+      "type": "number"
+     },
+     "lat": {
+      "description": "Latitude of the point, decimal degrees.",
+      "format": "double",
+      "type": "number"
+     },
+     "lon": {
+      "description": "Longitude of the point, decimal degrees.",
+      "format": "double",
+      "type": "number"
+     },
+     "overhead_class": {
+      "description": "What the overhead surface is made of: `structure`, `vegetation`,\n`wire` or `unknown`. Foliage is compressible and seasonal, so an old\nreading of it stops deciding.",
+      "type": "string"
+     },
+     "route_distance_m": {
+      "description": "How far along the route the point sits, metres.",
+      "format": "double",
+      "type": "number"
+     },
+     "safe_headroom_m": {
+      "description": "`headroom_m` less the uncertainty terms, metres. This is the number\nthe verdict is decided on, and the number to plan against.",
+      "format": "double",
+      "type": "number"
+     },
+     "sampling_gap_m": {
+      "description": "One-sided sampling bias bound, metres: how far below the lowest\nsample the true low point could hang, given the sample spacing.",
+      "format": "double",
+      "type": "number"
+     },
+     "sigma_m": {
+      "description": "One-sigma measurement uncertainty on that figure, metres.",
+      "format": "double",
+      "type": "number"
+     },
+     "surveyed_on": {
+      "description": "Last capture date of the survey behind this measurement, ISO.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "lat",
+     "lon",
+     "route_distance_m",
+     "headroom_m",
+     "sigma_m",
+     "sampling_gap_m",
+     "safe_headroom_m",
+     "overhead_class",
+     "surveyed_on",
+     "dataset"
+    ],
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "advisories": {
+    "description": "Notes on stretches of the route: vegetation age, a reading limited\nby a wire, a seam between surveys.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "assessed_m": {
+    "description": "Metres of route measured against survey data good enough to decide\non.",
+    "format": "double",
+    "type": "number"
+   },
+   "basis": {
+    "description": "Always `\"surveyed_geometry_not_signage\"`.",
+    "type": "string"
+   },
+   "clearance_enforcement": {
+    "$ref": "#/$defs/ClearanceEnforcement",
+    "description": "What this answer does and does not prove. Read it."
+   },
+   "datasets": {
+    "description": "The surveys drawn on, with their capture dates and staleness.",
+    "items": {
+     "$ref": "#/$defs/ClearanceDatasetSummary"
+    },
+    "type": "array"
+   },
+   "explanation": {
+    "description": "What was measured, when, with what bound, and what the tool declined\nto conclude. It may over-restrict; it never under-restricts.",
+    "type": "string"
+   },
+   "geometry_polyline6": {
+    "description": "The route as a six-digit-precision encoded polyline, so the same\nshape can be drawn or re-measured without routing again.",
+    "type": "string"
+   },
+   "indeterminate_reasons": {
+    "description": "Why an `indeterminate` could not be called, as machine-readable\ncodes (`inside_uncertainty_band`, `vegetation_age_exceeded`,\n`artefact_stale`, `artefact_freshness_unchecked`). Empty on every\nother verdict. These are for branching on, not for reading out: the\nsame reasons appear as English in `explanation`, and a person shown\n`artefact_freshness_unchecked` has been failed by whatever displayed\nit.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "insufficient_data_m": {
+    "description": "Metres of route a survey covers but too sparsely, or too stale, to\ndecide on. Also an absence, and reported apart from\n`not_surveyed_m` because the two have different remedies.",
+    "format": "double",
+    "type": "number"
+   },
+   "limiting": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/LimitingPointSummary"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "The limiting point on a `fail`, the tightest point on a `pass`, the\nworst contested point on an `indeterminate`. Absent on a\n`no_verdict`, and absent on a `pass` where the survey found nothing\nat all above the corridor."
+   },
+   "not_surveyed_m": {
+    "description": "Metres of route no survey covers. This is the absence of a\nmeasurement, and it is never the same statement as a measured open\nsky. No verdict is drawn over it.",
+    "format": "double",
+    "type": "number"
+   },
+   "resolution_hint": {
+    "description": "What would resolve an `indeterminate`, in one sentence, as the\nmeasuring service phrased it.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "route_distance_m": {
+    "description": "Length of the route the vehicle was routed over, metres.",
+    "format": "double",
+    "type": "number"
+   },
+   "route_duration_s": {
+    "description": "Estimated driving time for that route, seconds.",
+    "format": "double",
+    "type": "number"
+   },
+   "verdict": {
+    "description": "`pass`, `fail`, `indeterminate` or `no_verdict` for the height axis.\nA `pass` is possible over completely surveyed ground and nowhere\nelse: unsurveyed ground yields `no_verdict`, never a pass.",
+    "type": "string"
+   },
+   "view_url": {
+    "description": "Deep link to that exact view in the survey viewer, so the reading\ncan be looked at rather than taken on trust.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "width": {
+    "$ref": "#/$defs/ClearanceWidthSummary",
+    "description": "The width axis, answered separately when `width_m` was given."
+   }
+  },
+  "required": [
+   "verdict",
+   "basis",
+   "clearance_enforcement",
+   "route_distance_m",
+   "route_duration_s",
+   "geometry_polyline6",
+   "assessed_m",
+   "not_surveyed_m",
+   "insufficient_data_m",
+   "width",
+   "datasets",
+   "advisories",
+   "indeterminate_reasons",
+   "explanation"
+  ],
+  "type": "object"
+ }
+}

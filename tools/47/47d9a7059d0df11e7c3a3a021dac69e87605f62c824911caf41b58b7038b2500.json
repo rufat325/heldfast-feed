@@ -1,0 +1,379 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "I/O statistics and in-flight async I/O"
+ },
+ "description": "I/O observability: cumulative per-backend-type I/O from `pg_stat_io` (PostgreSQL 16+), plus in-flight asynchronous I/O handles from `pg_aios` (PostgreSQL 18+). This is the layer underneath `pg_top_queries` and `pg_health` -- it says WHICH subsystem is doing the I/O (client backends vs autovacuum vs checkpointer vs walwriter) and through which path, which a per-query or per-table view cannot.\n- io: one row per (`backend_type`, `io_object`, `io_context`) combination. Counters `reads` / `writes` / `extends` / `writebacks` / `hits` / `evictions` / `reuses` / `fsyncs` are bigints returned as decimal strings; `read_time_ms` / `write_time_ms` / `writeback_time_ms` / `extend_time_ms` / `fsync_time_ms` are float8 milliseconds. A timing of 0 next to a non-zero op count means `track_io_timing` is off, NOT that the I/O was free -- turn it on to get real numbers. A NULL counter means the operation is not possible for that combination, which is different from 0.\n- io[].read_bytes / write_bytes / extend_bytes: a normalized byte figure that means the same thing on every supported server. On PG16-17 it is computed as `op_bytes * <op count>`; on PG18 `op_bytes` was removed and the server reports bytes directly. The top-level `byte_accounting` field says which source produced the numbers.\n- io[].stats_reset: these are CUMULATIVE counters, so a row is only interpretable next to its reset point. Reported per row because that is how the view reports it; `pg_stat_reset_shared('io')` resets them together in practice, but this tool does not assert that.\n- Rows whose counters are all zero are omitted by default (`pg_stat_io` is mostly zeros on a quiet system, and the noise buries the handful of rows that matter). Pass `includeZeroRows: true` for the full matrix.\n- in_flight + io_method: PostgreSQL 18+ ONLY, and both keys are ABSENT on older servers rather than empty/null -- an empty `in_flight` array would read as 'nothing is stalled' when the truth is 'this server cannot tell you'. `in_flight` is live, currently-outstanding async I/O (`pid`, `io_id`, `op`, `state`, `off`, `length`, `target_desc`), which is what you want while a stall is happening rather than after it. `io_method` (`worker` / `io_uring` / `sync`) explains what `in_flight` can contain: with `io_method = sync` there is no asynchronous submission, so the array is legitimately empty no matter how much I/O is running.\nRequires PostgreSQL 16+. Sub-queries that fail (`pg_stat_io` and `pg_aios` are permission-gated on some managed providers) append to `_warnings` and set their field to null; the rest of the response still returns.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "includeZeroRows": {
+    "default": false,
+    "description": "If true, return every (backend_type, io_object, io_context) row including the ones with no recorded activity. Default false -- the view is mostly zeros on a quiet system.",
+    "type": "boolean"
+   },
+   "limit": {
+    "default": 200,
+    "description": "Max rows per section (default 200). pg_stat_io has well under 200 combinations, so this effectively bounds the in-flight list on a busy PG18 server.",
+    "maximum": 1000,
+    "minimum": 1,
+    "type": "integer"
+   }
+  },
+  "type": "object"
+ },
+ "name": "pg_io_stats",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "_warnings": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "byte_accounting": {
+    "description": "Which source produced read_bytes / write_bytes / extend_bytes: native columns, or op_bytes * ops.",
+    "type": "string"
+   },
+   "in_flight": {
+    "anyOf": [
+     {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "io_id": {
+         "type": "number"
+        },
+        "length": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "off": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "File offset, cast to text so a widened column stays lossless."
+        },
+        "op": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "pid": {
+         "description": "Line this up against pg_health / pg_inspect_locks output for the same backend.",
+         "type": "number"
+        },
+        "state": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "target_desc": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        }
+       },
+       "required": [
+        "pid",
+        "io_id",
+        "op",
+        "state",
+        "off",
+        "length",
+        "target_desc"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "PostgreSQL 18+ only. Currently-outstanding async I/O. Null (not []) when the fetch was refused -- reading a denial as 'nothing outstanding' would point the investigation the wrong way."
+   },
+   "include_zero_rows": {
+    "description": "Echoed because it changes what an empty `io` means: no recorded I/O, vs the view returned nothing.",
+    "type": "boolean"
+   },
+   "io": {
+    "anyOf": [
+     {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "backend_type": {
+         "type": "string"
+        },
+        "evictions": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "extend_bytes": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "extend_time_ms": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "extends": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "fsync_time_ms": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "fsyncs": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "hits": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "io_context": {
+         "description": "The view's `context` column, renamed for symmetry with io_object.",
+         "type": "string"
+        },
+        "io_object": {
+         "description": "The view's `object` column, renamed -- it is a postgres keyword.",
+         "type": "string"
+        },
+        "read_bytes": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "Source named by the top-level `byte_accounting`."
+        },
+        "read_time_ms": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "0 next to a non-zero op count means track_io_timing is OFF, not that the I/O was free."
+        },
+        "reads": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "reuses": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "stats_reset": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "These counters are cumulative SINCE this point. Null = never reset."
+        },
+        "write_bytes": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "write_time_ms": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "writeback_time_ms": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "writebacks": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "writes": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        }
+       },
+       "required": [
+        "backend_type",
+        "io_object",
+        "io_context",
+        "reads",
+        "read_bytes",
+        "read_time_ms",
+        "writes",
+        "write_bytes",
+        "write_time_ms",
+        "writebacks",
+        "writeback_time_ms",
+        "extends",
+        "extend_bytes",
+        "extend_time_ms",
+        "hits",
+        "evictions",
+        "reuses",
+        "fsyncs",
+        "fsync_time_ms",
+        "stats_reset"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Null (not []) when the fetch was refused -- [] is a real answer on a freshly reset cluster."
+   },
+   "io_method": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "PostgreSQL 18+ only. worker | io_uring | sync. With `sync` there is no async submission, so `in_flight` is legitimately empty however much I/O is running."
+   },
+   "server_version_num": {
+    "description": "Echoed so a caller can tell WHY the PG18-only keys are absent without a second round-trip.",
+    "type": "number"
+   }
+  },
+  "required": [
+   "server_version_num",
+   "byte_accounting",
+   "include_zero_rows",
+   "io"
+  ],
+  "type": "object"
+ },
+ "title": "I/O statistics and in-flight async I/O"
+}

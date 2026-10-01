@@ -1,0 +1,223 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Fetch all parties and attorneys of record for a RECAP federal docket by docket ID. Returns each party's name, role (Plaintiff, Defendant, Petitioner, Respondent, etc.), and their attorneys with contact information, scoped to this docket. Costs two upstream requests per call (parties + attorney lookup) against a rate-limited free tier, and one more for each extra page of a large attorney roster. Obtain docket IDs from courtlistener_search_dockets or courtlistener_get_docket.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "cursor": {
+    "description": "Pagination cursor from a previous response's next_cursor field. Omit for the first page. This is an opaque token, not a page number \u2014 CourtListener cursor-paginates this endpoint, so a numeric value selects nothing and re-serves the first page.",
+    "type": "string"
+   },
+   "docket_id": {
+    "description": "Docket ID from a courtlistener_search_dockets or courtlistener_get_docket result's docket_id field.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "page_size": {
+    "default": 10,
+    "description": "Requested number of parties per page (1\u201310). CourtListener paginates this endpoint at a fixed size and does not honor the requested value, so a page can come back larger than asked for.",
+    "maximum": 10,
+    "minimum": 1,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "docket_id"
+  ],
+  "type": "object"
+ },
+ "name": "courtlistener_get_parties",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "docket_id",
+     "total_parties",
+     "next_cursor",
+     "parties"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "docket_id": {
+    "description": "Docket ID these parties belong to.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `not_found`: Docket ID does not exist in CourtListener or has no RECAP party data. `rate_limited`: 429 from CourtListener, or no request slot opened within the wait budget. Each call to this tool makes at least two upstream requests. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "not_found",
+         "rate_limited"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "next_cursor": {
+    "description": "Opaque pagination cursor for the next page \u2014 pass it back as the `cursor` argument; null when this is the last page.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "parties": {
+    "description": "Parties on this page.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A party and their attorneys for this docket.",
+     "properties": {
+      "attorneys": {
+       "description": "Attorneys of record for this party on this docket.",
+       "items": {
+        "additionalProperties": false,
+        "description": "Attorney of record for this party.",
+        "properties": {
+         "attorney_id": {
+          "description": "Attorney record ID.",
+          "type": "number"
+         },
+         "contact_raw": {
+          "description": "Raw address/phone block from the attorney record. Empty string when unavailable.",
+          "type": "string"
+         },
+         "date_action": {
+          "description": "Date the attorney\u2013party relationship ended; null while the attorney is still of record.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "name": {
+          "description": "Attorney display name. Empty string when attorney detail is unavailable.",
+          "type": "string"
+         },
+         "role": {
+          "description": "role_code decoded to a label (e.g., \"Lead attorney\"). Codes 5\u20139 (\"Self-terminated\" through \"Disbarred\") mean the attorney is no longer of record. The stringified code when upstream sends a value outside the documented enum, \"Unrecorded\" when it sends none.",
+          "type": "string"
+         },
+         "role_code": {
+          "description": "Numeric attorney role code from the party\u2013attorney relationship (1 = Attorney to be noticed, 2 = Lead attorney, 3 = Attorney in sealed group, 4 = Pro hac vice, 5 = Self-terminated, 6 = Terminated, 7 = Suspended, 8 = Inactive, 9 = Disbarred, 10 = Unknown); null when upstream recorded no code.",
+          "type": [
+           "number",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "attorney_id",
+         "name",
+         "contact_raw",
+         "role_code",
+         "role",
+         "date_action"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "extra_info": {
+       "description": "Additional metadata from upstream (e.g., pro se status, date range).",
+       "type": "string"
+      },
+      "id": {
+       "description": "Party record ID.",
+       "type": "number"
+      },
+      "name": {
+       "description": "Party display name (e.g., \"Jane Doe\", \"Acme Corporation\").",
+       "type": "string"
+      },
+      "role": {
+       "description": "Role on this docket (e.g., \"Plaintiff\", \"Defendant\", \"Petitioner\", \"Respondent\"); null if not recorded.",
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "id",
+      "name",
+      "role",
+      "extra_info",
+      "attorneys"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "totalCount": {
+    "description": "Total parties on this docket across all pages \u2014 this endpoint reports its count as a URL rather than a number, so the total is only derivable when the first page is also the last, and is absent for any list spanning more than one page.",
+    "type": "number"
+   },
+   "total_parties": {
+    "description": "Total parties on this docket across all pages; null when no total is derivable \u2014 CourtListener serves the count as a URL rather than a number here, so it is only known when the first page is also the last.",
+    "type": [
+     "number",
+     "null"
+    ]
+   }
+  },
+  "type": "object"
+ },
+ "title": "Get Parties"
+}

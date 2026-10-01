@@ -1,0 +1,628 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Given a GitHub repository URL, fetches its package.json (and, if present, a pnpm-lock.yaml/package-lock.json/yarn.lock \u2014 first one found wins, in that priority order) straight from the repo's default branch and runs the same vulnerability, license-compliance, install-script, and ownership-risk pipelines batch_query_vulnerabilities/check_license_compliance/analyze_install_script/check_maintainer_changes/check_package_provenance expose individually, in one call \u2014 no copy-pasting file contents required. A monorepo (package.json#workspaces, Yarn's {packages:[...]} form, or pnpm-workspace.yaml) is detected automatically: pnpm-lock.yaml and yarn.lock already record every workspace member's dependencies directly, and for package.json-only or package-lock.json repos this additionally lists the repo's file tree, resolves the declared glob patterns to member directories, and merges each member's dependencies into the audit (capped at 50 member packages) \u2014 see isMonorepo/workspacePatterns/workspacePackageCount/workspaceNote in the result. Every direct dependency (up to 100 per call, across the root and any merged workspace members) gets: an OSV.dev vulnerability check, a license-compliance verdict against the given policy (same default as check_license_compliance: only copyleft/network-copyleft/proprietary are violations unless you pass one), and a tarball-free install-script risk signal (installScriptScanScope: 'lifecycle-scripts-only'). Up to 10 of the packages that actually declare a lifecycle script \u2014 prioritized by already-vulnerable, then possible-typosquat, then whatever's left \u2014 additionally get the full tarball-fetching deep scan analyze_install_script itself runs (installScriptScanScope: 'deep-tarball-scan', with a populated installScriptFindings array); any remaining flagged packages past that cap keep the lighter signal only, noted in deepScanNote. Any package that comes back vulnerable at high/critical severity, a possible typosquat, or deprecated (ownershipRiskEligible) additionally gets check_maintainer_changes and check_package_provenance run against it \u2014 up to 5 such packages per call (ownershipRiskChecked), prioritized the same way as the deep install-script scan, populating maintainerRiskTier/maintainerFindings and provenanceRiskTier/provenanceFindings; remaining eligible packages past that cap are named in ownershipCheckNote. This is the most expensive tool in the suite (a repo lookup, a handful of file fetches, up to 100 registry doc fetches, one OSV batch call, up to 10 tarball fetches, up to 5 packages each getting a maintainer-history check plus a provenance check \u2014 the latter alone can fan out to ~8 more registry fetches on its own \u2014 and, for a monorepo needing enumeration, one file-tree listing plus up to 50 more manifest fetches) \u2014 don't call it in a loop across many repos. `peerDependencies` (root and, for a monorepo, each workspace member's own manifest) are excluded from the audit by default, same as batch_query_vulnerabilities \u2014 pass `includePeerDependencies: true` to also check them; see `warnings` for which peers were excluded.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "includeDevDependencies": {
+    "description": "Include package.json devDependencies in the audit. Default false. Ignored when a lockfile is used instead (its own format decides direct-dependency scope), and yarn.lock can never distinguish dev from production dependencies regardless of this flag.",
+    "type": "boolean"
+   },
+   "includePeerDependencies": {
+    "description": "Include package.json peerDependencies (root and, for a monorepo, each workspace member) in the audit. Default false \u2014 a peer is often intentionally left unresolved by the consumer. See warnings for which peers were excluded.",
+    "type": "boolean"
+   },
+   "policy": {
+    "additionalProperties": false,
+    "description": "License allow/deny policy, same shape as check_license_compliance. Omit for the default policy (only copyleft/network-copyleft/proprietary are violations).",
+    "properties": {
+     "allow": {
+      "description": "SPDX ids, family prefixes (e.g. \"GPL\"), or category names. Anything not matching is a violation.",
+      "items": {
+       "maxLength": 100,
+       "minLength": 1,
+       "type": "string"
+      },
+      "maxItems": 50,
+      "type": "array"
+     },
+     "deny": {
+      "description": "SPDX ids, family prefixes, or category names. Always takes precedence over allow.",
+      "items": {
+       "maxLength": 100,
+       "minLength": 1,
+       "type": "string"
+      },
+      "maxItems": 50,
+      "type": "array"
+     }
+    },
+    "type": "object"
+   },
+   "ref": {
+    "description": "Branch, tag, or commit SHA to audit. Omit to use the repository's default branch.",
+    "maxLength": 250,
+    "minLength": 1,
+    "type": "string"
+   },
+   "url": {
+    "description": "GitHub repository URL, e.g. \"https://github.com/owner/repo\".",
+    "maxLength": 500,
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "url"
+  ],
+  "type": "object"
+ },
+ "name": "audit_github_repository",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "deepScanNote": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "deepScannedCount": {
+    "type": "number"
+   },
+   "defaultBranchUsed": {
+    "type": "boolean"
+   },
+   "findings": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "deprecated": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "hasLifecycleScripts": {
+       "type": "boolean"
+      },
+      "highestSeverity": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "installScriptFindings": {
+       "anyOf": [
+        {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "locations": {
+            "items": {
+             "additionalProperties": false,
+             "properties": {
+              "file": {
+               "type": "string"
+              },
+              "snippet": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "file",
+              "snippet"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "note": {
+            "type": "string"
+           },
+           "points": {
+            "type": "number"
+           },
+           "rule": {
+            "type": "string"
+           },
+           "text": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "rule",
+           "text",
+           "points",
+           "note",
+           "locations"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "installScriptRiskTier": {
+       "anyOf": [
+        {
+         "enum": [
+          "none",
+          "low",
+          "moderate",
+          "high",
+          "critical"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "installScriptScanScope": {
+       "anyOf": [
+        {
+         "enum": [
+          "lifecycle-scripts-only",
+          "deep-tarball-scan"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "installScriptScore": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "isLicenseCompliant": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "isVulnerable": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "licenseCategory": {
+       "enum": [
+        "permissive",
+        "weak-copyleft",
+        "copyleft",
+        "network-copyleft",
+        "proprietary",
+        "public-domain",
+        "unknown",
+        "mixed"
+       ],
+       "type": "string"
+      },
+      "licenseNeedsReview": {
+       "type": "boolean"
+      },
+      "licenseViolation": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "note": {
+           "type": "string"
+          },
+          "rule": {
+           "type": "string"
+          },
+          "text": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "rule",
+          "text",
+          "note"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "maintainerFindings": {
+       "anyOf": [
+        {
+         "items": {
+          "$ref": "#/properties/findings/items/properties/installScriptFindings/anyOf/0/items"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "maintainerRiskTier": {
+       "anyOf": [
+        {
+         "$ref": "#/properties/findings/items/properties/installScriptRiskTier/anyOf/0"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "name": {
+       "type": "string"
+      },
+      "npmscanUrl": {
+       "type": "string"
+      },
+      "ownershipRiskChecked": {
+       "type": "boolean"
+      },
+      "ownershipRiskEligible": {
+       "type": "boolean"
+      },
+      "ownershipRiskReason": {
+       "anyOf": [
+        {
+         "enum": [
+          "critical-or-high-severity-vulnerability",
+          "possible-typosquat",
+          "deprecated"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "possibleTyposquatOf": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "name": {
+           "type": "string"
+          },
+          "rank": {
+           "type": "number"
+          }
+         },
+         "required": [
+          "name",
+          "rank"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "provenanceFindings": {
+       "anyOf": [
+        {
+         "items": {
+          "$ref": "#/properties/findings/items/properties/installScriptFindings/anyOf/0/items"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "provenanceRiskTier": {
+       "anyOf": [
+        {
+         "$ref": "#/properties/findings/items/properties/installScriptRiskTier/anyOf/0"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "rawLicense": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "requestedVersion": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "resolutionError": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "resolvedVersion": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "vulnerabilities": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "aliases": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "fixedVersion": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "id": {
+          "type": "string"
+         },
+         "npmscanUrl": {
+          "type": "string"
+         },
+         "publishedAt": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "severity": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "summary": {
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "id",
+         "summary",
+         "severity",
+         "aliases",
+         "publishedAt",
+         "fixedVersion",
+         "npmscanUrl"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      }
+     },
+     "required": [
+      "name",
+      "requestedVersion",
+      "resolvedVersion",
+      "npmscanUrl",
+      "deprecated",
+      "possibleTyposquatOf",
+      "isVulnerable",
+      "highestSeverity",
+      "vulnerabilities",
+      "rawLicense",
+      "licenseCategory",
+      "isLicenseCompliant",
+      "licenseNeedsReview",
+      "licenseViolation",
+      "hasLifecycleScripts",
+      "installScriptRiskTier",
+      "installScriptScore",
+      "installScriptScanScope",
+      "installScriptFindings",
+      "resolutionError",
+      "ownershipRiskEligible",
+      "ownershipRiskReason",
+      "ownershipRiskChecked",
+      "maintainerRiskTier",
+      "maintainerFindings",
+      "provenanceRiskTier",
+      "provenanceFindings"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "inputFormat": {
+    "enum": [
+     "package.json",
+     "npm-lock",
+     "yarn-lock",
+     "pnpm-lock"
+    ],
+    "type": "string"
+   },
+   "installScriptFlaggedCount": {
+    "type": "number"
+   },
+   "isMonorepo": {
+    "type": "boolean"
+   },
+   "licenseViolationCount": {
+    "type": "number"
+   },
+   "lockfilePath": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "manifestPath": {
+    "type": "string"
+   },
+   "overflowPackages": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "requestedVersion": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "name",
+      "requestedVersion"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "owner": {
+    "type": "string"
+   },
+   "ownershipCheckNote": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "ownershipCheckedCount": {
+    "type": "number"
+   },
+   "ownershipRiskFlaggedCount": {
+    "type": "number"
+   },
+   "policy": {
+    "additionalProperties": false,
+    "properties": {
+     "allow": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "deny": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "mode": {
+      "enum": [
+       "default",
+       "allow",
+       "deny",
+       "allow+deny"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "mode",
+     "allow",
+     "deny"
+    ],
+    "type": "object"
+   },
+   "ref": {
+    "type": "string"
+   },
+   "repoName": {
+    "type": "string"
+   },
+   "summary": {
+    "type": "string"
+   },
+   "totalPackages": {
+    "type": "number"
+   },
+   "truncationNote": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "vulnerablePackageCount": {
+    "type": "number"
+   },
+   "warnings": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "workspaceNote": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "workspacePackageCount": {
+    "type": "number"
+   },
+   "workspacePatterns": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "summary",
+   "owner",
+   "repoName",
+   "ref",
+   "defaultBranchUsed",
+   "manifestPath",
+   "lockfilePath",
+   "inputFormat",
+   "isMonorepo",
+   "workspacePatterns",
+   "workspacePackageCount",
+   "workspaceNote",
+   "policy",
+   "findings",
+   "overflowPackages",
+   "totalPackages",
+   "vulnerablePackageCount",
+   "licenseViolationCount",
+   "installScriptFlaggedCount",
+   "deepScannedCount",
+   "ownershipCheckedCount",
+   "ownershipRiskFlaggedCount",
+   "warnings",
+   "truncationNote",
+   "deepScanNote",
+   "ownershipCheckNote"
+  ],
+  "type": "object"
+ },
+ "title": "Audit a GitHub repository's npm dependencies"
+}

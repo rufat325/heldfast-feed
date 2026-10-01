@@ -1,0 +1,543 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Point-in-Time Universe"
+ },
+ "description": "Use this tool to answer questions about historical index membership \u2014 e.g. \"Was Company X in the S&P 500 on date Y?\" or \"Which companies were in the Russell 2000 on 2010-01-01?\" Use this INSTEAD OF `search_companies` when the question involves a specific historical date or whether a company was an index member in the past \u2014 `search_companies` only returns current membership and cannot answer historical questions.\n\nReturns a survivorship-free universe valid on a given as_of_date (only companies that existed and were members on that exact date \u2014 no hindsight; [) interval semantics). To check one company, pass its ticker or CIK + the target date: present = was a member, absent = was not.\n\n\u26a0\ufe0f HISTORICAL DEPTH AND PROVENANCE DIFFER BY INDEX \u2014 read this before using a result for a backtest.\n\u2022 **SP500 \u2014 back to 1996-01-02, `high` confidence.** Curated entry/exit spells over 968 CIKs including long-delisted registrants, dated to the actual effective day.\n\u2022 **RUSSELL1000 / RUSSELL2000 / RUSSELL3000 \u2014 back to 2000-09-30, `medium` confidence.** Reconstructed from publicly disclosed portfolio holdings of large funds that track each index, not from the index provider's own constituent list (which is licensed). Three consequences you must carry into any conclusion: OBSERVATION SPACING VARIES \u2014 roughly one to four observations a year from 2000 through 2006, monthly from 2007 on \u2014 so a join or leave date is only as precise as the interval between observations and is never exact to the day in the early years; a tracking fund only PROXIES its index, so a few holdings sit outside the index and a sampled fund can miss some members; and there is NO data before 2000-09-30 \u2014 an earlier as_of_date returns zero rows because we do not carry it, which is not a statement that the index was empty.\n\u2022 **Known gap: 2016-12-30 \u2192 2017-07-31.** No holdings observation exists anywhere in that 213-day window, so Russell membership cannot be observed inside it. Departures collapse onto 2016-12-31 and arrivals onto 2017-07-31, which means the June 2017 reconstitution appears to happen on 31 July. Treat Russell results dated inside that window as interpolated.\n\nReturns per company: CIK, ticker, name, sector, industry, SIC code, `enriched`, and per-row confidence (high/medium/low). The CIK is always present and is the identifier to carry forward; every other identity field is nullable. `enriched: false` means index_membership names this member but the company has no row in `references` (it delisted before SEC's current-only ticker map was written) \u2014 its identity is UNKNOWN, not absent, and it is still a member. `ticker` is separately null when the company was not listed under any ticker on the as_of_date.\n\n\u26a0\ufe0f A RESPONSE IS USUALLY A PAGE, NOT THE UNIVERSE. `universe_size` always reports the FULL matched membership count; `returned_rows` reports what THIS response carries; `complete` is true only when they are equal, and `survivorship_free` is true only when `complete` is \u2014 a slice of a universe is not a survivorship-free universe. Two things shorten a response and they need different fixes: `limit` defaults to 100 (smaller than every index here), so raise it toward the index size \u2014 `limit_truncated` says when that is what bit; and at most 250 rows are inlined per call whatever your limit, so page with `offset` using the `truncation` envelope's `next_offset` until `returned_rows` sums to `universe_size`. To get the whole universe in one read, use get_compute_ready_stream, the Python SDK, or the Bulk Data API. Index rows are ordered by CIK \u2014 deliberately uncorrelated with whether a company survived to today, so a truncated page is an arbitrary sample rather than a list of survivors. `_meta.pit_safe` is true only when EVERY matched row is high-confidence \u2014 so it is false for any Russell query by construction. That flag is the one to branch on: use SP500 for rigorous point-in-time work, and treat Russell history as approximate. `sector` is SIC-derived (GICS-aligned, not licensed GICS) \u2014 a screening bucket, not an authoritative label.\n\nUse as the first step of a quantitative backtest before `get_compute_ready_stream`. Returns an empty array (with error detail) if the date is out of range or has no coverage. Available on every plan \u2014 sample returns the subset covered by the sample bucket.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "as_of_basis": {
+    "default": "effective",
+    "description": "Which date column drives historical construction. 'effective' (default) = effective_date/removal_date (first trading day; passive replication). 'announcement' = announcement_date/removal_announcement_date (S&P's public-announcement day; for inclusion-arb backtests) \u2014 rows with NULL announcement_date (mostly pre-2015) are skipped.",
+    "enum": [
+     "effective",
+     "announcement"
+    ],
+    "type": "string"
+   },
+   "as_of_date": {
+    "description": "Historical date (YYYY-MM-DD) for survivorship-free construction. Index queries use index_membership join/leave dates (entrants after the date excluded, later-removed members kept); sector queries use security valid_from/valid_to. Omit for the current universe.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   },
+   "include_share_classes": {
+    "default": false,
+    "description": "false (default) collapses to one row per CIK (index-provider convention \u2014 BRK counts once, not BRK-A + BRK-B). true returns every share-class row (GOOG and GOOGL separately) \u2014 for security-level analysis only.",
+    "type": "boolean"
+   },
+   "index": {
+    "description": "Index filter. 'sp500' (~500 large caps, curated history back to 1996), 'russell1000' (~1000 large/mid), 'russell2000' (~2000 small caps), 'russell3000' (~3000 broad market) \u2014 the three Russell indices carry fund-derived history back to 2000-09-30 at medium confidence, with observation spacing that widens before 2007. Omit for no index filter (sector-only or full universe queries).",
+    "enum": [
+     "sp500",
+     "russell1000",
+     "russell2000",
+     "russell3000"
+    ],
+    "type": "string"
+   },
+   "is_active": {
+    "description": "Filter to active (currently trading) companies only. Omit to include all. WARNING: setting this to true on a HISTORICAL query reintroduces survivorship bias \u2014 companies that were active on as_of_date but later went bankrupt or got acquired will be filtered out.  Leave unset for true PIT backtests.",
+    "type": "boolean"
+   },
+   "limit": {
+    "default": 100,
+    "description": "Maximum companies to return (1\u20133500). Defaults to 100 \u2014 which is SMALLER THAN EVERY INDEX, so the default call returns a slice, reports `limit_truncated: true` and withholds `survivorship_free`. `universe_size` always states the full matched count whatever you set here. Raising it is NOT sufficient on its own: at most 250 rows are inlined per call, so a large limit still returns a page (`complete: false`) until you walk it with `offset`. Universe is deduped to one row per CIK, so for a usable backtest universe set this near the index size (SP500 ~505, Russell 3000 ~3050) and page with `offset`.",
+    "maximum": 3500,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "offset": {
+    "default": 0,
+    "description": "Zero-based row offset for paging a large universe. At most 250 rows are inlined per call; when more match, the response carries a `truncation` envelope \u2014 pass its `next_offset` here (keeping the same `limit`) to fetch the next page. Defaults to 0.",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "sector": {
+    "description": "Sector filter (case-insensitive substring) over the SIC-derived, GICS-aligned label (not licensed GICS \u2014 see tool description). E.g. 'Technology', 'Energy'.",
+    "maxLength": 100,
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "get_pit_universe",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "_meta": {
+    "additionalProperties": false,
+    "description": "Provenance envelope \u2014 data lineage for every MCP response",
+    "properties": {
+     "as_of_date": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "cost_usd": {
+      "additionalProperties": false,
+      "description": "Per-call cost transparency. Omitted for subscription-only tools that have no PAYG-equivalent price.",
+      "properties": {
+       "amount_usd": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "basis": {
+        "description": "payg_charge = real agent-pay charge. payg_rate_card = indicative price, not billed.",
+        "enum": [
+         "payg_charge",
+         "payg_rate_card"
+        ],
+        "type": "string"
+       },
+       "billed": {
+        "description": "true = this amount was actually charged via PAYG for this call. false = indicative PAYG-equivalent value; your plan already covers this call for free.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "amount_usd",
+       "billed",
+       "basis"
+      ],
+      "type": "object"
+     },
+     "data_plan": {
+      "description": "Access plan: sample | sp500 | pro | full",
+      "type": "string"
+     },
+     "data_quality": {
+      "additionalProperties": false,
+      "description": "Server-side invariants run on this response",
+      "properties": {
+       "notes": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "validation_failed": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "detail": {
+           "type": "string"
+          },
+          "rule": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "rule",
+          "detail"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "validation_passed": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "validation_passed",
+       "validation_failed",
+       "notes"
+      ],
+      "type": "object"
+     },
+     "fundamentals_as_of": {
+      "description": "ISO timestamp when the FINANCIAL STATEMENTS were last rebuilt in bulk. Use THIS \u2014 not `last_updated` \u2014 when telling a user how current the cross-sectional fundamentals are. The snapshot is republished on every weekday price refresh while the statements are carried forward unchanged, so `last_updated` can be far more recent than the numbers it sits next to. It is a floor for a single filer, not a ceiling: a filer with a live partition receives its filing, facts and ratios intraday (minutes after EDGAR dissemination), so an entity-scoped read may carry a filing newer than this; cross-sectional ranks (factor scores, earnings signals) refresh with the weekly bulk export.",
+      "type": "string"
+     },
+     "last_updated": {
+      "description": "ISO timestamp when the snapshot was exported",
+      "type": "string"
+     },
+     "latency_ms": {
+      "description": "Wall-clock milliseconds this tool call took, measured server-side around the handler.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "limit_warnings": {
+      "description": "Soft-warning array for partial fulfillment. Each entry carries a stable subcode + remediation.options[]. AI agents pattern-match on subcode.",
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "code": {
+         "const": "LIMIT_EXCEEDED",
+         "type": "string"
+        },
+        "current_plan": {
+         "type": "string"
+        },
+        "extensions": {
+         "additionalProperties": {},
+         "type": "object"
+        },
+        "limit_type": {
+         "type": "string"
+        },
+        "limit_value": {},
+        "remediation": {
+         "additionalProperties": true,
+         "properties": {
+          "contact_sales": {
+           "type": "string"
+          },
+          "default_action": {
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "additionalProperties": {},
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "pricing_page": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "options",
+          "default_action",
+          "pricing_page",
+          "contact_sales"
+         ],
+         "type": "object"
+        },
+        "requested_value": {},
+        "returned_value": {},
+        "subcode": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "subcode",
+        "limit_type",
+        "current_plan",
+        "remediation"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "payg_override": {
+      "additionalProperties": false,
+      "description": "Set when this single response was paid for via the agent-pay PAYG flow \u2014 the rate-limit / depth-limit checks were bypassed for this call only.",
+      "properties": {
+       "amount_cents": {
+        "type": "number"
+       },
+       "entity_scope_hash": {
+        "type": "string"
+       },
+       "meter": {
+        "type": "string"
+       },
+       "quote_id": {
+        "type": "string"
+       },
+       "retry_token_hash": {
+        "type": "string"
+       },
+       "ticker_count": {
+        "type": "number"
+       },
+       "tool": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "quote_id",
+       "tool",
+       "meter",
+       "amount_cents",
+       "ticker_count",
+       "entity_scope_hash",
+       "retry_token_hash"
+      ],
+      "type": "object"
+     },
+     "pit_safe": {
+      "description": "true iff a zero-look-ahead point-in-time cut was applied to every returned figure",
+      "type": "boolean"
+     },
+     "price_as_of": {
+      "description": "ISO timestamp when the price surfaces were last refreshed.",
+      "type": "string"
+     },
+     "rate_limit": {
+      "additionalProperties": false,
+      "description": "Caller's remaining budget",
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "remaining": {
+        "type": "integer"
+       },
+       "reset_at": {
+        "description": "ISO 8601 timestamp when the window resets",
+        "type": "string"
+       },
+       "window": {
+        "enum": [
+         "minute",
+         "hour"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "limit",
+       "remaining",
+       "reset_at",
+       "window"
+      ],
+      "type": "object"
+     },
+     "request_id": {
+      "description": "Per-request correlation id (8-char)",
+      "type": "string"
+     },
+     "result_count": {
+      "type": "integer"
+     },
+     "schema_version": {
+      "description": "Parquet schema version from manifest.json",
+      "type": "string"
+     },
+     "snapshot": {
+      "description": "Snapshot directory name (e.g. snapshot_20260420)",
+      "type": "string"
+     },
+     "source": {
+      "const": "SEC EDGAR",
+      "type": "string"
+     },
+     "ticker": {
+      "type": "string"
+     },
+     "truncation": {
+      "additionalProperties": false,
+      "description": "Set when fewer rows were returned than requested \u2014 explains why and points to a remedy",
+      "properties": {
+       "current_plan": {
+        "type": "string"
+       },
+       "plan_limit": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "reason": {
+        "enum": [
+         "PLAN_LIMIT",
+         "DATA_NOT_AVAILABLE",
+         "FISCAL_YEAR_BOUNDARY_FILTER",
+         "OTHER"
+        ],
+        "type": "string"
+       },
+       "requested": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "returned": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "upgrade_required_for": {
+        "type": "string"
+       },
+       "upgrade_url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "requested",
+       "returned",
+       "reason"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "data_plan",
+     "schema_version",
+     "snapshot",
+     "last_updated",
+     "source",
+     "pit_safe"
+    ],
+    "type": "object"
+   },
+   "as_of_basis": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "as_of_date": {
+    "type": "string"
+   },
+   "companies": {
+    "items": {
+     "additionalProperties": true,
+     "properties": {},
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "complete": {
+    "type": "boolean"
+   },
+   "confidence_summary": {
+    "anyOf": [
+     {
+      "additionalProperties": {
+       "type": "number"
+      },
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "coverage": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "assessed": {
+        "type": "boolean"
+       },
+       "completeness_pct": {
+        "type": "number"
+       },
+       "expected_size": {
+        "type": "integer"
+       },
+       "returned": {
+        "type": "integer"
+       },
+       "undercount": {
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "expected_size",
+       "returned",
+       "completeness_pct",
+       "assessed",
+       "undercount"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "coverage_gap": {
+    "type": "boolean"
+   },
+   "index": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "limit_truncated": {
+    "type": "boolean"
+   },
+   "note": {
+    "type": "string"
+   },
+   "returned_rows": {
+    "minimum": 0,
+    "type": "integer"
+   },
+   "sector": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "survivorship_free": {
+    "type": "boolean"
+   },
+   "truncation": {
+    "additionalProperties": false,
+    "description": "Present only when the inline-row cap withheld rows. Page with `next_offset` (keep the same `limit`) or pull the full set via get_compute_ready_stream.",
+    "properties": {
+     "hint": {
+      "type": "string"
+     },
+     "next_offset": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "returned": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "total_available": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "truncated": {
+      "const": true,
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "truncated",
+     "returned",
+     "total_available",
+     "next_offset",
+     "hint"
+    ],
+    "type": "object"
+   },
+   "universe_size": {
+    "minimum": 0,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "_meta",
+   "as_of_date",
+   "as_of_basis",
+   "index",
+   "sector",
+   "universe_size",
+   "returned_rows",
+   "complete",
+   "limit_truncated",
+   "survivorship_free",
+   "coverage_gap",
+   "coverage",
+   "confidence_summary",
+   "note",
+   "companies"
+  ],
+  "type": "object"
+ },
+ "title": "Point-in-Time Universe"
+}

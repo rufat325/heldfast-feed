@@ -1,0 +1,612 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Restatement Radar Feed"
+ },
+ "description": "List financial-statement restatements \u2014 facts a later SEC filing materially changed (>0.5% swing) from what was originally reported. Each event carries the as-reported value, the restated value, the signed delta, a severity bucket, the RAW XBRL tag both filings used (the diff is same-tag, so it is apples-to-apples and checkable), both filings' accession numbers for one-click lineage, an analyst-importance tier (1 headline / 2 statement line / 3 footnote), the fact's rank within the company's restatement history, and \u2014 crucially \u2014 HOW the company told the market (`disclosure_class`): `non_reliance` (it filed an 8-K Item 4.02 telling the SEC not to rely on its prior financials), `amended` (a 10-K/A or 10-Q/A), or `undisclosed` (the number changed inside a routine 10-Q/10-K \u2014 no amendment, no 4.02). About 94% of events are `undisclosed`: most numbers that change, change quietly. `undisclosed` is a statement about the FILING CHAIN, not about the filer's intent \u2014 adopting a new accounting standard (ASC 606, ASC 842) legitimately restates prior comparatives with nobody doing anything wrong. Do NOT describe these as fraud, concealment, or wrongdoing. Filter by ticker, sector, severity, minimum swing, importance, disclosure class, or filing date; sort by recency (default) or significance; paginate with the returned cursor. Public data \u2014 available on every tier. Provenance: derived from SEC EDGAR filings; verify any figure with verify_fact_lineage.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "amendments_only": {
+    "description": "Only restatements that arrived in an AMENDED filing (10-K/A, 10-Q/A) \u2014 the company formally telling the SEC it got a number wrong. The sharpest cut there is: it separates real restatements from routine re-files (a next-year 10-K carrying a revised comparative).",
+    "type": "boolean"
+   },
+   "cursor": {
+    "description": "Opaque pagination cursor from a prior response's next_cursor.",
+    "maxLength": 20,
+    "pattern": "^\\d+$",
+    "type": "string"
+   },
+   "disclosure": {
+    "description": "Filter by HOW the company told the market. 'non_reliance' = it filed an 8-K Item 4.02 ('Non-Reliance on Previously Issued Financial Statements') \u2014 formally telling the SEC not to rely on what it already reported. The loudest signal in US disclosure, and rare. 'amended' = corrected in a 10-K/A or 10-Q/A. 'undisclosed' = the value changed inside a ROUTINE 10-Q or 10-K: no amendment, no 4.02, the old number is simply gone. ~94% of events. Anyone can parse an 8-K, so anyone can list what companies ANNOUNCED; finding what they didn't requires every vintage back to 1993.",
+    "items": {
+     "enum": [
+      "non_reliance",
+      "amended",
+      "undisclosed"
+     ],
+     "type": "string"
+    },
+    "maxItems": 3,
+    "minItems": 1,
+    "type": "array"
+   },
+   "event_id": {
+    "description": "Fetch exactly one event by its id (from a prior response).",
+    "maxLength": 64,
+    "minLength": 1,
+    "pattern": "^[a-f0-9]+$",
+    "type": "string"
+   },
+   "filed_since": {
+    "description": "Only restatements FILED on or after this date \u2014 the 'what changed recently' window.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   },
+   "limit": {
+    "default": 25,
+    "description": "Page size (1-100, default 25).",
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "max_importance": {
+    "description": "Only lines at or above this importance tier: 1 = headline only (revenue, net income, EPS, total assets, operating cash flow), 2 = + primary statement lines, 3 = everything incl. footnotes. Severity says how far a number moved; importance says whether anyone cares.",
+    "maximum": 3,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "min_abs_delta_pct": {
+    "description": "Only events whose absolute restatement is at least this percent (e.g. 5 = \u22655% swings).",
+    "maximum": 100,
+    "minimum": 0,
+    "type": "number"
+   },
+   "sector": {
+    "description": "Restrict to one GICS-style sector (e.g. 'Technology').",
+    "maxLength": 80,
+    "minLength": 1,
+    "type": "string"
+   },
+   "severity": {
+    "description": "high = |\u0394|\u226510%, medium = \u22652%, low = \u22650.5%.",
+    "enum": [
+     "high",
+     "medium",
+     "low"
+    ],
+    "type": "string"
+   },
+   "sort": {
+    "default": "recent",
+    "description": "'recent' = newest restating filing first (a market-wide radar). 'significance' = importance tier, then swing size (one company's history).",
+    "enum": [
+     "recent",
+     "significance"
+    ],
+    "type": "string"
+   },
+   "ticker": {
+    "description": "Restrict to one company \u2014 ticker (e.g. 'AAPL') or CIK (e.g. '0000320193').",
+    "maxLength": 10,
+    "minLength": 1,
+    "pattern": "^[A-Za-z0-9.\\-]+$",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "list_restatements",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "_meta": {
+    "additionalProperties": false,
+    "description": "Provenance envelope \u2014 data lineage for every MCP response",
+    "properties": {
+     "as_of_date": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "cost_usd": {
+      "additionalProperties": false,
+      "description": "Per-call cost transparency. Omitted for subscription-only tools that have no PAYG-equivalent price.",
+      "properties": {
+       "amount_usd": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "basis": {
+        "description": "payg_charge = real agent-pay charge. payg_rate_card = indicative price, not billed.",
+        "enum": [
+         "payg_charge",
+         "payg_rate_card"
+        ],
+        "type": "string"
+       },
+       "billed": {
+        "description": "true = this amount was actually charged via PAYG for this call. false = indicative PAYG-equivalent value; your plan already covers this call for free.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "amount_usd",
+       "billed",
+       "basis"
+      ],
+      "type": "object"
+     },
+     "data_plan": {
+      "description": "Access plan: sample | sp500 | pro | full",
+      "type": "string"
+     },
+     "data_quality": {
+      "additionalProperties": false,
+      "description": "Server-side invariants run on this response",
+      "properties": {
+       "notes": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "validation_failed": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "detail": {
+           "type": "string"
+          },
+          "rule": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "rule",
+          "detail"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "validation_passed": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "validation_passed",
+       "validation_failed",
+       "notes"
+      ],
+      "type": "object"
+     },
+     "fundamentals_as_of": {
+      "description": "ISO timestamp when the FINANCIAL STATEMENTS were last rebuilt in bulk. Use THIS \u2014 not `last_updated` \u2014 when telling a user how current the cross-sectional fundamentals are. The snapshot is republished on every weekday price refresh while the statements are carried forward unchanged, so `last_updated` can be far more recent than the numbers it sits next to. It is a floor for a single filer, not a ceiling: a filer with a live partition receives its filing, facts and ratios intraday (minutes after EDGAR dissemination), so an entity-scoped read may carry a filing newer than this; cross-sectional ranks (factor scores, earnings signals) refresh with the weekly bulk export.",
+      "type": "string"
+     },
+     "last_updated": {
+      "description": "ISO timestamp when the snapshot was exported",
+      "type": "string"
+     },
+     "latency_ms": {
+      "description": "Wall-clock milliseconds this tool call took, measured server-side around the handler.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "limit_warnings": {
+      "description": "Soft-warning array for partial fulfillment. Each entry carries a stable subcode + remediation.options[]. AI agents pattern-match on subcode.",
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "code": {
+         "const": "LIMIT_EXCEEDED",
+         "type": "string"
+        },
+        "current_plan": {
+         "type": "string"
+        },
+        "extensions": {
+         "additionalProperties": {},
+         "type": "object"
+        },
+        "limit_type": {
+         "type": "string"
+        },
+        "limit_value": {},
+        "remediation": {
+         "additionalProperties": true,
+         "properties": {
+          "contact_sales": {
+           "type": "string"
+          },
+          "default_action": {
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "additionalProperties": {},
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "pricing_page": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "options",
+          "default_action",
+          "pricing_page",
+          "contact_sales"
+         ],
+         "type": "object"
+        },
+        "requested_value": {},
+        "returned_value": {},
+        "subcode": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "subcode",
+        "limit_type",
+        "current_plan",
+        "remediation"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "payg_override": {
+      "additionalProperties": false,
+      "description": "Set when this single response was paid for via the agent-pay PAYG flow \u2014 the rate-limit / depth-limit checks were bypassed for this call only.",
+      "properties": {
+       "amount_cents": {
+        "type": "number"
+       },
+       "entity_scope_hash": {
+        "type": "string"
+       },
+       "meter": {
+        "type": "string"
+       },
+       "quote_id": {
+        "type": "string"
+       },
+       "retry_token_hash": {
+        "type": "string"
+       },
+       "ticker_count": {
+        "type": "number"
+       },
+       "tool": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "quote_id",
+       "tool",
+       "meter",
+       "amount_cents",
+       "ticker_count",
+       "entity_scope_hash",
+       "retry_token_hash"
+      ],
+      "type": "object"
+     },
+     "pit_safe": {
+      "description": "true iff a zero-look-ahead point-in-time cut was applied to every returned figure",
+      "type": "boolean"
+     },
+     "price_as_of": {
+      "description": "ISO timestamp when the price surfaces were last refreshed.",
+      "type": "string"
+     },
+     "rate_limit": {
+      "additionalProperties": false,
+      "description": "Caller's remaining budget",
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "remaining": {
+        "type": "integer"
+       },
+       "reset_at": {
+        "description": "ISO 8601 timestamp when the window resets",
+        "type": "string"
+       },
+       "window": {
+        "enum": [
+         "minute",
+         "hour"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "limit",
+       "remaining",
+       "reset_at",
+       "window"
+      ],
+      "type": "object"
+     },
+     "request_id": {
+      "description": "Per-request correlation id (8-char)",
+      "type": "string"
+     },
+     "result_count": {
+      "type": "integer"
+     },
+     "schema_version": {
+      "description": "Parquet schema version from manifest.json",
+      "type": "string"
+     },
+     "snapshot": {
+      "description": "Snapshot directory name (e.g. snapshot_20260420)",
+      "type": "string"
+     },
+     "source": {
+      "const": "SEC EDGAR",
+      "type": "string"
+     },
+     "ticker": {
+      "type": "string"
+     },
+     "truncation": {
+      "additionalProperties": false,
+      "description": "Set when fewer rows were returned than requested \u2014 explains why and points to a remedy",
+      "properties": {
+       "current_plan": {
+        "type": "string"
+       },
+       "plan_limit": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "reason": {
+        "enum": [
+         "PLAN_LIMIT",
+         "DATA_NOT_AVAILABLE",
+         "FISCAL_YEAR_BOUNDARY_FILTER",
+         "OTHER"
+        ],
+        "type": "string"
+       },
+       "requested": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "returned": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "upgrade_required_for": {
+        "type": "string"
+       },
+       "upgrade_url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "requested",
+       "returned",
+       "reason"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "data_plan",
+     "schema_version",
+     "snapshot",
+     "last_updated",
+     "source",
+     "pit_safe"
+    ],
+    "type": "object"
+   },
+   "events": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "cik": {
+       "type": "string"
+      },
+      "company_name": {
+       "type": "string"
+      },
+      "company_rank": {
+       "type": "number"
+      },
+      "concept": {
+       "type": "string"
+      },
+      "concept_importance": {
+       "type": "number"
+      },
+      "concept_label": {
+       "type": "string"
+      },
+      "current_accession": {
+       "type": "string"
+      },
+      "current_primary_doc": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "current_value": {
+       "type": "number"
+      },
+      "delta_abs": {
+       "type": "number"
+      },
+      "delta_pct": {
+       "type": "number"
+      },
+      "disclosure_class": {
+       "enum": [
+        "non_reliance",
+        "amended",
+        "undisclosed"
+       ],
+       "type": "string"
+      },
+      "event_id": {
+       "type": "string"
+      },
+      "first_accession": {
+       "type": "string"
+      },
+      "first_filed_at": {
+       "type": "string"
+      },
+      "first_primary_doc": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "first_value": {
+       "type": "number"
+      },
+      "fiscal_period": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "last_filed_at": {
+       "type": "string"
+      },
+      "period_end": {
+       "type": "string"
+      },
+      "period_start": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "restated_in_amendment": {
+       "type": "boolean"
+      },
+      "restated_in_form": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "sector": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "severity": {
+       "enum": [
+        "high",
+        "medium",
+        "low"
+       ],
+       "type": "string"
+      },
+      "standard_concept": {
+       "type": "string"
+      },
+      "statement_type": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "ticker": {
+       "type": "string"
+      },
+      "unit": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "version_count": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "event_id",
+      "cik",
+      "ticker",
+      "company_name",
+      "sector",
+      "concept",
+      "standard_concept",
+      "concept_label",
+      "concept_importance",
+      "statement_type",
+      "period_start",
+      "period_end",
+      "fiscal_period",
+      "unit",
+      "first_value",
+      "current_value",
+      "delta_abs",
+      "delta_pct",
+      "version_count",
+      "first_filed_at",
+      "last_filed_at",
+      "first_accession",
+      "current_accession",
+      "restated_in_form",
+      "first_primary_doc",
+      "current_primary_doc",
+      "restated_in_amendment",
+      "disclosure_class",
+      "severity",
+      "company_rank"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "next_cursor": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "note": {
+    "type": "string"
+   },
+   "total": {
+    "type": "integer"
+   }
+  },
+  "required": [
+   "_meta",
+   "events",
+   "total",
+   "next_cursor",
+   "note"
+  ],
+  "type": "object"
+ },
+ "title": "Restatement Radar Feed"
+}

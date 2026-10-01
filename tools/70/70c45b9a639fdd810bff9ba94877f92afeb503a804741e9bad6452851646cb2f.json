@@ -1,0 +1,323 @@
+{
+ "description": "Put a single run's stops in the best visiting order (\"order my errands\"). Provide `start` {lat, lon} and `stops` (1-100 entries of {location, label?, service_s?}); optionally an `end` destination or `round_trip`: true to return to the start. Costing \"auto\" = car, \"truck\" = lorry (pass `truck` as in `route` for a truck-legal order). Returns the stops in visit order with arrival offsets in seconds, plus total duration and distance.",
+ "inputSchema": {
+  "$defs": {
+   "CostingKind": {
+    "description": "Costing models exposed by the MCP tools (a deliberate subset of the\nValhalla costing list), serialised in snake_case exactly as Valhalla\nnames them.",
+    "oneOf": [
+     {
+      "const": "auto",
+      "description": "Standard car costing.",
+      "type": "string"
+     },
+     {
+      "const": "truck",
+      "description": "Truck costing; honours dimensional limits and, when a `truck`\nprofile is supplied, ADR dangerous-goods restrictions.",
+      "type": "string"
+     },
+     {
+      "const": "bicycle",
+      "description": "Bicycle costing; tune it with a `bicycle` options object.",
+      "type": "string"
+     },
+     {
+      "const": "pedestrian",
+      "description": "Pedestrian (walking) costing; tune it with a `pedestrian` options\nobject (lit streets, wheelchair/blind, hiking difficulty).",
+      "type": "string"
+     },
+     {
+      "const": "motor_scooter",
+      "description": "Motor scooter (moped) costing: like auto but prefers lower-speed\nroads and may use ways closed to larger motor vehicles.",
+      "type": "string"
+     }
+    ]
+   },
+   "LatLon": {
+    "anyOf": [
+     {
+      "properties": {
+       "lat": {
+        "description": "Latitude in decimal degrees (\u221290 to 90).",
+        "format": "double",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude in decimal degrees (\u2212180 to 180).",
+        "format": "double",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "GeoJSON position [lon, lat]: longitude FIRST.",
+      "items": {
+       "format": "double",
+       "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     }
+    ],
+    "description": "A WGS84 coordinate in decimal degrees: a {lat, lon} object (preferred), or a GeoJSON [lon, lat] array with LONGITUDE FIRST, the same order as every polygon field on this server."
+   },
+   "OrderStopSpec": {
+    "description": "One errand stop of an `order_stops` request.",
+    "properties": {
+     "label": {
+      "description": "Human-readable label echoed back in the ordered plan\n(e.g. \"chemist\" or \"site B\").",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "location": {
+      "$ref": "#/$defs/LatLon",
+      "description": "The stop's location."
+     },
+     "service_s": {
+      "description": "On-site time in seconds (waiting, loading, shopping).",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "location"
+    ],
+    "type": "object"
+   },
+   "TruckSpec": {
+    "description": "Truck profile for routing: physical dimensions plus the ADR\ndangerous-goods declaration. Omitted dimensions default to the EU\nmaximum authorised dimensions of Council Directive 96/53/EC (4.0 m\nheight, 2.55 m width, 16.5 m length, 40 t gross weight).",
+    "properties": {
+     "gross_weight_t": {
+      "description": "Gross combination weight in metric tonnes.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "hazmat": {
+      "default": false,
+      "description": "Whether the vehicle carries dangerous goods (ADR). Defaults to\nfalse.",
+      "type": "boolean"
+     },
+     "height_m": {
+      "description": "Vehicle height in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "length_m": {
+      "description": "Vehicle length in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "tunnel_code": {
+      "description": "ADR 8.6.4 tunnel restriction code of the load, e.g. \"B\", \"C5000D\",\n\"B/D\", or \"(\u2014)\"/\"none\" for explicitly unrestricted. Leave unset if\nunknown: a hazmat load without a code is conservatively treated as\ncode B (allowed only through category-A tunnels).",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "width_m": {
+      "description": "Vehicle width in metres.",
+      "format": "double",
+      "type": [
+       "number",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "costing": {
+    "$ref": "#/$defs/CostingKind",
+    "default": "auto",
+    "description": "Costing model: \"auto\" (default) or \"truck\"."
+   },
+   "end": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/LatLon"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Optional fixed final destination. Mutually exclusive with\n`round_trip`; omitted (and not a round trip), the run ends at\nwhichever stop the solver visits last."
+   },
+   "round_trip": {
+    "default": false,
+    "description": "Return to `start` after the last stop (default false).",
+    "type": "boolean"
+   },
+   "start": {
+    "$ref": "#/$defs/LatLon",
+    "description": "Where the run starts."
+   },
+   "stops": {
+    "description": "The stops to put in the best visiting order (1\u2013100).",
+    "items": {
+     "$ref": "#/$defs/OrderStopSpec"
+    },
+    "type": "array"
+   },
+   "truck": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/TruckSpec"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Truck profile (dimensions + ADR declaration); requires costing\n\"truck\". The travel-time matrix then respects dimensional and\ndangerous-goods restrictions."
+   }
+  },
+  "required": [
+   "start",
+   "stops"
+  ],
+  "type": "object"
+ },
+ "name": "order_stops",
+ "outputSchema": {
+  "$defs": {
+   "LatLon": {
+    "anyOf": [
+     {
+      "properties": {
+       "lat": {
+        "description": "Latitude in decimal degrees (\u221290 to 90).",
+        "format": "double",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude in decimal degrees (\u2212180 to 180).",
+        "format": "double",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "GeoJSON position [lon, lat]: longitude FIRST.",
+      "items": {
+       "format": "double",
+       "type": "number"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     }
+    ],
+    "description": "A WGS84 coordinate in decimal degrees: a {lat, lon} object (preferred), or a GeoJSON [lon, lat] array with LONGITUDE FIRST, the same order as every polygon field on this server."
+   },
+   "OrderedStop": {
+    "description": "One stop of an ordered errand plan.",
+    "properties": {
+     "arrival_s": {
+      "description": "Arrival time as an offset from departure, in seconds.",
+      "format": "int64",
+      "type": "integer"
+     },
+     "label": {
+      "description": "The request's label for this stop, when one was given.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "location": {
+      "$ref": "#/$defs/LatLon",
+      "description": "The stop's location."
+     },
+     "order": {
+      "description": "1-based visit order.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "stop_index": {
+      "description": "The stop's 0-based index in the request's `stops` array.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "order",
+     "stop_index",
+     "location",
+     "arrival_s"
+    ],
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "distance_m": {
+    "description": "Total travel distance in metres, when reported.",
+    "format": "int64",
+    "type": [
+     "integer",
+     "null"
+    ]
+   },
+   "duration_s": {
+    "description": "Total travel time in seconds.",
+    "format": "int64",
+    "type": "integer"
+   },
+   "ordered": {
+    "description": "The stops in optimal visiting order.",
+    "items": {
+     "$ref": "#/$defs/OrderedStop"
+    },
+    "type": "array"
+   },
+   "profile": {
+    "description": "The matrix costing profile (\"auto\" or \"truck\").",
+    "type": "string"
+   },
+   "unassigned_stop_indexes": {
+    "description": "0-based indexes of stops the solver could not fit (empty in the\nnormal, unconstrained case).",
+    "items": {
+     "format": "uint32",
+     "minimum": 0,
+     "type": "integer"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "profile",
+   "ordered",
+   "unassigned_stop_indexes",
+   "duration_s"
+  ],
+  "type": "object"
+ }
+}

@@ -1,0 +1,312 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Search all Aether corpora"
+ },
+ "description": "Unified search across every Aether corpus at once \u2014 SEC filings, Japan/EDINET and Korea/DART annual reports, EU financial regulation, and earnings calls/press-release exhibits \u2014 auto-routed and merged into one corpus-tagged, citation-complete result set. Use this for MOST questions: you do NOT have to pick the right corpus, and it will not miss same-day earnings (8-K earnings exhibits live in the transcript/press corpus, which a filings-only search silently misses). Each hit carries a `corpus` tag, an accession/citation string, a source URL, a 0-1 confidence score and an anchor_id. ALWAYS pass `issuer` (ticker, cik, or company_name for non-US filers) plus `fiscal_year` when you know it \u2014 it is forwarded to every corpus, so one named subject scopes filings and earnings calls together: fast and precise. A call with no issuer runs as scope=cross_company: slower, ranked by relevance only, and the response sets `quality_caveat` \u2014 check for that field before trusting the result. Use scope=cross_company deliberately, only for questions genuinely about many issuers (\"which filers name NVIDIA as a supplier\"). Filters are forwarded, not dropped: form_type / accession_number / section / return_format reach the filing corpora (sec/jp/kr), quarter and fiscal_year reach the earnings-call corpus, and EU regulation takes none of them (it has no issuer, form or quarter) \u2014 a filing filter therefore narrows an omitted `corpora` to sec/jp/kr. Any field not listed here is REJECTED with a 400 naming it, rather than silently ignored. Reach for financial_search / transcript_search / regulation_search only when you deliberately want to force a single corpus. Ownership questions do not go through search at all: holdings_by_security and holdings_by_manager.",
+ "inputSchema": {
+  "properties": {
+   "accession_number": {
+    "description": "Exact SEC accession number. When set, the filing corpora are hard-scoped to that filing, and an omitted `corpora` narrows to sec/jp/kr. It also counts as the identifier fetch mode requires, so `{accession_number}` with no `query` is a legal fetch.",
+    "pattern": "^\\d{10}-\\d{2}-\\d{6}$",
+    "type": "string"
+   },
+   "corpora": {
+    "description": "Optional corpus filter. Omit to search everything (recommended). Values: sec, jp, kr, regulation, transcripts. An explicit value always wins: a filing filter (form_type / accession_number / section) narrows an OMITTED fan-out to sec/jp/kr, but naming corpora here overrides that.",
+    "items": {
+     "enum": [
+      "sec",
+      "jp",
+      "kr",
+      "regulation",
+      "transcripts"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "fiscal_year": {
+    "description": "Issuer's fiscal year as the company labels it (NVIDIA FY2027 = year ending Jan 2027). Forwarded verbatim to every corpus: on filings it is resolved from XBRL DEI fiscal-year focus where available, else from the issuer's fiscal year-end; on earnings calls it is that corpus's own labelled fiscal year. An empty year widens \u00b11 with a caveat.",
+    "oneOf": [
+     {
+      "maximum": 2100,
+      "minimum": 1990,
+      "type": "integer"
+     },
+     {
+      "items": {
+       "maximum": 2100,
+       "minimum": 1990,
+       "type": "integer"
+      },
+      "maxItems": 10,
+      "minItems": 1,
+      "type": "array"
+     }
+    ]
+   },
+   "form_type": {
+    "description": "Only return these filing forms, for example [\"20-F\"] or [\"6-K\"]. Forwarded to the filing corpora (sec/jp/kr). Because an earnings segment has no form type and an EU article has none either, setting this ALSO narrows an omitted `corpora` to sec/jp/kr rather than merging rows the filter could not reach.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "issuer": {
+    "description": "The company the question is about. Pass at least one of ticker (e.g. \"NVDA\"), cik (e.g. \"1045810\"), or company_name (required for non-US issuers, which have no US ticker). Forwarded to every corpus that can use it. Strongly recommended on every call.",
+    "properties": {
+     "cik": {
+      "description": "SEC CIK, any padding.",
+      "pattern": "^(CIK\\s*)?\\d{1,10}$",
+      "type": "string"
+     },
+     "company_name": {
+      "description": "Legal or common company name; the route for non-US issuers.",
+      "type": "string"
+     },
+     "ticker": {
+      "description": "US ticker symbol.",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "limit": {
+    "default": 10,
+    "description": "Max hits to return (1-50, default 10).",
+    "maximum": 50,
+    "type": "integer"
+   },
+   "quarter": {
+    "description": "Fiscal quarter(s) \u2014 \"Q2\" or [\"Q1\",\"Q2\"]. Exact, case-insensitive. Applies to the EARNINGS-CALL corpus only (with issuer.ticker and fiscal_year it names one call, the natural fetch-mode request); the filing and regulation corpora ignore it.",
+    "oneOf": [
+     {
+      "type": "string"
+     },
+     {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 8,
+      "type": "array"
+     }
+    ]
+   },
+   "query": {
+    "description": "Natural language search query. OPTIONAL \u2014 omit it (or pass an empty string) to select FETCH MODE, which ranks nothing and returns rows in filing order. Fetch mode REQUIRES an identifier: pass `issuer` (ticker, cik or company_name) or a single-element `tickers`, optionally narrowed with `fiscal_year`; a query-less call with no identifier is rejected. Fetch fans out to sec/jp/kr/transcripts only \u2014 EU regulation has no issuer, so \"every article, newest first\" answers nothing.",
+    "type": "string"
+   },
+   "return_format": {
+    "default": "chunk",
+    "description": "Response shape for the filing corpora. \"chunk\" (the unified default) returns the matching window only \u2014 it keeps a five-corpus merge small. \"section\" returns the full SEC section the chunk belongs to, \"both\" returns both. The earnings-call and regulation corpora ignore it; their unit is a speaker turn / an article.",
+    "enum": [
+     "section",
+     "chunk",
+     "both"
+    ],
+    "type": "string"
+   },
+   "scope": {
+    "default": "issuer",
+    "description": "issuer (default): every corpus is scoped to the named company. cross_company: search all issuers \u2014 for questions like \"who names NVIDIA as a supplier\". Cross-company results are slower, relevance-ranked only, and always carry `quality_caveat`.",
+    "enum": [
+     "issuer",
+     "cross_company"
+    ],
+    "type": "string"
+   },
+   "section": {
+    "description": "Filing section(s), matched case-insensitively as a substring of the stored label \u2014 \"Item 1A\" matches \"Item 1A. Risk Factors\". In fetch mode this is how you ask for one part of a filing. Filing corpora only; it narrows an omitted `corpora` to sec/jp/kr.",
+    "oneOf": [
+     {
+      "type": "string"
+     },
+     {
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 20,
+      "type": "array"
+     }
+    ]
+   },
+   "tickers": {
+    "description": "Legacy alias of `issuer`, still accepted. One symbol (e.g. [\"IBM\"]) is read as issuer.ticker; several (e.g. [\"IBM\", \"MU\"]) is a cross-company question and is labelled scope=cross_company, though the filter to those companies still applies. Prefer `issuer`.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [],
+  "type": "object"
+ },
+ "name": "search",
+ "outputSchema": {
+  "properties": {
+   "latency_ms": {
+    "type": "integer"
+   },
+   "mode": {
+    "description": "\"search\" = a `query` was given and hits are ranked by relevance. \"fetch\" = no `query`; the identifier and filters select rows and they come back in filing order, unranked.",
+    "enum": [
+     "search",
+     "fetch"
+    ],
+    "type": "string"
+   },
+   "partial_errors": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "quality_caveat": {
+    "description": "Present when any answering corpus was not issuer-precise. Read it before trusting the result.",
+    "type": "string"
+   },
+   "query": {
+    "type": "string"
+   },
+   "results": {
+    "items": {
+     "properties": {
+      "anchor_id": {
+       "description": "Context-panel anchor (chunk/segment/doc id).",
+       "type": "string"
+      },
+      "as_of_date": {
+       "type": "string"
+      },
+      "body_offset": {
+       "description": "Filing corpora only, and only when the chunk opens with furniture: the character offset in `text` where the EDGAR cover page / contents opener ends and the body begins. Absent means `text` opens with its own body. Crop from here, not from 0, or a rendered excerpt reads \"UNITED STATES SECURITIES AND EXCHANGE COMMISSION\" instead of the answer (1,462 chars on a TSMC monthly-revenue 6-K).",
+       "minimum": 0,
+       "type": "integer"
+      },
+      "citation": {
+       "description": "Accession-numbered / article-level citation.",
+       "type": "string"
+      },
+      "confidence": {
+       "maximum": 1,
+       "minimum": 0,
+       "type": "number"
+      },
+      "context_token": {
+       "type": "string"
+      },
+      "corpus": {
+       "description": "Which corpus this hit came from.",
+       "enum": [
+        "sec",
+        "jp",
+        "kr",
+        "regulation",
+        "transcripts"
+       ],
+       "type": "string"
+      },
+      "corpus_label": {
+       "type": "string"
+      },
+      "diagnostics": {
+       "description": "Filing corpora only: the engine fields a caller can act on. Absent on corpora that do not produce them.",
+       "properties": {
+        "candidate_pool": {
+         "description": "Candidates retrieved before dedupe and diversity.",
+         "type": "integer"
+        },
+        "dedupe_dropped": {
+         "description": "Near-duplicate / per-filing-cap suppressions across filings.",
+         "type": "integer"
+        },
+        "fiscal_year_semantics": {
+         "description": "Which fiscal-year rule answered this call. Without it a caller cannot tell a real absence from a wrong one.",
+         "enum": [
+          "dei_fiscal_year_focus",
+          "issuer_fy_end_month",
+          "calendar_filed_window"
+         ],
+         "type": "string"
+        },
+        "issuer_how": {
+         "description": "How the issuer was resolved. `inferred_from_query` means the filter was a guess. `company_name_resolved` / `company_name_unresolved` are reported when a company_name ran through the name anchor first: resolved means the name mapped to CIKs and the call took the fast issuer-exact path, unresolved means it did not and the call ran cross-company \u2014 the whole cost profile of the request.",
+         "enum": [
+          "explicit_cik",
+          "explicit_ticker",
+          "company_name",
+          "company_name_resolved",
+          "company_name_unresolved",
+          "inferred_from_query",
+          "none"
+         ],
+         "type": "string"
+        },
+        "junk_dropped": {
+         "description": "Cover pages, exhibit indexes and [Reserved] sections removed.",
+         "type": "integer"
+        },
+        "mode": {
+         "description": "\"search\" = ranked by relevance. \"fetch\" = filters only, returned in filing order.",
+         "enum": [
+          "search",
+          "fetch"
+         ],
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "id": {
+       "type": "string"
+      },
+      "meta": {
+       "type": "object"
+      },
+      "source_url": {
+       "type": "string"
+      },
+      "text": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "id",
+      "corpus",
+      "citation",
+      "text",
+      "confidence",
+      "anchor_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "scope": {
+    "description": "Effective scope: the worst case across the corpora that answered. Any cross-company corpus makes the merged answer cross_company.",
+    "enum": [
+     "issuer",
+     "cross_company"
+    ],
+    "type": "string"
+   },
+   "total": {
+    "type": "integer"
+   }
+  },
+  "required": [
+   "query",
+   "results",
+   "total",
+   "latency_ms"
+  ],
+  "type": "object"
+ },
+ "x_aether_auth": {
+  "kind": "account_required",
+  "reason": "live first-party search consumes Aether API quota"
+ }
+}

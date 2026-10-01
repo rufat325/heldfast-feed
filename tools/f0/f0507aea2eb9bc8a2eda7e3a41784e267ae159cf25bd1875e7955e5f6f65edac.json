@@ -1,0 +1,569 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Verify Fact Lineage"
+ },
+ "description": "Use this tool when the user asks BOTH what a financial figure is AND which filing reported it \u2014 e.g. \"What was Apple's most recently reported revenue, and which 10-Q filed it?\" or \"Show me the accession ID for Tesla's latest net income.\" Returns a single fact plus its complete filing provenance: entity, concept, period, value, accession ID, filing URL, and form type (10-K, 10-Q, etc.).\n\nUse this INSTEAD OF `search_companies` when the user already names a company and wants a financial figure with its source filing \u2014 `search_companies` only resolves identifiers and returns no financial data. Use this INSTEAD OF `get_company_fundamentals` when the user explicitly wants the filing/form type or the accession ID \u2014 `get_company_fundamentals` returns metrics across periods but omits filing provenance.\n\nTwo lookup modes: (1) by fact_id (deterministic SHA-256 identity) or (2) by concept name plus a ticker (most recently reported fact). Optionally pin a point-in-time cutoff via as_of_date (YYYY-MM-DD) \u2014 returns the latest filing accepted by SEC on or before that date (no look-ahead); check `_meta.pit_safe`.\n\nDURATION: a single 10-K tags BOTH a 12-month figure and a 3-month Q4 stub at the same period_end; on a tie this returns the longer (headline) window, and every result carries `period_type` and `period_span_days` so a 3-month stub is never mistaken for the annual figure.\n\nProvide either fact_id or concept (required). Returns FACT_NOT_FOUND if no matching fact exists. Available on all plans.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "as_of_date": {
+    "description": "Point-in-time cutoff (YYYY-MM-DD) used with `concept` \u2014 returns the latest fact whose 10-K/10-Q was accepted by SEC on or before this date (true PIT, no lookahead; any calendar date works). Canonical name across the suite; supersedes the legacy `period_end`.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   },
+   "concept": {
+    "description": "Standard concept to look up the most recently known fact for (see the enum for the full fundamentals + capital-allocation set). Use this when you don't have a fact_id. Provide either concept OR fact_id.",
+    "enum": [
+     "TotalRevenue",
+     "CostOfRevenue",
+     "GrossProfit",
+     "OperatingIncome",
+     "OperatingExpenses",
+     "ResearchAndDevelopment",
+     "NetIncome",
+     "EPSDiluted",
+     "TotalAssets",
+     "TotalLiabilities",
+     "StockholdersEquity",
+     "StockholdersEquityIncludingNCI",
+     "CashAndEquivalents",
+     "TotalDebt",
+     "OperatingCashFlow",
+     "CAPEX",
+     "Dividends",
+     "ShareBuyback",
+     "DebtIssuance",
+     "DebtRepayment",
+     "Acquisitions",
+     "Divestitures"
+    ],
+    "type": "string"
+   },
+   "fact_id": {
+    "description": "Deterministic fact identity hash: SHA-256(entity_id|accession_id|concept|period_end|unit). 64-char lowercase hex. Use this when you already have the hash from a previous query. Provide either fact_id OR concept (not both required, but at least one must be set).",
+    "pattern": "^[0-9a-f]{64}$",
+    "type": "string"
+   },
+   "period_end": {
+    "description": "[DEPRECATED \u2014 pass `as_of_date` instead.] Filing-acceptance cutoff (YYYY-MM-DD) used with `concept`; despite the name it filters on filing accepted_at, not the returned fact's period_end. Kept one release for back-compat.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   },
+   "ticker": {
+    "description": "Stock ticker symbol, e.g. AAPL, MSFT, BRK.B \u2014 or a CIK (SEC identifier), e.g. '0000320193'.",
+    "maxLength": 10,
+    "minLength": 1,
+    "pattern": "^[A-Za-z0-9.\\-]+$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "ticker"
+  ],
+  "type": "object"
+ },
+ "name": "verify_fact_lineage",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "_meta": {
+    "additionalProperties": false,
+    "description": "Provenance envelope \u2014 data lineage for every MCP response",
+    "properties": {
+     "as_of_date": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "cost_usd": {
+      "additionalProperties": false,
+      "description": "Per-call cost transparency. Omitted for subscription-only tools that have no PAYG-equivalent price.",
+      "properties": {
+       "amount_usd": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "basis": {
+        "description": "payg_charge = real agent-pay charge. payg_rate_card = indicative price, not billed.",
+        "enum": [
+         "payg_charge",
+         "payg_rate_card"
+        ],
+        "type": "string"
+       },
+       "billed": {
+        "description": "true = this amount was actually charged via PAYG for this call. false = indicative PAYG-equivalent value; your plan already covers this call for free.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "amount_usd",
+       "billed",
+       "basis"
+      ],
+      "type": "object"
+     },
+     "data_plan": {
+      "description": "Access plan: sample | sp500 | pro | full",
+      "type": "string"
+     },
+     "data_quality": {
+      "additionalProperties": false,
+      "description": "Server-side invariants run on this response",
+      "properties": {
+       "notes": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "validation_failed": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "detail": {
+           "type": "string"
+          },
+          "rule": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "rule",
+          "detail"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "validation_passed": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "validation_passed",
+       "validation_failed",
+       "notes"
+      ],
+      "type": "object"
+     },
+     "fundamentals_as_of": {
+      "description": "ISO timestamp when the FINANCIAL STATEMENTS were last rebuilt in bulk. Use THIS \u2014 not `last_updated` \u2014 when telling a user how current the cross-sectional fundamentals are. The snapshot is republished on every weekday price refresh while the statements are carried forward unchanged, so `last_updated` can be far more recent than the numbers it sits next to. It is a floor for a single filer, not a ceiling: a filer with a live partition receives its filing, facts and ratios intraday (minutes after EDGAR dissemination), so an entity-scoped read may carry a filing newer than this; cross-sectional ranks (factor scores, earnings signals) refresh with the weekly bulk export.",
+      "type": "string"
+     },
+     "last_updated": {
+      "description": "ISO timestamp when the snapshot was exported",
+      "type": "string"
+     },
+     "latency_ms": {
+      "description": "Wall-clock milliseconds this tool call took, measured server-side around the handler.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "limit_warnings": {
+      "description": "Soft-warning array for partial fulfillment. Each entry carries a stable subcode + remediation.options[]. AI agents pattern-match on subcode.",
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "code": {
+         "const": "LIMIT_EXCEEDED",
+         "type": "string"
+        },
+        "current_plan": {
+         "type": "string"
+        },
+        "extensions": {
+         "additionalProperties": {},
+         "type": "object"
+        },
+        "limit_type": {
+         "type": "string"
+        },
+        "limit_value": {},
+        "remediation": {
+         "additionalProperties": true,
+         "properties": {
+          "contact_sales": {
+           "type": "string"
+          },
+          "default_action": {
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "additionalProperties": {},
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "pricing_page": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "options",
+          "default_action",
+          "pricing_page",
+          "contact_sales"
+         ],
+         "type": "object"
+        },
+        "requested_value": {},
+        "returned_value": {},
+        "subcode": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "subcode",
+        "limit_type",
+        "current_plan",
+        "remediation"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "payg_override": {
+      "additionalProperties": false,
+      "description": "Set when this single response was paid for via the agent-pay PAYG flow \u2014 the rate-limit / depth-limit checks were bypassed for this call only.",
+      "properties": {
+       "amount_cents": {
+        "type": "number"
+       },
+       "entity_scope_hash": {
+        "type": "string"
+       },
+       "meter": {
+        "type": "string"
+       },
+       "quote_id": {
+        "type": "string"
+       },
+       "retry_token_hash": {
+        "type": "string"
+       },
+       "ticker_count": {
+        "type": "number"
+       },
+       "tool": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "quote_id",
+       "tool",
+       "meter",
+       "amount_cents",
+       "ticker_count",
+       "entity_scope_hash",
+       "retry_token_hash"
+      ],
+      "type": "object"
+     },
+     "pit_safe": {
+      "description": "true iff a zero-look-ahead point-in-time cut was applied to every returned figure",
+      "type": "boolean"
+     },
+     "price_as_of": {
+      "description": "ISO timestamp when the price surfaces were last refreshed.",
+      "type": "string"
+     },
+     "rate_limit": {
+      "additionalProperties": false,
+      "description": "Caller's remaining budget",
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "remaining": {
+        "type": "integer"
+       },
+       "reset_at": {
+        "description": "ISO 8601 timestamp when the window resets",
+        "type": "string"
+       },
+       "window": {
+        "enum": [
+         "minute",
+         "hour"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "limit",
+       "remaining",
+       "reset_at",
+       "window"
+      ],
+      "type": "object"
+     },
+     "request_id": {
+      "description": "Per-request correlation id (8-char)",
+      "type": "string"
+     },
+     "result_count": {
+      "type": "integer"
+     },
+     "schema_version": {
+      "description": "Parquet schema version from manifest.json",
+      "type": "string"
+     },
+     "snapshot": {
+      "description": "Snapshot directory name (e.g. snapshot_20260420)",
+      "type": "string"
+     },
+     "source": {
+      "const": "SEC EDGAR",
+      "type": "string"
+     },
+     "ticker": {
+      "type": "string"
+     },
+     "truncation": {
+      "additionalProperties": false,
+      "description": "Set when fewer rows were returned than requested \u2014 explains why and points to a remedy",
+      "properties": {
+       "current_plan": {
+        "type": "string"
+       },
+       "plan_limit": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "reason": {
+        "enum": [
+         "PLAN_LIMIT",
+         "DATA_NOT_AVAILABLE",
+         "FISCAL_YEAR_BOUNDARY_FILTER",
+         "OTHER"
+        ],
+        "type": "string"
+       },
+       "requested": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "returned": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "upgrade_required_for": {
+        "type": "string"
+       },
+       "upgrade_url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "requested",
+       "returned",
+       "reason"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "data_plan",
+     "schema_version",
+     "snapshot",
+     "last_updated",
+     "source",
+     "pit_safe"
+    ],
+    "type": "object"
+   },
+   "lineage": {
+    "additionalProperties": false,
+    "description": "Full provenance for one fact. Identity: fact_id, entity_id, ticker, company_name, concept, standard_concept, accession_id. Value: numeric_value (raw), `display` (the SAME number already rendered \u2014 \"$391.04B\" \u2014 QUOTE THIS rather than re-rounding numeric_value yourself), unit, plus derived_quarterly_value/derived_quarterly_display (a Q2/Q3 10-Q states year-to-date, so the quarter and the filing are different numbers). Filing: source_url, inline_viewer_url, document_url, filing_date, form_type, accepted_at. Duration: period_start, period_end, period_span_days, and period_type (instant | quarterly | half_year | nine_month | annual | duration) so a 3-month stub is never mistaken for the 12-month figure \u2014 a 10-K tags BOTH at the same period_end. \u26a0\ufe0f There is no `value` key and no `cik` key; the fields are named exactly as emitted.",
+    "properties": {
+     "accepted_at": {
+      "description": "SEC acceptance timestamp (ISO 8601) \u2014 the moment this number became public. The PIT cut is taken on this.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "accession_id": {
+      "description": "SEC accession number of the filing that reported this value, e.g. 0000320193-24-000123.",
+      "type": "string"
+     },
+     "company_name": {
+      "description": "Registrant name as filed.",
+      "type": "string"
+     },
+     "concept": {
+      "description": "Raw XBRL tag as the filer used it, e.g. us-gaap:Revenues.",
+      "type": "string"
+     },
+     "derived_quarterly_display": {
+      "description": "`derived_quarterly_value` rendered the same way. Null when that value is null.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "derived_quarterly_value": {
+      "description": "The three-month figure derived from a year-to-date filing. A Q2/Q3 10-Q states YTD, so THIS and `numeric_value` are different numbers for the same fact \u2014 a verifier comparing against whichever one it happened to read passes wrong numbers half the time. Null when no derivation applies.",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "display": {
+      "description": "`numeric_value` ALREADY RENDERED \u2014 \"$391.04B\", \"$6.11\". QUOTE THIS character-for-character rather than re-rounding `numeric_value` yourself: the rendering also needs a scale, and `unit` alone cannot tell a fraction (0.5965 \u2192 \"59.65%\") from a percent (0.5965 \u2192 \"0.60%\"). Null when `numeric_value` is null.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "document_url": {
+      "description": "Direct link to the rendered primary document (not the index page). Null when the primary document is unknown.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "entity_id": {
+      "description": "Zero-padded 10-digit SEC CIK of the filer. (The key is named entity_id \u2014 there is no `cik` field.)",
+      "type": "string"
+     },
+     "fact_id": {
+      "description": "Deterministic fact identity: SHA-256(entity_id|accession_id|concept|period_end|unit), 64-char lowercase hex.",
+      "type": "string"
+     },
+     "filing_date": {
+      "description": "Filing date (YYYY-MM-DD). Null when the filing join found nothing.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "form_type": {
+      "description": "Filing form type \u2014 10-K, 10-Q, 8-K, 20-F. Null when the filing join found nothing.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "inline_viewer_url": {
+      "description": "SEC Inline-XBRL viewer opened on the rendered primary document \u2014 the strongest one-click verification link. Null when the filing is not Inline-XBRL or the primary document is unknown.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "numeric_value": {
+      "description": "The raw reported value. Null when the fact carries no numeric value.",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "period_end": {
+      "description": "End of the reporting window (YYYY-MM-DD), or the instant date for balance-sheet facts.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "period_span_days": {
+      "description": "Length of the reporting window in days. Null when not derivable.",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "period_start": {
+      "description": "Start of the reporting window (YYYY-MM-DD). Null for instant (balance-sheet) facts.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "period_type": {
+      "description": "Coarse duration class: instant | quarterly | half_year | nine_month | annual | duration. A single 10-K tags BOTH a 12-month figure and a 3-month Q4 stub at the same period_end, so this is what stops a stub being quoted as the annual number.",
+      "type": "string"
+     },
+     "source_url": {
+      "description": "SEC filing-index URL. Null when the filing join found nothing.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "standard_concept": {
+      "description": "Valuein's standardized concept name (TotalRevenue, NetIncome, \u2026); null when the raw tag is unmapped.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "ticker": {
+      "description": "Uppercase ticker the lookup resolved through.",
+      "type": "string"
+     },
+     "unit": {
+      "description": "Unit of the value, e.g. USD, USD/share, shares.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "fact_id",
+     "entity_id",
+     "ticker",
+     "company_name",
+     "accession_id",
+     "concept",
+     "standard_concept",
+     "unit",
+     "numeric_value",
+     "derived_quarterly_value",
+     "display",
+     "derived_quarterly_display",
+     "accepted_at",
+     "source_url",
+     "inline_viewer_url",
+     "document_url",
+     "filing_date",
+     "form_type",
+     "period_start",
+     "period_end",
+     "period_span_days",
+     "period_type"
+    ],
+    "type": "object"
+   },
+   "lookup_by": {
+    "description": "How the fact was located: 'fact_id' or 'concept'",
+    "type": "string"
+   },
+   "verified": {
+    "description": "True when the fact was located and its provenance resolved",
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "_meta",
+   "verified",
+   "lookup_by"
+  ],
+  "type": "object"
+ },
+ "title": "Verify Fact Lineage"
+}

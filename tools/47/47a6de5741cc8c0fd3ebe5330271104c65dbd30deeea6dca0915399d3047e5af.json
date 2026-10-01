@@ -1,0 +1,515 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false,
+  "title": "Generate Research Brief"
+ },
+ "description": "Render a structured research brief into a professionally-styled Word document \u2014 a branded masthead-first page (Valuein letterhead: brand rule, wordmark, 'EQUITY RESEARCH' kicker + date, then the ticker eyebrow, the title as hero, and the named analyst's byline), the body (abstract, optional snapshot table with figures in mono, markdown sections incl. GFM tables, and a citations table with clickable SEC EDGAR links), with a running footer (ticker, 'Built on Valuein \u00b7 valuein.biz', page number, a single disclosure line) repeated on every page. No embedded charts in v1; pair with `generate_dcf_xlsx` / `generate_comps_xlsx` for visuals the analyst pastes in.\n\nSERVER-TRUST: prose, snapshot rows, and citations are rendered as-supplied and are NOT verified by Valuein, so the brief carries a visible 'figures supplied by caller, not verified by Valuein' watermark (response `verification.status` = 'unverified'). Resolve each citation via `verify_fact_lineage` before publishing.\n\nConsumes the same `sections` + `citations` shape `create_report` emits, so the typical flow is two tool calls: `create_report` \u2192 `generate_research_brief_docx`.\n\nTier: pro+.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "abstract": {
+    "description": "Optional executive-summary paragraph (\u22642000 chars) shown after the masthead.",
+    "maxLength": 2000,
+    "type": "string"
+   },
+   "author_name": {
+    "description": "Display name of the analyst producing this brief, shown as a named byline ('By {name}') on the masthead \u2014 the way a real research note credits an analyst. Omit to show just the date.",
+    "maxLength": 120,
+    "type": "string"
+   },
+   "citations": {
+    "default": [],
+    "description": "Optional source citations (\u226460) rendered as a table with clickable SEC EDGAR hyperlinks.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "claim": {
+       "maxLength": 500,
+       "minLength": 1,
+       "type": "string"
+      },
+      "evidence": {
+       "enum": [
+        "primary",
+        "derived",
+        "external"
+       ],
+       "type": "string"
+      },
+      "source_filing": {
+       "maxLength": 40,
+       "type": "string"
+      },
+      "source_url": {
+       "maxLength": 500,
+       "type": "string"
+      }
+     },
+     "required": [
+      "claim",
+      "source_filing",
+      "source_url",
+      "evidence"
+     ],
+     "type": "object"
+    },
+    "maxItems": 60,
+    "type": "array"
+   },
+   "company_name": {
+    "description": "Optional display name shown in the masthead subtitle; falls back to the ticker if omitted.",
+    "maxLength": 120,
+    "type": "string"
+   },
+   "sections": {
+    "description": "Ordered body sections of the brief (1\u201320); each has a heading and body text.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "heading": {
+       "maxLength": 120,
+       "minLength": 1,
+       "type": "string"
+      },
+      "text": {
+       "maxLength": 20000,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "required": [
+      "heading",
+      "text"
+     ],
+     "type": "object"
+    },
+    "maxItems": 20,
+    "minItems": 1,
+    "type": "array"
+   },
+   "snapshot": {
+    "default": [],
+    "description": "Optional at-a-glance metric rows (\u226420) rendered as the snapshot table.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "label": {
+       "maxLength": 60,
+       "minLength": 1,
+       "type": "string"
+      },
+      "value": {
+       "maxLength": 120,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "required": [
+      "label",
+      "value"
+     ],
+     "type": "object"
+    },
+    "maxItems": 20,
+    "type": "array"
+   },
+   "ticker": {
+    "description": "Stock ticker symbol the brief covers, e.g. AAPL, MSFT, BRK.B.",
+    "maxLength": 10,
+    "minLength": 1,
+    "type": "string"
+   },
+   "title": {
+    "description": "Document title rendered in the page-1 masthead (1\u2013200 chars).",
+    "maxLength": 200,
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "ticker",
+   "title",
+   "sections"
+  ],
+  "type": "object"
+ },
+ "name": "generate_research_brief_docx",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "_meta": {
+    "additionalProperties": false,
+    "description": "Provenance envelope \u2014 data lineage for every MCP response",
+    "properties": {
+     "as_of_date": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "cost_usd": {
+      "additionalProperties": false,
+      "description": "Per-call cost transparency. Omitted for subscription-only tools that have no PAYG-equivalent price.",
+      "properties": {
+       "amount_usd": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "basis": {
+        "description": "payg_charge = real agent-pay charge. payg_rate_card = indicative price, not billed.",
+        "enum": [
+         "payg_charge",
+         "payg_rate_card"
+        ],
+        "type": "string"
+       },
+       "billed": {
+        "description": "true = this amount was actually charged via PAYG for this call. false = indicative PAYG-equivalent value; your plan already covers this call for free.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "amount_usd",
+       "billed",
+       "basis"
+      ],
+      "type": "object"
+     },
+     "data_plan": {
+      "description": "Access plan: sample | sp500 | pro | full",
+      "type": "string"
+     },
+     "data_quality": {
+      "additionalProperties": false,
+      "description": "Server-side invariants run on this response",
+      "properties": {
+       "notes": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "validation_failed": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "detail": {
+           "type": "string"
+          },
+          "rule": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "rule",
+          "detail"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "validation_passed": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "validation_passed",
+       "validation_failed",
+       "notes"
+      ],
+      "type": "object"
+     },
+     "fundamentals_as_of": {
+      "description": "ISO timestamp when the FINANCIAL STATEMENTS were last rebuilt in bulk. Use THIS \u2014 not `last_updated` \u2014 when telling a user how current the cross-sectional fundamentals are. The snapshot is republished on every weekday price refresh while the statements are carried forward unchanged, so `last_updated` can be far more recent than the numbers it sits next to. It is a floor for a single filer, not a ceiling: a filer with a live partition receives its filing, facts and ratios intraday (minutes after EDGAR dissemination), so an entity-scoped read may carry a filing newer than this; cross-sectional ranks (factor scores, earnings signals) refresh with the weekly bulk export.",
+      "type": "string"
+     },
+     "last_updated": {
+      "description": "ISO timestamp when the snapshot was exported",
+      "type": "string"
+     },
+     "latency_ms": {
+      "description": "Wall-clock milliseconds this tool call took, measured server-side around the handler.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "limit_warnings": {
+      "description": "Soft-warning array for partial fulfillment. Each entry carries a stable subcode + remediation.options[]. AI agents pattern-match on subcode.",
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "code": {
+         "const": "LIMIT_EXCEEDED",
+         "type": "string"
+        },
+        "current_plan": {
+         "type": "string"
+        },
+        "extensions": {
+         "additionalProperties": {},
+         "type": "object"
+        },
+        "limit_type": {
+         "type": "string"
+        },
+        "limit_value": {},
+        "remediation": {
+         "additionalProperties": true,
+         "properties": {
+          "contact_sales": {
+           "type": "string"
+          },
+          "default_action": {
+           "type": "string"
+          },
+          "options": {
+           "items": {
+            "additionalProperties": {},
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "pricing_page": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "options",
+          "default_action",
+          "pricing_page",
+          "contact_sales"
+         ],
+         "type": "object"
+        },
+        "requested_value": {},
+        "returned_value": {},
+        "subcode": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "subcode",
+        "limit_type",
+        "current_plan",
+        "remediation"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "payg_override": {
+      "additionalProperties": false,
+      "description": "Set when this single response was paid for via the agent-pay PAYG flow \u2014 the rate-limit / depth-limit checks were bypassed for this call only.",
+      "properties": {
+       "amount_cents": {
+        "type": "number"
+       },
+       "entity_scope_hash": {
+        "type": "string"
+       },
+       "meter": {
+        "type": "string"
+       },
+       "quote_id": {
+        "type": "string"
+       },
+       "retry_token_hash": {
+        "type": "string"
+       },
+       "ticker_count": {
+        "type": "number"
+       },
+       "tool": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "quote_id",
+       "tool",
+       "meter",
+       "amount_cents",
+       "ticker_count",
+       "entity_scope_hash",
+       "retry_token_hash"
+      ],
+      "type": "object"
+     },
+     "pit_safe": {
+      "description": "true iff a zero-look-ahead point-in-time cut was applied to every returned figure",
+      "type": "boolean"
+     },
+     "price_as_of": {
+      "description": "ISO timestamp when the price surfaces were last refreshed.",
+      "type": "string"
+     },
+     "rate_limit": {
+      "additionalProperties": false,
+      "description": "Caller's remaining budget",
+      "properties": {
+       "limit": {
+        "type": "integer"
+       },
+       "remaining": {
+        "type": "integer"
+       },
+       "reset_at": {
+        "description": "ISO 8601 timestamp when the window resets",
+        "type": "string"
+       },
+       "window": {
+        "enum": [
+         "minute",
+         "hour"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "limit",
+       "remaining",
+       "reset_at",
+       "window"
+      ],
+      "type": "object"
+     },
+     "request_id": {
+      "description": "Per-request correlation id (8-char)",
+      "type": "string"
+     },
+     "result_count": {
+      "type": "integer"
+     },
+     "schema_version": {
+      "description": "Parquet schema version from manifest.json",
+      "type": "string"
+     },
+     "snapshot": {
+      "description": "Snapshot directory name (e.g. snapshot_20260420)",
+      "type": "string"
+     },
+     "source": {
+      "const": "SEC EDGAR",
+      "type": "string"
+     },
+     "ticker": {
+      "type": "string"
+     },
+     "truncation": {
+      "additionalProperties": false,
+      "description": "Set when fewer rows were returned than requested \u2014 explains why and points to a remedy",
+      "properties": {
+       "current_plan": {
+        "type": "string"
+       },
+       "plan_limit": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "reason": {
+        "enum": [
+         "PLAN_LIMIT",
+         "DATA_NOT_AVAILABLE",
+         "FISCAL_YEAR_BOUNDARY_FILTER",
+         "OTHER"
+        ],
+        "type": "string"
+       },
+       "requested": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "returned": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "upgrade_required_for": {
+        "type": "string"
+       },
+       "upgrade_url": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "requested",
+       "returned",
+       "reason"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "data_plan",
+     "schema_version",
+     "snapshot",
+     "last_updated",
+     "source",
+     "pit_safe"
+    ],
+    "type": "object"
+   },
+   "content_type": {
+    "type": "string"
+   },
+   "expires_at": {
+    "type": "string"
+   },
+   "expires_in_seconds": {
+    "type": "integer"
+   },
+   "filename": {
+    "type": "string"
+   },
+   "r2_key": {
+    "type": "string"
+   },
+   "size_bytes": {
+    "type": "integer"
+   },
+   "url": {
+    "type": "string"
+   },
+   "verification": {
+    "additionalProperties": false,
+    "description": "Server-trust record. Brief prose, snapshot rows, and citations are rendered as supplied and are NOT verified by Valuein, so the brief carries a visible 'figures supplied by caller' watermark. Resolve each citation via verify_fact_lineage for one-click SEC verification.",
+    "properties": {
+     "note": {
+      "type": "string"
+     },
+     "status": {
+      "const": "unverified",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "note"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "_meta",
+   "url",
+   "r2_key",
+   "filename",
+   "content_type",
+   "size_bytes",
+   "expires_in_seconds",
+   "expires_at",
+   "verification"
+  ],
+  "type": "object"
+ },
+ "title": "Generate Research Brief (docx)"
+}
