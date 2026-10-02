@@ -1,0 +1,586 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "readOnlyHint": true
+ },
+ "description": "\n    PRIMARY free pre-spend gate (advisory). Pass seller_wallet OR resource_name.\n    wash_flagged=true never soft-allows. Unlabeled leftover 0.05 / leftover=0 is not a unit price.\n\n    When to use: before any x402 payment to a seller/resource.\n    When not to use: after you already decided to refuse; use verify_receipt for signed receipts only.\n\n    Pricing: free. Result is advisory (buyer policy still applies).\n\n    Hard-stops:\n      wash_flagged=true never soft-allows (decision=block / do_not_pay; no warn/allow/quick).\n      Unlabeled leftover 0.05 / leftover=0 is not a unit price; read price_kind.\n      Caller-supplied or scheme/price_kind=exact 0.05 stays a unit price.\n\n    Decision semantics (top-level, no nesting via MCP):\n      decision=block / recommended_action=do_not_pay -> DO NOT PAY.\n      decision=warn / recommended_action=proceed_with_cap -> pay only up to maximum_recommended_spend_usdc.\n      decision=allow / recommended_action=proceed_for_small_spend -> proceed under agent policy (no free-tier cap).\n\n    next_action (enrollment handoff \u2014 do not stop after free card):\n      next_step_type / payment_required / executable / command describe an\n      optional next step. A host may use command only under its own policy.\n      Never paste path templates (:pubkey / {pubkey}) as seller_wallet.\n\n    Also returns reason_codes[], confidence, model_version, decision_envelope.\n\n    No counterparty named (seller_wallet missing / a template / not a wallet, and\n    no resource_name or resource_url): decision=block, trust_score null, score null,\n    null_reason=no_subject, reason_codes NO_COUNTERPARTY (+ PLACEHOLDER_SELLER_WALLET),\n    seller_wallet_rejected echoes what you sent. That is an input bug, not a seller\n    verdict: fix the input and re-run.\n\n    trust_score is a free heuristic, NOT the full corpus.\n    Next: on allow/warn for material spend, next_action.command is the\n    optional AgentCash paid-trust or AutoGate install string, then verify_receipt\n    on the signed V7 receipt.\n    Optional: twzrd_watch_add for re-check after recheck_after_unix.\n\n    Additive: top-level aop_bind program registry (evidence hierarchy) when enabled;\n    never mutates decision / can_spend.\n    ",
+ "inputSchema": {
+  "properties": {
+   "agent_intent": {
+    "default": null,
+    "description": "Natural-language intent describing the planned paid action.",
+    "title": "Agent Intent",
+    "type": "string"
+   },
+   "buyer_wallet": {
+    "default": null,
+    "description": "Buyer's Solana wallet public key used for spend-context checks.",
+    "title": "Buyer Wallet",
+    "type": "string"
+   },
+   "marketplace_score": {
+    "default": null,
+    "description": "Optional upstream marketplace trust score (0-100) to blend into preflight context.",
+    "title": "Marketplace Score",
+    "type": "integer"
+   },
+   "price_usdc": {
+    "default": null,
+    "description": "Caller-supplied exact unit price in USDC. Leave unset unless you have an exact quote. Unlabeled leftover 0.05 / leftover=0 is not a unit price.",
+    "title": "Price Usdc",
+    "type": "number"
+   },
+   "queried_pubkey": {
+    "default": null,
+    "description": "Consumer pubkey, echoed on output when provided (attribution only).",
+    "title": "Queried Pubkey",
+    "type": "string"
+   },
+   "resource_name": {
+    "default": null,
+    "description": "Provider or resource label in a marketplace (for example marketplace:agent-name). Provide this OR seller_wallet.",
+    "title": "Resource Name",
+    "type": "string"
+   },
+   "resource_url": {
+    "default": null,
+    "description": "Canonical endpoint URL for the resource, if available.",
+    "title": "Resource Url",
+    "type": "string"
+   },
+   "seller_wallet": {
+    "default": null,
+    "description": "Seller's Solana base58 wallet (32-44 chars) for the listing or endpoint. Provide this OR resource_name. CRITICAL: never pass OpenAPI templates (:pubkey, {pubkey}, {seller_wallet}, SELLER_WALLET, PAY_TO_WALLET) \u2014 use accepts[].payTo from a 402 challenge.",
+    "title": "Seller Wallet",
+    "type": "string"
+   }
+  },
+  "title": "get_readiness_card_toolArguments",
+  "type": "object"
+ },
+ "name": "get_readiness_card_tool",
+ "outputSchema": {
+  "additionalProperties": true,
+  "properties": {
+   "as_of": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "ISO-8601 of data_as_of_unix. Null when the subject was never measured.",
+    "title": "As Of"
+   },
+   "basis": {
+    "anyOf": [
+     {
+      "items": {},
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Typed evidence entries {class, kind, source, observed_at, weight, ...}; observed_at is null with observed_at_null_reason on an honest-null card.",
+    "title": "Basis"
+   },
+   "can_spend": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Price-aware proceed flag (not 'true only on allow'). block \u2192 false; allow \u2192 true (unless known price exceeds free-tier ceiling); warn \u2192 true only when price_usdc is known and fits under recommended_cap_usdc, else false. Free card is advisory; AutoGate on the pay path enforces.",
+    "title": "Can Spend"
+   },
+   "category": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Resource category (e.g. defi, defi_intelligence).",
+    "title": "Category"
+   },
+   "caveats": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Risk factors and the always-on trust_score_basis caveat.",
+    "title": "Caveats"
+   },
+   "corpus_age_days": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Whole days since corpus_complete_day. Null when the ledger head is missing.",
+    "title": "Corpus Age Days"
+   },
+   "corpus_complete_day": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Ledger head complete day (YYYY-MM-DD) from x402_ledger_head. Null when that row is missing. Not the 2026-07-09 copy floor.",
+    "title": "Corpus Complete Day"
+   },
+   "corpus_complete_through_unix": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Behavioral corpus coverage watermark, or null when none is plumbed.",
+    "title": "Corpus Complete Through Unix"
+   },
+   "data_as_of_unix": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Seller last-activity unix when known. Null on unknown_subject / insufficient_signal / evaluation_failed \u2014 never card-build time. Card TTL is recheck_after_unix.",
+    "title": "Data As Of Unix"
+   },
+   "decision": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Spend decision: \"allow\" | \"warn\" | \"block\". wash_flagged=true never soft-allows \u2014 this field is block (no warn/allow/quick).",
+    "title": "Decision"
+   },
+   "expires_at": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "ISO-8601 card validity end (an expired card is an absent card).",
+    "title": "Expires At"
+   },
+   "issued_at": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "ISO-8601 card issue time.",
+    "title": "Issued At"
+   },
+   "ledger_basis": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Ledger head basis, for example exact or mixed_estimated.",
+    "title": "Ledger Basis"
+   },
+   "ledger_exact_through": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Last day of exact event capture on the ledger head. Later days may be estimates.",
+    "title": "Ledger Exact Through"
+   },
+   "max_price_usdc": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Advertised maximum USDC when price_kind is upto_cap. Not a unit price.",
+    "title": "Max Price Usdc"
+   },
+   "next_fixes": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Actionable steps the provider can take to raise trust.",
+    "title": "Next Fixes"
+   },
+   "null_reason": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Why score is null: \"unknown_subject\" | \"insufficient_signal\" | \"evaluation_failed\" | \"no_subject\" (no counterparty was named at all). Null when scored.",
+    "title": "Null Reason"
+   },
+   "observed_at": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "ISO-8601 of the seller's last settle, else the ledger head day. Null when neither exists. Not card-build time.",
+    "title": "Observed At"
+   },
+   "paid_deep_dive": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Optional Path A V7 receipt surface (/v1/intel/trust/{wallet}).",
+    "title": "Paid Deep Dive"
+   },
+   "paid_price_usdc": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Price of the optional V7 receipt in USDC (0.05).",
+    "title": "Paid Price Usdc"
+   },
+   "paid_teaser": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "First paid hop: $0.001 score-only teaser (/v1/intel/quick/{wallet}).",
+    "title": "Paid Teaser"
+   },
+   "paid_teaser_usdc": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Price of the first paid hop in USDC (0.001).",
+    "title": "Paid Teaser Usdc"
+   },
+   "price_kind": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "exact | upto_cap | unknown. upto_cap means price_usdc is not a unit price.",
+    "title": "Price Kind"
+   },
+   "price_usdc": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Quoted unit price in USDC. Null when price_kind is upto_cap or the figure is unlabeled leftover 0.05 / leftover=0 (scheme=upto leftover defaults, including stale 0.05, are not a unit price).",
+    "title": "Price Usdc"
+   },
+   "proof": {
+    "anyOf": [
+     {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Proof block: v5_receipt_upsell_available, has_v5_receipts, receipt_endpoint, known_seller_wallets, provider_reputation.",
+    "title": "Proof"
+   },
+   "queried_pubkey": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Consumer pubkey echoed when provided on input (attribution only; not a settle gate).",
+    "title": "Queried Pubkey"
+   },
+   "recheck_after_unix": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "UNIX timestamp after which this intel is stale. ADVISORY AND UNSIGNED on a paid receipt -- it is outside the signed leaf, so a receipt holder can extend it and the receipt still verifies. Enforce your own policy via verify_receipt(max_age_seconds=...), which checks the SIGNED preimage.timestamp_unix.",
+    "title": "Recheck After Unix"
+   },
+   "recheck_hint": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "One-line hint: re-verify via GET /v1/intel/trust/{pubkey}. Do not gate solely on recheck_after_unix -- it is unsigned on a paid receipt; use your own max_age_seconds.",
+    "title": "Recheck Hint"
+   },
+   "resource_name": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Resolved resource/provider label.",
+    "title": "Resource Name"
+   },
+   "root_provenance": {
+    "anyOf": [
+     {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "WZRD protocol root metadata (for deposit/claim/settle resources): latest_root_seq, dataset_hash (if known), leaf_version (GLOBAL_V5), verification_status, onchain_match (null = call verify_root_inputs before on-chain action), market_velocity (when the market data service is configured, for cross-referencing on-chain velocity/attention signals with the root's attention_bonus). Auto-populated on protocol keywords/mints/categories. Complements the verify_root_inputs tool for independent GLOBAL_V5 leaf + dataset + sorted-pair root recompute from public leaves. Null/absent on non-protocol resources.",
+    "title": "Root Provenance"
+   },
+   "score": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Draft-02 score 0..1, or null when no evidence was measured (see null_reason). An assessor never fabricates this; the legacy trust_score keeps a cautious default for old consumers.",
+    "title": "Score"
+   },
+   "score_decay_model": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "step:<=7d=1.0,<=30d=0.8,<=90d=0.5,>90d=0.25 (the recency decay on paid scores). ADVISORY AND UNSIGNED on a paid receipt.",
+    "title": "Score Decay Model"
+   },
+   "seller_wallet": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Seller Solana wallet, if known.",
+    "title": "Seller Wallet"
+   },
+   "seller_wallet_rejected": {
+    "anyOf": [
+     {
+      "additionalProperties": true,
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Set when the seller_wallet you sent was discarded: {\"value\", \"reason\": \"template_placeholder\" | \"not_a_wallet_address\"}. With no resource_name/resource_url the card is decision=block, null_reason=no_subject, reason_codes NO_COUNTERPARTY (+ PLACEHOLDER_SELLER_WALLET). Fix the input; this is not a verdict about any seller.",
+    "title": "Seller Wallet Rejected"
+   },
+   "stale": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "True when the seller's last settle is older than 7 days, or when there is no settle and the ledger head is older than 7 days or missing. Warning only; not a wash refuse.",
+    "title": "Stale"
+   },
+   "staleness_days": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Recommended re-check cadence in days (7 high-quality, 3 partial/stale). ADVISORY AND UNSIGNED on a paid receipt.",
+    "title": "Staleness Days"
+   },
+   "trust_score": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Composite trust signal, 0-100.",
+    "title": "Trust Score"
+   },
+   "trust_score_basis": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Provenance of the score; ALWAYS the free heuristic, never the paid corpus model.",
+    "title": "Trust Score Basis"
+   },
+   "version": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Card schema version, e.g. readiness_card_v1.",
+    "title": "Version"
+   }
+  },
+  "title": "ReadinessCardOut",
+  "type": "object"
+ }
+}
