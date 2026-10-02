@@ -1,0 +1,107 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Knock-in / prime-edit rate from Sanger traces"
+ },
+ "description": "Measure the rate of a SPECIFIC intended edit from a pair of Sanger traces \u2014 an unedited control and the edited pool \u2014 by decomposing the edited trace onto three things at once: the wild-type allele, the intended edited allele, and the unintended indels. Serves both readouts that need this: HDR knock-in rate (what fraction of the pool carries the donor's edit, including an insert of novel sequence), and prime editing (the pegRNA's intended substitution, insertion, deletion or replacement as the intended column, and the indel byproducts at the nick as the shift columns). This is what sanger_indel_spectrum cannot do: that tool's basis is indexed by indel LENGTH, so an intended 6 bp knock-in and an accidental 6 bp NHEJ deletion are one column there. Returns knock-in / wild-type / unintended-indel percentages, the byproduct spectrum by shift, and the R\u00b2 that says whether the model fits your traces at all. Non-negative least squares, so no allele is ever assigned a negative share. For a substitution or replacement the reference allele you name is checked against the control read before anything is fitted; an insertion and a deletion name no reference bases, so there only the position can be range-checked. PREDICTED, NOT MEASURED. Every run reports its own R\u00b2: how much of the observed window the basis actually explains, measured on YOUR traces, where a low value means the model is wrong here rather than that the edit is weak. On agreement with a reference method for real samples \u2014 amplicon sequencing or clonal genotyping \u2014 none is published for this implementation. The underlying decomposition is TIDE/TIDER's, whose authors report their own concordance, and that number does not transfer to this code so it is not quoted. This implementation's near-exact recovery of synthetic mixtures is deliberately not offered as validation: a synthetic mixture is built from the same idealised one-hot peaks the basis assumes, so recovering it tests the arithmetic and cannot test the assumption. Valid for: A pool whose intended edit is known EXACTLY, read against a control amplicon of the same locus and chemistry, with both reads extending well past the edit. The novel inserted bases of a knock-in carry an assumed peak shape rather than a measured one (returned as constructedPositions) \u2014 the more of the window they occupy, the more of the fit is testing that assumption. NOT valid when the reported R\u00b2 is low; nor for separating an intended pure DELETION from an unintended indel of the same net length ANYWHERE in the window, not only one at the same site (the tool reports which case it is in `sameShiftByproduct`: when that column is not fitted, knockinPercent is the sum of the two); nor for telling an on-target knock-in from a random integration of the same donor; nor for resolving haplotypes, since a Sanger trace of a pool has no phase information.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "altAllele": {
+    "description": "The bases the edit installs in their place (substitution and replacement).",
+    "residues": "nt",
+    "type": "string"
+   },
+   "controlBases": {
+    "description": "Base calls of the UNEDITED control read.",
+    "residues": "nt",
+    "type": "string"
+   },
+   "controlChannels": {
+    "description": "Per-base [A, C, G, T] intensities of the control read, one row per called base, read at that base's peak location (trace arrays are indexed by scan, not by base).",
+    "items": {
+     "items": {
+      "type": "number"
+     },
+     "type": "array"
+    },
+    "type": "array"
+   },
+   "cutPosition": {
+    "description": "1-based CONTROL position where UNINTENDED indels start \u2014 the nuclease cut or the PE nick. Defaults to the edit start. Separate from editPosition because a byproduct allele is wild-type up to the cut and shifted after it, so a wrong cut position makes those columns wrong over the first part of the window.",
+    "type": "number"
+   },
+   "deletedLength": {
+    "description": "How many bases are deleted (deletion only).",
+    "type": "integer"
+   },
+   "editKind": {
+    "description": "Shape of the intended edit, spelled as prime_editing_design spells it. \"substitution\" replaces bases one for one; \"insertion\" adds novel bases and replaces none; \"deletion\" removes bases and adds none; \"replacement\" is the general case where the two lengths differ.",
+    "enum": [
+     "substitution",
+     "insertion",
+     "deletion",
+     "replacement"
+    ],
+    "type": "string"
+   },
+   "editPosition": {
+    "description": "1-based position of the edit in CONTROL read coordinates: the first base the edit replaces. An insertion replaces nothing, so there it is the base the insert lands immediately BEFORE \u2014 one MORE than the VCF/HGVS anchor, which names the base before an insertion. The rule is uniform across all four kinds on purpose; a spec transcribed from VCF needs +1 on an insertion.",
+    "type": "number"
+   },
+   "editedBases": {
+    "description": "Base calls of the edited pool's read.",
+    "residues": "nt",
+    "type": "string"
+   },
+   "editedChannels": {
+    "description": "Per-base [A, C, G, T] intensities of the edited read, same convention.",
+    "items": {
+     "items": {
+      "type": "number"
+     },
+     "type": "array"
+    },
+    "type": "array"
+   },
+   "insertedSeq": {
+    "description": "The novel bases inserted (insertion only).",
+    "residues": "nt",
+    "type": "string"
+   },
+   "maxIndel": {
+    "default": 10,
+    "description": "Largest unintended indel to fit, in bp (1-20; out of range is rejected, not clamped). Every shift from \u2212maxIndel to +maxIndel is included except 0, which is wild-type. The intended edit's OWN net shift is included too whenever its column is measurably different from the intended-edit column \u2014 it is dropped only when the two are the same vector, which happens for a pure deletion whose cut is at the edit. See sameShiftByproduct in the result for which of the two happened.",
+    "type": "number"
+   },
+   "offset": {
+    "description": "Override the alignment offset between the reads (whole number, \u221240 to 40). By default it is found from the base calls upstream of the edit. upstreamIdentity is always measured AT the offset used, so an override that is wrong shows up as a failed same-amplicon check rather than borrowing the auto-detected offset's score.",
+    "type": "number"
+   },
+   "refAllele": {
+    "description": "The control bases the edit replaces (substitution and replacement). Checked against the control read: a mismatch is rejected, because building the intended-edit column at the wrong position yields a confident, meaningless number.",
+    "residues": "nt",
+    "type": "string"
+   },
+   "windowLength": {
+    "default": 70,
+    "description": "Bases from the edit site downstream used for the decomposition (20-300; out of range is rejected, not clamped). Unlike sanger_indel_spectrum there is no guard region: the edited positions themselves are the only signal separating a substitution from wild-type.",
+    "type": "number"
+   }
+  },
+  "required": [
+   "controlBases",
+   "controlChannels",
+   "editedBases",
+   "editedChannels",
+   "editKind",
+   "editPosition"
+  ],
+  "type": "object"
+ },
+ "name": "sanger_knockin_quant",
+ "title": "Knock-in / prime-edit rate from Sanger traces"
+}
