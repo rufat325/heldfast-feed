@@ -1,0 +1,158 @@
+{
+ "description": "Author, edit, test and publish YOUR OWN ComfyUI custom-node pack under the custom_nodes/ directory the running ComfyUI actually scans. LOCAL-ONLY: it acts on the local filesystem and is meaningless for a remote --comfyui-url target. Every file-touching action (list_files, read, search, write, patch, git) is jailed to custom_nodes/ under the directory the running ComfyUI actually scans \u2014 the server's own --base-directory when it reports one (on ComfyUI Desktop that is NOT the code install root), else the live main.py checkout on a split install that has no --base-directory (the data workspace is not scanned unless the flag said so), else COMFYUI_PATH, else the saved default workspace, else the running LOCAL server's own install root; the one exception is action:\"publish\", which also accepts an explicit `path` to a pack directory ANYWHERE on this machine and therefore works without COMFYUI_PATH. To INSTALL or update someone else's pack use install_custom_node instead. Driven by the `action` parameter:\n- action:\"scaffold\" \u2014 Generate a new pack from a template into the local ComfyUI's scanned custom_nodes/<name>/ (the install base resolves from the running server's --base-directory when it reports one, else the live main.py checkout on a split install, else COMFYUI_PATH, else the saved default workspace, else the running LOCAL server this session is connected to). Writes pyproject.toml (with the [tool.comfy] PublisherId/DisplayName/Icon table the Comfy Registry requires), __init__.py exporting NODE_CLASS_MAPPINGS / NODE_DISPLAY_NAME_MAPPINGS, and src/nodes.py containing a runnable sample node (INPUT_TYPES/RETURN_TYPES/FUNCTION/CATEGORY), plus .comfyignore and .gitignore. Optionally emits a web/js frontend stub (wiring WEB_DIRECTORY) and a GitHub Actions publish workflow (with_ci). This is the FIRST step of the author loop: scaffold here, then restart_comfyui to load it, test it, and finally action:\"publish\". Names must be a safe lowercase slug and cannot escape custom_nodes/; an existing non-empty directory is left untouched unless overwrite is true. Requires `name` and `display_name`.\n- action:\"verify\" \u2014 Test that a pack actually LOADS in ComfyUI \u2014 the middle step of the author loop. Restarts the local ComfyUI and waits for it to become ready, then checks that the pack's node class_types appear in /object_info. A node that fails to import (a missing dependency or a syntax error) simply never registers, so any missing class_types pinpoint a broken pack. Provide `class_types` explicitly, or a pack `name` whose __init__.py declares NODE_CLASS_MAPPINGS (the keys are inferred). Needs a managed local ComfyUI. Set restart:false to check the already-running server without restarting it.\n- action:\"publish\" \u2014 Publish a local pack to the public Comfy Registry (registry.comfy.org) by running `comfy node publish` inside the pack directory. First validates the pack's pyproject.toml has the required [project].name, [project].version and [tool.comfy].PublisherId (refusing the scaffold placeholder), then publishes using the API key from the REGISTRY_ACCESS_TOKEN environment variable (passed to comfy-cli via the environment, never via logged arguments). This is the LAST step of the author loop and an IRREVERSIBLE, EXTERNAL action: it creates/updates a PUBLIC registry version that this tool cannot undo. Requires comfy-cli installed and REGISTRY_ACCESS_TOKEN set. Give `name` (a folder under custom_nodes/) or `path` (an explicit pack directory).\n- action:\"list_files\" \u2014 List the files in one installed pack under custom_nodes/<pack>/ (read-only). Skips .git/, __pycache__/ and node_modules/. Use this to orient before action:\"read\" / action:\"search\" when diagnosing or editing a pack you found via bisect or install_custom_node (action:\"fix\"). Requires `pack`.\n- action:\"read\" \u2014 Read a slice of ONE file inside a pack (read-only), with bounded output so a huge file can't flood the context. Returns the requested line range with a truncation notice when clipped; long lines are chunked. Pair with action:\"search\" to locate the line, then action:\"patch\" or action:\"write\" to change it. Requires `path`.\n- action:\"search\" \u2014 Regex-search custom-node source under custom_nodes/ (read-only). Uses ripgrep when it's on PATH, otherwise a bounded built-in scanner (skips dot-dirs, __pycache__/node_modules, binary and >1 MiB files). Returns file/line/text matches with per-line and result caps. Use this to find where a node class, import, or error string lives before reading or patching. Requires `query`.\n- action:\"write\" \u2014 Create or overwrite ONE file inside a pack. Refuses to clobber an existing file unless overwrite is true, and creates parent directories by default. Use for whole-file edits or new files; for surgical edits prefer action:\"patch\". After writing, run action:\"verify\" and restart_comfyui to load the change. Requires `path` and `content`.\n- action:\"patch\" \u2014 Apply a unified diff (---/+++ headers) or an apply-patch / simplified diff (`*** Begin Patch` / `*** Update File`) to custom-node source under custom_nodes/. Every touched path is jail-checked BEFORE any git call, then the patch is validated with `git apply --check` and only applied if the check passes (two-phase; never uses --unsafe-paths). Paths are relative to custom_nodes/ and may carry a/ b/ prefixes; works on non-repo packs too. Ideal for surgical edits located via action:\"search\". Requires `patch`.\n- action:\"git\" \u2014 Run a git operation inside one pack, selected by `git_action` (status/diff/log/commit/push). Reads (status/diff/log) are always allowed. Writes (commit/push) require the environment flag COMFYUI_MCP_ALLOW_GIT_WRITES=1 (default OFF) and otherwise return a structured DISABLED_BY_CONFIG refusal so you can self-correct. `paths` entries are pack-relative paths to stage/scope, resolved against the selected pack root (not custom_nodes/); an absolute path is accepted only when it remains inside both the selected pack and custom_nodes/ jails. commit requires a `message` and stages either the given `paths` or all pack changes. This is the final step of the author loop after scaffold \u2192 write/patch \u2192 verify \u2192 restart_comfyui, before action:\"publish\". Requires `pack` and `git_action`.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "action": {
+    "description": "Which node-pack operation to perform. \"scaffold\" requires `name` + `display_name`; \"list_files\" requires `pack`; \"read\" requires `path`; \"search\" requires `query`; \"write\" requires `path` + `content`; \"patch\" requires `patch`; \"git\" requires `pack` + `git_action`. \"verify\" and \"publish\" have no required parameters \u2014 \"verify\" resolves the pack from `name` (or checks `class_types` directly), \"publish\" from `name` or `path`.",
+    "enum": [
+     "scaffold",
+     "verify",
+     "publish",
+     "list_files",
+     "read",
+     "search",
+     "write",
+     "patch",
+     "git"
+    ],
+    "type": "string"
+   },
+   "case_sensitive": {
+    "description": "action:\"search\" \u2014 match case-sensitively (default false).",
+    "type": "boolean"
+   },
+   "category": {
+    "description": "action:\"scaffold\" \u2014 node menu category for the sample node (default 'custom').",
+    "type": "string"
+   },
+   "class_types": {
+    "description": "action:\"verify\" \u2014 explicit NODE_CLASS_MAPPINGS keys to confirm are registered in /object_info. Takes precedence over inferring from `name`.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "content": {
+    "description": "action:\"write\" \u2014 REQUIRED. Full file contents to write.",
+    "type": "string"
+   },
+   "create_dirs": {
+    "description": "action:\"write\" \u2014 create missing parent directories (default true).",
+    "type": "boolean"
+   },
+   "description": {
+    "description": "action:\"scaffold\" \u2014 short description written to pyproject [project].description.",
+    "type": "string"
+   },
+   "display_name": {
+    "description": "action:\"scaffold\" \u2014 REQUIRED. Human-readable name shown in the ComfyUI node menu and the registry listing.",
+    "type": "string"
+   },
+   "git_action": {
+    "description": "action:\"git\" \u2014 REQUIRED. Which git operation to run: status/diff/log are read-only; commit/push require COMFYUI_MCP_ALLOW_GIT_WRITES=1. Named `git_action` rather than `action` only because `action` is this tool's dispatch field; the git operation itself is unchanged.",
+    "enum": [
+     "status",
+     "diff",
+     "log",
+     "commit",
+     "push"
+    ],
+    "type": "string"
+   },
+   "glob": {
+    "description": "action:\"list_files\" \u2014 optional glob to filter entries (supports *, **, ?), matched against pack-relative paths. action:\"search\" \u2014 optional glob to restrict which files are searched (e.g. '**/*.py').",
+    "type": "string"
+   },
+   "line_count": {
+    "description": "action:\"read\" \u2014 number of lines to return (default 240, max 800).",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "max_chars": {
+    "description": "action:\"read\" \u2014 maximum characters to return (default 12000, min 500, max 24000 \u2014 hard clamps; values outside are silently pulled into range). action:\"git\" \u2014 maximum characters of git output to return (default 12000, min 500, max 24000 \u2014 hard clamps the runtime applies; values outside are silently pulled into range).",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "max_entries": {
+    "description": "action:\"list_files\" \u2014 maximum entries to return (default 500, max 2000 \u2014 a hard clamp). The walk STOPS at this many, so a capped result is not the pack's full file list.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "max_results": {
+    "description": "action:\"search\" \u2014 maximum matches to return (default 50, max 100). The scan STOPS at this many, so a capped result is not a complete match set.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "message": {
+    "description": "action:\"git\" \u2014 commit message (required for git_action 'commit').",
+    "type": "string"
+   },
+   "name": {
+    "description": "Pack folder name under <COMFYUI_PATH>/custom_nodes/. REQUIRED for action:\"scaffold\" \u2014 a safe lowercase slug (letters, digits, hyphens, underscores), e.g. 'my-cool-nodes', which becomes the directory under custom_nodes/ and the pyproject [project].name. For action:\"verify\", the pack whose __init__.py NODE_CLASS_MAPPINGS keys are inferred and checked when `class_types` is omitted. For action:\"publish\", the pack folder to publish (give this or `path`).",
+    "type": "string"
+   },
+   "overwrite": {
+    "description": "action:\"scaffold\" \u2014 overwrite template files in an existing pack directory instead of refusing (default false). action:\"write\" \u2014 overwrite an existing file instead of refusing (default false).",
+    "type": "boolean"
+   },
+   "pack": {
+    "description": "Pack folder name under custom_nodes/ (e.g. 'ComfyUI-Manager'). REQUIRED for action:\"list_files\" and action:\"git\".",
+    "type": "string"
+   },
+   "patch": {
+    "description": "action:\"patch\" \u2014 REQUIRED. A unified diff (---/+++ headers) or an apply-patch / simplified diff (`*** Begin Patch` / `*** Update File: path`). File headers are read to determine touched paths, which must resolve inside custom_nodes/ (e.g. 'a/MyPack/nodes.py' or 'MyPack/nodes.py').",
+    "type": "string"
+   },
+   "path": {
+    "description": "REQUIRED for action:\"read\" and action:\"write\": a pack-relative path under custom_nodes/, e.g. 'MyPack/nodes.py'. For action:\"search\", the pack-relative directory to search, or '.' for all packs (default '.'). For action:\"publish\" ONLY, this is instead an explicit absolute path to the pack directory to publish, and it overrides `name` when both are given.",
+    "type": "string"
+   },
+   "paths": {
+    "description": "action:\"git\" \u2014 pack-relative paths to stage/scope (jail-checked). Defaults to all pack changes.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "publisher_id": {
+    "description": "action:\"scaffold\" \u2014 your Comfy Registry publisher id, stamped into [tool.comfy].PublisherId. If omitted a placeholder is written that you must replace before publishing.",
+    "type": "string"
+   },
+   "query": {
+    "description": "action:\"search\" \u2014 REQUIRED. Regular expression to search for.",
+    "type": "string"
+   },
+   "restart": {
+    "description": "action:\"verify\" \u2014 restart ComfyUI before checking so newly-added packs load (default true). Set false to check the live server as-is.",
+    "type": "boolean"
+   },
+   "start_line": {
+    "description": "action:\"read\" \u2014 1-based line to start at (default 1).",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "with_ci": {
+    "description": "action:\"scaffold\" \u2014 if true, also generate .github/workflows/publish_action.yml (Comfy-Org/publish-node-action; needs the REGISTRY_ACCESS_TOKEN repo secret) so pushing a pyproject.toml version bump auto-publishes (default false).",
+    "type": "boolean"
+   },
+   "with_frontend": {
+    "description": "action:\"scaffold\" \u2014 if true, also generate a web/js/<name>.js extension stub and set WEB_DIRECTORY (default false).",
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "action"
+  ],
+  "type": "object"
+ },
+ "name": "node_pack"
+}

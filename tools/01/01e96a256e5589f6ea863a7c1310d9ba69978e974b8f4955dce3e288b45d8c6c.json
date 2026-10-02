@@ -1,0 +1,389 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Find air-quality monitoring stations (measured by physical sensors, not modeled) near a point, within a bounding box, or by country, optionally narrowed to one parameter, one station class (reference monitors or low-cost sensors, mobile or fixed), or one provider network. Returns each station's id, name, coordinates, distance from the query point (when searching by coordinates), country, provider name and id, the parameters its sensors measure, and the timestamp of its most recent data (datetimeLast). Required first step: openaq_get_readings and openaq_get_measurements key on the location id this returns. Coverage is uneven and real \u2014 a station only reports the parameters it measures, and the absence of a nearby station means no monitoring there, not clean air. For dense modeled coverage anywhere on Earth, use open-meteo-mcp-server's air-quality tool instead.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "bbox": {
+    "description": "Bounding box as \"minLon,minLat,maxLon,maxLat\" (west,south,east,north), with minLon \u2264 maxLon and minLat \u2264 maxLat. Alternative to coordinates+radius for area sweeps. Results have no distance field (no center point).",
+    "pattern": "^(-?\\d+(\\.\\d+)?,){3}-?\\d+(\\.\\d+)?$",
+    "type": "string"
+   },
+   "coordinates": {
+    "description": "Center point as \"latitude,longitude\" (e.g. \"47.6062,-122.3321\"). Pair with radius for a near-me search. Resolve a place name to coordinates with openstreetmap-mcp-server or open-meteo geocode first. Provide either coordinates+radius OR bbox, not both.",
+    "pattern": "^-?\\d{1,3}(\\.\\d+)?,-?\\d{1,3}(\\.\\d+)?$",
+    "type": "string"
+   },
+   "iso": {
+    "description": "Restrict to a country by OpenAQ country code: ISO 3166-1 alpha-2 (e.g. \"US\", \"IN\", \"DE\"; either case), or \"-99\" where OpenAQ lists a country with no ISO code. Take codes from openaq_list_countries. Combine with bbox/coordinates to scope, or use alone for a country-wide list.",
+    "pattern": "^(?:[A-Za-z]{2}|-99)$",
+    "type": "string"
+   },
+   "limit": {
+    "default": 20,
+    "description": "Max stations to return (1\u2013100). Default 20. Results are ordered by distance when searching by coordinates.",
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "mobile": {
+    "description": "Mobility filter: true returns only mobile stations, false only fixed ones. Omit for both.",
+    "type": "boolean"
+   },
+   "monitor": {
+    "description": "Station class filter: true returns only reference-grade monitors, false only low-cost sensors. Omit for both.",
+    "type": "boolean"
+   },
+   "page": {
+    "default": 1,
+    "description": "Which page of results to return (1-based). Default 1. The only way past the 100-station cap: with limit 100, page 2 returns stations 101\u2013200. Distance ordering applies within a page, not across pages, so paging is for iso/bbox sweeps \u2014 a near-me coordinates search should stay on page 1. A page past the last one fails with page_exhausted.",
+    "maximum": 9007199254740991,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "parametersId": {
+    "description": "Only return stations that measure this parameter id (e.g. 2 = PM2.5 \u00b5g/m\u00b3). Get ids from openaq_list_parameters \u2014 the same pollutant has several ids for different units. Narrows the station set; each returned station still lists all its sensors.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "providersId": {
+    "description": "Only return stations from this OpenAQ provider (data network) id \u2014 read it from a previous result's providerId (e.g. 119 = AirNow).",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "radius": {
+    "description": "Search radius in metres around coordinates (1\u201325000; the API hard-caps at 25000). Default 12000 (~12km). Requires coordinates \u2014 a radius sent with only bbox or iso is rejected.",
+    "maximum": 25000,
+    "minimum": 1,
+    "type": "integer"
+   }
+  },
+  "type": "object"
+ },
+ "name": "openaq_find_locations",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "locations",
+     "totalCount"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cap": {
+    "description": "The limit that was applied.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `no_locations_found`: No monitoring stations match the given area or filters. `page_exhausted`: A page past the first returned no stations \u2014 the results end before it. `no_search_scope`: None of coordinates, bbox, or iso was provided. `invalid_search_scope`: coordinates and bbox were both provided, or radius was provided without coordinates. `upstream_error`: OpenAQ returned 5xx or an unreadable body on every retry. `rate_limited`: OpenAQ returned 429 \u2014 the request budget for this key is exhausted. `upstream_timeout`: OpenAQ did not respond within the request timeout on every retry. `invalid_api_key`: OpenAQ returned 401 \u2014 the configured OPENAQ_API_KEY is missing, invalid, or revoked. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "no_locations_found",
+         "page_exhausted",
+         "no_search_scope",
+         "invalid_search_scope",
+         "upstream_error",
+         "rate_limited",
+         "upstream_timeout",
+         "invalid_api_key"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "locations": {
+    "description": "Matching stations on this page, never empty: a query with no match fails with no_locations_found (no monitoring coverage, NOT clean air), and a page past the last with page_exhausted.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A matching monitoring station with its sensors and data span",
+     "properties": {
+      "coordinates": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "latitude": {
+           "description": "Station latitude (decimal degrees)",
+           "type": "number"
+          },
+          "longitude": {
+           "description": "Station longitude (decimal degrees)",
+           "type": "number"
+          }
+         },
+         "required": [
+          "latitude",
+          "longitude"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Station location. Null when OpenAQ lists no latitude or no longitude."
+      },
+      "country": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "code": {
+           "description": "OpenAQ country code: ISO 3166-1 alpha-2, or \"-99\" where OpenAQ lists none",
+           "type": "string"
+          },
+          "name": {
+           "description": "Country name",
+           "type": "string"
+          }
+         },
+         "required": [
+          "code",
+          "name"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Country the station is in. Null when OpenAQ lists none."
+      },
+      "datetimeFirst": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "local": {
+           "description": "Timestamp in the station's local timezone",
+           "type": "string"
+          },
+          "utc": {
+           "description": "Timestamp in UTC (ISO 8601)",
+           "type": "string"
+          }
+         },
+         "required": [
+          "utc",
+          "local"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Timestamp of the station's first available measurement."
+      },
+      "datetimeLast": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "local": {
+           "description": "Timestamp in the station's local timezone",
+           "type": "string"
+          },
+          "utc": {
+           "description": "Timestamp in UTC (ISO 8601)",
+           "type": "string"
+          }
+         },
+         "required": [
+          "utc",
+          "local"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Timestamp of the station's most recent measurement. Tells you whether \"latest\" will be minutes or hours/days old. Null if the station has never reported."
+      },
+      "distanceMeters": {
+       "description": "Distance from the query coordinates in metres. Null when searching by bbox or iso (no center point).",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "id": {
+       "description": "Location id \u2014 pass to openaq_get_readings / openaq_get_measurements",
+       "type": "number"
+      },
+      "isMobile": {
+       "description": "True if the station is mobile (coordinates may vary over time)",
+       "type": "boolean"
+      },
+      "isMonitor": {
+       "description": "True for reference-grade government monitors; false for low-cost sensors. Reference monitors are more reliable for regulatory comparison.",
+       "type": "boolean"
+      },
+      "locality": {
+       "description": "Locality or metro area, when provided",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "name": {
+       "description": "Station name",
+       "type": "string"
+      },
+      "parameters": {
+       "description": "Parameters this station measures, each with its sensor unit. The station has one sensor per parameter.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A parameter the station measures, with its sensor unit",
+        "properties": {
+         "displayName": {
+          "description": "Human-readable pollutant name",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "id": {
+          "description": "Parameter id \u2014 use as parametersId in get_readings / get_measurements",
+          "type": "number"
+         },
+         "name": {
+          "description": "Pollutant code (e.g. \"pm25\", \"o3\")",
+          "type": "string"
+         },
+         "unit": {
+          "description": "Measurement unit for this sensor (e.g. \"\u00b5g/m\u00b3\", \"ppm\"). Units vary by sensor \u2014 never assume.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "id",
+         "name",
+         "unit",
+         "displayName"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "provider": {
+       "description": "Data provider / network (e.g. \"AirNow\", \"OpenAQ LCS\"). Null when OpenAQ lists none.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "providerId": {
+       "description": "OpenAQ provider id \u2014 pass as providersId to restrict a search to this network. Null when OpenAQ lists no provider.",
+       "type": [
+        "number",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "id",
+      "name",
+      "locality",
+      "country",
+      "coordinates",
+      "distanceMeters",
+      "provider",
+      "providerId",
+      "isMonitor",
+      "isMobile",
+      "parameters",
+      "datetimeLast",
+      "datetimeFirst"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "notice": {
+    "description": "Guidance on a full page: the next page to request, or how to narrow the search.",
+    "type": "string"
+   },
+   "shown": {
+    "description": "Number of stations returned.",
+    "type": "number"
+   },
+   "totalCount": {
+    "description": "Stations counted through this page: (page \u2212 1) \u00d7 limit plus the stations returned. Exact on a page that came back short of the limit (the last page); a floor when totalCountIsLowerBound is true.",
+    "type": "number"
+   },
+   "totalCountIsLowerBound": {
+    "description": "True when this page came back full: at least totalCount stations match, and the next page may hold more.",
+    "type": "boolean"
+   },
+   "truncated": {
+    "description": "True when this page came back full (the limit was reached), so the next page may hold more stations.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "openaq-mcp-server: find locations"
+}

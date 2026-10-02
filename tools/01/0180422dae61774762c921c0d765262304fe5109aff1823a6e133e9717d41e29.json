@@ -1,0 +1,153 @@
+{
+ "description": "Run and inspect LoRA training JOBS \u2014 launch a run, poll it, stop it, delete it, and read back the settings behind it. Jobs are keyed by `id`; the datasets they train on live in the separate `train_prepare_dataset` tool and are keyed by `name`. Driven by the `action` parameter:\n- action:\"start\" \u2014 Start a LoRA training job: target 'local' builds the config and launches the GPU trainer container (docker run --gpus all); target 'pod' ssh-drives pod-native training on a connected RunPod pod (pod_id, or the connector's currently connected pod). Requires `name` + `datasetPath`. Returns a job id for action:\"status\"/action:\"cancel\". Long-running \u2014 returns immediately; poll action:\"status\". On completion the LoRA is delivered per deliverTo (pod/local/both) and cataloged when local. Run train_doctor first if unsure the image/docker/GPU (local) or bootstrap (pod) are ready.\n- action:\"status\" \u2014 Check training progress: pass an `id` for one job (step/total, loss, recent samples, log tail, result paths when done) or OMIT `id` for all jobs newest-first. Read-only.\n- action:\"cancel\" \u2014 STOP a RUNNING job (docker stop) by `id` and mark it cancelled. Nothing is erased: checkpoints already saved stay in the job's output dir; no LoRA is handed off to models/loras, so the run can be inspected afterwards. Returns ok:false when the container could not be confirmed stopped (the job reverts to running). This is the RECOVERABLE stop \u2014 use action:\"delete\" only when you also want the artifacts gone.\n- action:\"delete\" \u2014 DESTROY a finished job by `id`: its record AND its output dir with checkpoints/samples, unless keep_outputs is true. Irreversible \u2014 confirm with the user first. The delivered LoRA in models/loras is NOT removed. Running/queued jobs must be cancelled first (action:\"cancel\"). THIS DELETES A JOB, NOT A DATASET: to delete the staged images and captions a run consumed use the separate `train_prepare_dataset` tool with action:\"delete\", which is keyed by `name` rather than `id`.\n- action:\"list_flows\" \u2014 List the LoRA training flows and base models the local trainer supports (phase 1: character LoRA on FLUX.1-dev), with the default training params. Read-only, takes no other parameters \u2014 call this first to see what action:\"start\" accepts.\n- action:\"job_config\" \u2014 Show the effective settings a job ran with by `id` (steps/lr/rank/resolution/batch/saveEvery/sampleEvery/quantize), read back from the ai-toolkit config.yml it consumed, plus flow/model/trigger/datasetPath \u2014 everything needed to run the job again with tweaks. Read-only.\n- action:\"preview_config\" \u2014 Show the RAW ai-toolkit config.yml action:\"start\" WOULD write for these settings (the ostris-UI 'raw config' view) \u2014 no side effects, nothing is written or started. Requires `name` + `datasetPath`. Use it to review a run before launching; pass the same params to action:\"start\" to execute.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "action": {
+    "description": "Which training-job operation to perform. \"list_flows\" takes no other parameters; \"status\" takes an OPTIONAL `id` (omit for all jobs); \"cancel\", \"delete\" and \"job_config\" require `id`; \"start\" and \"preview_config\" require `name` + `datasetPath`. NOTE \"delete\" here destroys a training JOB \u2014 deleting a staged DATASET is train_prepare_dataset action:\"delete\".",
+    "enum": [
+     "start",
+     "status",
+     "cancel",
+     "delete",
+     "list_flows",
+     "job_config",
+     "preview_config"
+    ],
+    "type": "string"
+   },
+   "datasetPath": {
+    "description": "Dataset dir from train_prepare_dataset (images + same-basename .txt captions). REQUIRED for actions \"start\" and \"preview_config\".",
+    "minLength": 1,
+    "type": "string"
+   },
+   "deliverTo": {
+    "default": "both",
+    "description": "action:\"start\", pod jobs only: where the finished LoRA lands.",
+    "enum": [
+     "pod",
+     "local",
+     "both"
+    ],
+    "type": "string"
+   },
+   "device": {
+    "description": "action:\"start\" \u2014 GPU selector, default cuda:0.",
+    "type": "string"
+   },
+   "flow": {
+    "default": "character",
+    "description": "action:\"start\" \u2014 training flow (see action:\"list_flows\").",
+    "enum": [
+     "character"
+    ],
+    "type": "string"
+   },
+   "id": {
+    "description": "Training job id, as returned by action:\"start\" (e.g. \"t8f3k2ab\") \u2014 NEVER a dataset name. REQUIRED and must be non-empty for actions \"cancel\", \"delete\" and \"job_config\". OPTIONAL for action:\"status\": omit it (or pass an empty string) to list every job newest-first. Unused by \"start\", \"list_flows\" and \"preview_config\".",
+    "type": "string"
+   },
+   "keep_outputs": {
+    "description": "action:\"delete\" \u2014 keep the job's output dir (checkpoints/samples) and delete only the record.",
+    "type": "boolean"
+   },
+   "model": {
+    "default": "flux1-dev",
+    "description": "action:\"start\" \u2014 base model (see action:\"list_flows\").",
+    "enum": [
+     "flux1-dev"
+    ],
+    "type": "string"
+   },
+   "model_path": {
+    "description": "action:\"start\" \u2014 override the base model path AS THE TRAINER SEES IT (pod path for target 'pod', container path for 'local') \u2014 e.g. a pre-uploaded local HF snapshot dir when the default HF repo id is gated/unreachable.",
+    "type": "string"
+   },
+   "name": {
+    "description": "Job name \u2014 becomes the output .safetensors basename (e.g. 'aria_character'). REQUIRED for actions \"start\" and \"preview_config\". This names the RUN, not the dataset it reads.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "params": {
+    "description": "Training param overrides for actions \"start\" and \"preview_config\" (steps/lr/rank/resolution/batchSize/saveEvery/sampleEvery/quantize). Omitted keys fall back to the defaults from action:\"list_flows\". action:\"preview_config\" enforces the SAME bounds action:\"start\" does, so a preview always reflects a run that could actually launch.",
+    "properties": {
+     "batchSize": {
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "lr": {
+      "description": "Learning rate (max 1).",
+      "exclusiveMinimum": 0,
+      "maximum": 1,
+      "type": "number"
+     },
+     "quantize": {
+      "description": "8-bit mixed precision \u2014 needed to fit Flux on 24GB.",
+      "type": "boolean"
+     },
+     "rank": {
+      "description": "LoRA rank (16 simple, 16-32 detailed; max 1024).",
+      "maximum": 1024,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "resolution": {
+      "description": "Resolution buckets, e.g. [512,768,1024] (each 64-4096).",
+      "items": {
+       "maximum": 4096,
+       "minimum": 64,
+       "type": "integer"
+      },
+      "minItems": 1,
+      "type": "array"
+     },
+     "sampleEvery": {
+      "description": "Sample-image cadence (steps).",
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "saveEvery": {
+      "description": "Checkpoint cadence (steps).",
+      "maximum": 9007199254740991,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "steps": {
+      "description": "Total training steps (200 = smoke test, 1500-3000 real; max 100000).",
+      "maximum": 100000,
+      "minimum": 1,
+      "type": "integer"
+     }
+    },
+    "type": "object"
+   },
+   "pod_id": {
+    "description": "action:\"start\" \u2014 RunPod pod to train on (target 'pod'). Default: the connector's currently connected/watched pod.",
+    "type": "string"
+   },
+   "target": {
+    "default": "local",
+    "description": "action:\"start\" \u2014 'local' = docker on this rig; 'pod' = pod-native over ssh on a RunPod pod.",
+    "enum": [
+     "local",
+     "pod"
+    ],
+    "type": "string"
+   },
+   "trigger": {
+    "description": "Unique trigger word (e.g. 'ohwx person') \u2014 injected as trigger_word and usable in prompts.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "action"
+  ],
+  "type": "object"
+ },
+ "name": "train_start"
+}

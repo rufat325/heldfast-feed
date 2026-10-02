@@ -1,0 +1,129 @@
+{
+ "description": "Fetch, browse and inspect ComfyUI images and registered assets. Driven by the `action` parameter:\n- action:\"get\" \u2014 Fetch a generated image from ComfyUI by FILENAME and return it as an inline image. Video/audio outputs (e.g. a VHS_VideoCombine .mp4) and allowlisted mesh/material attachments (.obj, .glb, .gltf, .fbx, .ply, .stl, .mtl) are saved to save_dir with their original extension instead of being rendered inline. Works with remote ComfyUI instances \u2014 does not require COMFYUI_PATH. Use get_history (action:\"list\") first to obtain the filename; if it returns `subfolder/filename`, pass that relative path as-is and get_image will split it automatically.\n- action:\"view\" \u2014 Fetch a registered asset's bytes by ASSET ID and return them as an inline image so the agent can see the result. Use this after a render completes (asset_id is included in the completion notification) to inspect, critique, or compare generated images. Only supports image mime types (PNG/JPEG/WebP); audio/video assets must be saved to disk via action:\"get\".\n- action:\"list_outputs\" \u2014 List recently generated image AND video files from ComfyUI's output/ directory, newest-first, with each file's kind ('image' | 'video'), subfolder, size, and modification time. Covers stills (.png/.jpg/.jpeg/.bmp) and video/animation outputs (.mp4/.webm/.mov/.mkv/.m4v/.avi/.gif/.webp). LOCAL ComfyUI (COMFYUI_PATH set): a RECURSIVE filesystem scan of output/ (stills + video, including subfolders like video/ that VHS/SaveVideo write to) AND of temp/ for video files \u2014 VHS_VideoCombine with `save_output` unchecked writes the completed .mp4 (including the \"-audio.mp4\" a run completion names) there; those entries are tagged type:\"temp\" so action:\"get\" / upload_image (action:\"stage\") can fetch them. Reports size + modification time. Preview stills in temp/ (PreviewImage) are omitted. REMOTE ComfyUI: derives the list from /history over HTTP instead (size/modified are unavailable and omitted) and includes type:\"temp\" videos from history the same way. It does NOT return the media bytes themselves \u2014 fetch those with action:\"get\". USE THIS TO CONFIRM A VIDEO RENDER (e.g. VHS_VideoCombine / LTX / WAN output) when get_history (action:\"list\") shows the prompt done but lists no output: VHS-style video nodes write the file but often do NOT register in ComfyUI's /history, so the local filesystem scan is the reliable way to verify the .mp4 exists \u2014 then chain it with upload_image (action:\"stage\"). THAT GUARANTEE IS LOCAL-ONLY AND INVERTS ON A REMOTE TARGET: with no disk to scan, this falls back to /history, so a REMOTE listing can neither confirm nor deny a VHS video that never registered, and absence from it is NOT evidence the file is missing. Check a specific filename with action:\"get\" or upload_image (action:\"stage\") instead \u2014 both read /view. Every remote result says so in its own text. Read-only.\n- action:\"convert\" \u2014 Re-encode a generated image to PNG, JPEG, or WebP and return it inline as an image content block. Source can be a registered asset_id or a path under the local ComfyUI output directory. Optionally writes the converted image back under the output directory and reports source/output size plus bytes saved.\n- action:\"analyze_color\" \u2014 Measure the color of a rendered image (not by eye): returns black/white points, contrast (luma std), saturation, per-channel means + cast, and clipping \u2014 plus heuristic flags (washedOut, lowContrast, liftedBlacks, dimHighlights, lowSaturation, colorCast) and a one-line verdict. Source = asset_id, a ComfyUI output ref (filename/subfolder/type), or an image path. Pass reference_path to shot-match against a known-good frame (target\u2212reference deltas). Set histogram:true to also get an overlaid R/G/B/luma histogram PNG. Use this to diagnose 'washed out' objectively and decide a color fix; for a video, extract a frame to PNG first.\n- action:\"list_assets\" \u2014 List recently generated assets, newest-first. Each call first reconciles ComfyUI's /history, so outputs are listed even when this session did not watch the render complete (e.g. queued via panel_run, by an earlier session, or before a server restart) \u2014 those are tagged source:'history-reconcile', versus source:'watched' for renders this server saw finish. Newly reconciled image refs are checked through /view before registration; stale or unavailable refs are omitted and disclosed in the response note. Returns count + assets (asset_id, prompt_id, filename, url, source, created_at). The registry is ephemeral and clears on server restart; records expire after COMFYUI_ASSET_TTL_HOURS (default 24h), and only the most recent completed runs are reconciled \u2014 use get_history (action:\"list\") / action:\"get\" by filename for anything older.\n- action:\"asset_metadata\" \u2014 Get full provenance for a registered asset including the workflow snapshot that produced it. Use this to inspect the parameters that generated an image before calling generate_image (action:\"regenerate\") with overrides.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "action": {
+    "description": "Which image/asset operation to perform. \"get\" requires `filename`; \"view\" and \"asset_metadata\" require `asset_id`; \"convert\" requires `format` plus exactly one of `asset_id`/`path`; action:\"analyze_color\" takes one source (`asset_id`, `filename`, or `path`); \"list_outputs\" and action:\"list_assets\" take no required parameters.",
+    "enum": [
+     "get",
+     "view",
+     "list_outputs",
+     "convert",
+     "analyze_color",
+     "list_assets",
+     "asset_metadata"
+    ],
+    "type": "string"
+   },
+   "asset_id": {
+    "description": "Asset id returned by action:\"list_assets\" or job completion. REQUIRED for actions \"view\" and \"asset_metadata\". OPTIONAL for \"convert\" (provide exactly one of asset_id or path) and action:\"analyze_color\" (one of asset_id, filename, or path).",
+    "type": "string"
+   },
+   "effort": {
+    "description": "action:\"convert\" \u2014 WebP only: encoder effort, 0-6.",
+    "maximum": 6,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "filename": {
+    "description": "Output image filename or a relative `subfolder/filename` reference from get_history, e.g. PulID_Klein_00001_.png or out_F/PulID_Klein_00001_.png. REQUIRED for action:\"get\". Relative prefixes are split automatically; absolute paths, drive prefixes, and `..` segments are refused. OPTIONAL for action:\"analyze_color\", where it is one of the three ways to name a source (pair it with subfolder/type).",
+    "type": "string"
+   },
+   "format": {
+    "description": "Two unrelated meanings, one per action \u2014 the enum is the union of both and each action accepts only its own half. action:\"list_outputs\" \u2014 RESPONSE SHAPE: \"markdown\" (default, human/agent-readable) or \"json\" ({images:[{filename,subfolder,kind,size,modified,type?}]} \u2014 type is \"temp\" for VHS videos written with save_output unchecked, omitted for output/). action:\"convert\" \u2014 REQUIRED target encoded image format: \"png\", \"jpeg\" or \"webp\".",
+    "enum": [
+     "markdown",
+     "json",
+     "png",
+     "jpeg",
+     "webp"
+    ],
+    "type": "string"
+   },
+   "histogram": {
+    "description": "action:\"analyze_color\" \u2014 also return an overlaid R/G/B/luma histogram PNG for visual confirmation (default false).",
+    "type": "boolean"
+   },
+   "limit": {
+    "description": "action:\"list_outputs\" \u2014 max media files to return, 1..100 (default 20). action:\"list_assets\" \u2014 max records to return (default: all, no upper bound).",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "lossless": {
+    "description": "action:\"convert\" \u2014 WebP only: write lossless WebP.",
+    "type": "boolean"
+   },
+   "max_preview_bytes": {
+    "description": "action:\"get\" \u2014 ceiling on the base64 payload returned INLINE (default ~16MB). The file saved to disk is never affected. Lower it when your client rejects or truncates large tool results; the reply says when it downscaled and by how much.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "max_preview_dimension": {
+    "description": "action:\"get\" \u2014 ceiling on the inline preview's longest side in pixels (default 4096). Applies even when the byte budget is satisfied, since some consumers reject by dimension \u2014 but only for an image this server can decode; an undecodable one under the byte budget is passed through as-is. Does not affect the saved file.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "out_path": {
+    "description": "action:\"convert\" \u2014 optional output path under COMFYUI_PATH/output where the converted image should be written.",
+    "type": "string"
+   },
+   "path": {
+    "description": "A source image path. action:\"convert\" \u2014 a path under COMFYUI_PATH/output (provide exactly one of asset_id or path). action:\"analyze_color\" \u2014 an absolute image path, or a path under the ComfyUI output dir (videos: extract a frame to PNG first).",
+    "type": "string"
+   },
+   "pattern": {
+    "description": "action:\"list_outputs\" \u2014 filter by filename pattern (case-insensitive substring match).",
+    "type": "string"
+   },
+   "progressive": {
+    "description": "action:\"convert\" \u2014 JPEG only: write a progressive JPEG.",
+    "type": "boolean"
+   },
+   "quality": {
+    "description": "action:\"convert\" \u2014 encoder quality, 1-100. Applies where supported by the selected format.",
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "reference_path": {
+    "description": "action:\"analyze_color\" \u2014 optional reference image to shot-match against; returns target\u2212reference deltas for contrast, black/white points, saturation, and per-channel means.",
+    "type": "string"
+   },
+   "save_dir": {
+    "description": "action:\"get\" \u2014 absolute local directory to save the file in. Defaults to a 'comfyui-images' folder inside the platform temp directory (os.tmpdir()), which is created if missing. A RELATIVE value is resolved against this MCP process's working directory, which is the client's choice and may not be writable. On Windows a drive-less path like \\out is resolved against this process's CURRENT DRIVE, not a drive you chose. Prefer a fully-qualified path (C:\\... or \\\\server\\share); the returned 'Saved to:' line always names the resolved absolute path.",
+    "type": "string"
+   },
+   "since": {
+    "description": "action:\"list_assets\" \u2014 ISO timestamp; only return assets created at or after this time.",
+    "format": "date-time",
+    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+    "type": "string"
+   },
+   "subfolder": {
+    "description": "Subfolder within the directory, if any (default empty). Used by action:\"get\" and by action:\"analyze_color\" when the source is a `filename`. If filename already includes a relative prefix, it is combined with this subfolder.",
+    "type": "string"
+   },
+   "type": {
+    "description": "ComfyUI directory the file lives in: output (default), input, or temp. Used by action:\"get\" and by action:\"analyze_color\" when the source is a `filename`.",
+    "enum": [
+     "output",
+     "input",
+     "temp"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "action"
+  ],
+  "type": "object"
+ },
+ "name": "get_image"
+}

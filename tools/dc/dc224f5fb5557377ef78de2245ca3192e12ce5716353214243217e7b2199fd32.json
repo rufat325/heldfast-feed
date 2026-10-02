@@ -1,0 +1,300 @@
+{
+ "description": "Generate media from a prompt or an existing image \u2014 the high-level entry points that build the graph for you. Every action enqueues on the connected ComfyUI and returns the prompt_id immediately; the resulting asset_id arrives in the completion notification. Driven by the `action` parameter:\n- action:\"image\" \u2014 Text-to-image. Builds a txt2img workflow, filling any unspecified parameter from your configured defaults (get_defaults (action:\"set\") / COMFYUI_DEFAULT_* / config file), auto-selecting a local checkpoint when none is given \u2014 checkpoints known to lack a text encoder (e.g. video models) are skipped. `prompt` is required. For full control over the node graph, use create_workflow + enqueue_workflow instead.\n- action:\"audio\" \u2014 Text-to-audio, supporting the ACE Step 1.5 and Stable Audio 3 model families. Builds the appropriate workflow graph, filling unspecified parameters from your defaults and auto-selecting local models. `model_family`, `prompt` and `duration` are required. Requires a running ComfyUI with the corresponding model files installed.\n- action:\"video\" \u2014 Text-to-video, or image-to-video when `image` is given (animate a start frame). Composes an LTX-2.3 distilled workflow on your LOCAL GPU using the render-verified Comfy-Org node stack (gemma text encoder + abliterated/distilled LoRAs). Needs the LTX-2.3 models (~24-46GB): install with apply_manifest --path packs/ltx-2.3-txt2vid/manifest.yaml (or ltx-2.3-img2vid for i2v); returns an actionable error if the checkpoint is missing. `seconds` is converted to an 8n+1 frame count. For i2v, higher `strength` means MORE adherence to the start frame but LESS motion (1.0 can freeze the clip) \u2014 keep ~0.6. This minimal path omits the synchronized audio + stage-2 spatial upscale that the full ltx-2.3 packs ship. `prompt` is required. The video is written under output/video/ \u2014 find it with get_image (action:\"list_outputs\") (VHS/SaveVideo outputs may not appear in /history).\n- action:\"3d\" \u2014 Generate a 3D model (glb/obj/fbx) from a text prompt or an input image, using the connected ComfyUI's hosted partner 3D nodes (Tripo, Meshy, Rodin, Hunyuan3D \u2014 auto-detected from the server; these are paid API nodes needing a comfy.org API key/login on the server or COMFY_API_KEY here). `mode` is required (\"text\" needs `prompt`, \"image\" needs `image`). Poll queue (action:\"status\") / get_history (action:\"list\") for the resulting model file (saved to ComfyUI's output directory). If the server has no 3D-capable API nodes, returns an actionable error naming local-pack alternatives.\n- action:\"controlnet\" \u2014 Image conditioned by a ControlNet preprocessed image (pose skeleton, depth, canny, normal, etc.) plus a text prompt. Upload the control image first with upload_image (action:\"image\"), then pass its filename as `control_image`. `prompt` and `control_image` are required; `checkpoint` and `controlnet_model` auto-resolve from local models. control_image must ALREADY be a preprocessed map (this action does not run the preprocessor); requires a running ComfyUI with a matching controlnet model in models/controlnet/.\n- action:\"ip_adapter\" \u2014 Image guided by a reference image's style/subject via IP-Adapter, plus a text prompt. Requires the ComfyUI_IPAdapter_plus custom nodes. Upload the reference first with upload_image (action:\"image\"), then pass its filename as `reference_image`. `prompt` and `reference_image` are required; `checkpoint` auto-resolves. Requires a running ComfyUI with ComfyUI_IPAdapter_plus and a matching IP-Adapter model installed, or the workflow will fail at execution time.\n- action:\"regenerate\" \u2014 Re-enqueue the workflow that produced an EXISTING ASSET, optionally applying `overrides`. Overrides are applied to any node input matching the key name (e.g. cfg, steps, sampler_name, scheduler, seed, denoise, text). Seeds are re-randomized by default so each call yields a fresh image unless seed is explicitly passed in overrides. `asset_id` is required. To re-run from execution HISTORY rather than a registered asset, use enqueue_workflow (action:\"rerun\").\n- action:\"upscale\" \u2014 Upscale an image with an ESRGAN super-resolution model. Builds an UpscaleModelLoader \u2192 ImageUpscaleWithModel workflow (scale=2 supersamples the 4x result back down for sharper output) and enqueues it on your LOCAL GPU. Upload the source first with upload_image (action:\"image\") (or stage a prior output with upload_image (action:\"stage\")), then pass its filename as `image`. Needs an upscale model in models/upscale_models/ (e.g. 4x-ClearRealityV1 / 4x_foolhardy_Remacri, provided by the anima/ernie packs or download_model); returns an actionable error if none is found. `image` is required.\n- action:\"remove_background\" \u2014 Remove an image's background, returning a transparent (RGBA) cutout. Builds a LoadImage \u2192 BiRefNetRMBG \u2192 SaveImage workflow using the ComfyUI-RMBG (BiRefNet) matting node and enqueues it on your LOCAL GPU. Upload the source first with upload_image (action:\"image\") (or stage a prior output with upload_image (action:\"stage\")), then pass its filename as `image`. Requires the ComfyUI-RMBG custom node (pack: wan-transparent, or install_custom_node 'comfyui-rmbg'); the BiRefNet model auto-downloads on first run. If the node isn't installed, returns an actionable error telling you how to install it. `image` is required.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "action": {
+    "description": "What to generate. action:\"image\"/action:\"video\" require `prompt`; action:\"audio\" requires `model_family`+`prompt`+`duration`; action:\"3d\" requires `mode` (+ `prompt` or `image`); action:\"controlnet\" requires `prompt`+`control_image`; action:\"ip_adapter\" requires `prompt`+`reference_image`; action:\"regenerate\" requires `asset_id`; action:\"upscale\" and action:\"remove_background\" require `image`.",
+    "enum": [
+     "image",
+     "audio",
+     "video",
+     "3d",
+     "controlnet",
+     "ip_adapter",
+     "regenerate",
+     "upscale",
+     "remove_background"
+    ],
+    "type": "string"
+   },
+   "asset_id": {
+    "description": "action:\"regenerate\" \u2014 asset id of the source generation. REQUIRED for that action.",
+    "type": "string"
+   },
+   "audio_quality": {
+    "description": "action:\"audio\" \u2014 SaveAudioMP3 bitrate/quality (ACE and stable_audio_3, one of 'V0'/'128k'/'320k', default: '320k').",
+    "enum": [
+     "V0",
+     "128k",
+     "320k"
+    ],
+    "type": "string"
+   },
+   "batch_size": {
+    "description": "action:\"image\" \u2014 number of images to generate.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "bpm": {
+    "description": "action:\"audio\" \u2014 TextEncodeAceStepAudio1.5 tempo in beats per minute (ACE only, 10-300, default: 120).",
+    "maximum": 300,
+    "minimum": 10,
+    "type": "integer"
+   },
+   "cfg": {
+    "description": "CFG scale. Actions \"image\", \"audio\", \"video\", \"controlnet\", \"ip_adapter\" (video defaults to 1.0 for the distilled model).",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "checkpoint": {
+    "description": "Checkpoint filename; auto-selected from local models if omitted. The relevant checkpoint differs per action: a diffusion checkpoint for \"image\"/\"controlnet\"/\"ip_adapter\", the LTX checkpoint for \"video\", the Stable Audio 3 checkpoint for \"audio\".",
+    "type": "string"
+   },
+   "clip": {
+    "description": "action:\"audio\" \u2014 Stable Audio CLIP encoder filename (in models/text_encoders/); auto-selected if omitted.",
+    "type": "string"
+   },
+   "clip_a": {
+    "description": "action:\"audio\" \u2014 primary text encoder filename (in models/text_encoders/); auto-selected if omitted.",
+    "type": "string"
+   },
+   "clip_b": {
+    "description": "action:\"audio\" \u2014 secondary text encoder filename (in models/text_encoders/); auto-selected if omitted.",
+    "type": "string"
+   },
+   "control_image": {
+    "description": "action:\"controlnet\" \u2014 filename of the (already-uploaded, already-preprocessed) control image in ComfyUI's input dir. REQUIRED for that action.",
+    "type": "string"
+   },
+   "controlnet_model": {
+    "description": "action:\"controlnet\" \u2014 ControlNet model file (in models/controlnet/); auto-selected if omitted.",
+    "type": "string"
+   },
+   "disable_random_seed": {
+    "description": "action:\"regenerate\" and action:\"3d\" \u2014 if true, do not randomize seed fields. For action:\"regenerate\", combine with `overrides.seed` to reproduce the exact original image.",
+    "type": "boolean"
+   },
+   "duration": {
+    "description": "action:\"audio\" \u2014 audio duration in seconds. REQUIRED for that action.",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "filename_prefix": {
+    "description": "Output filename prefix. action:\"audio\" (default audio/ace_step or audio/stable_audio_3), action:\"video\" (default 'video/ltx-2.3') and action:\"remove_background\" (default 'ComfyUI_cutout').",
+    "type": "string"
+   },
+   "fps": {
+    "description": "action:\"video\" \u2014 frames per second (default 25).",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "generate_audio_codes": {
+    "description": "action:\"audio\" \u2014 generate audio codes via the TextEncodeAceStepAudio1.5 LLM (ACE only, default: true).",
+    "type": "boolean"
+   },
+   "guidance_scale": {
+    "description": "action:\"audio\" \u2014 TextEncodeAceStepAudio1.5 cfg_scale, the text encoder guidance scale (ACE only, default: 2).",
+    "type": "number"
+   },
+   "height": {
+    "description": "Image height in pixels. Actions \"image\", \"controlnet\", \"ip_adapter\".",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "image": {
+    "description": "Filename of an image in ComfyUI's input dir (upload it first with upload_image (action:\"image\"), or stage a prior output with upload_image (action:\"stage\")). REQUIRED for action:\"upscale\" and action:\"remove_background\"; the start frame for action:\"video\" image-to-video; the input image for action:\"3d\" in mode \"image\".",
+    "type": "string"
+   },
+   "inputs": {
+    "additionalProperties": {},
+    "description": "action:\"3d\" \u2014 provider-specific extra inputs passed through to the node (e.g. style, texture, quality). Use list_api_nodes (action:\"schema\") on the chosen node for valid keys.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "language": {
+    "description": "action:\"audio\" \u2014 language code for prompt (ACE only, default: 'en').",
+    "type": "string"
+   },
+   "lyrics": {
+    "description": "action:\"audio\" \u2014 lyrics or song structure description (ACE only \u2014 section-by-section breakdown).",
+    "type": "string"
+   },
+   "min_p": {
+    "description": "action:\"audio\" \u2014 TextEncodeAceStepAudio1.5 LLM min-p sampling (ACE only, 0-1, default: 0).",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "mode": {
+    "description": "action:\"3d\" \u2014 \"text\" = text-to-3D from `prompt`; \"image\" = image-to-3D from an uploaded input `image`. REQUIRED for that action.",
+    "enum": [
+     "text",
+     "image"
+    ],
+    "type": "string"
+   },
+   "model": {
+    "description": "Model file for the post-processing actions: action:\"upscale\" \u2014 an upscale model in models/upscale_models/ (auto-selected from local models if omitted); action:\"remove_background\" \u2014 the BiRefNet matting model (default 'BiRefNet_toonout'; auto-downloaded by ComfyUI-RMBG).",
+    "type": "string"
+   },
+   "model_family": {
+    "description": "action:\"audio\" \u2014 audio model family; determines which workflow template and model loaders to use. REQUIRED for that action.",
+    "enum": [
+     "ace_step_1.5",
+     "stable_audio_3"
+    ],
+    "type": "string"
+   },
+   "musical_key": {
+    "description": "action:\"audio\" \u2014 target musical key (ACE only, e.g. 'C major', 'E minor'; default: 'C major').",
+    "type": "string"
+   },
+   "negative_prompt": {
+    "description": "Negative prompt (default: empty / from defaults). Used by actions \"image\", \"video\", \"controlnet\", \"ip_adapter\" and \u2014 for the Stable Audio 3 family only \u2014 \"audio\".",
+    "type": "string"
+   },
+   "node": {
+    "description": "action:\"3d\" \u2014 explicit 3D API node class_type to use (e.g. \"MeshyTextToModelNode\"); auto-selected if omitted. Use list_api_nodes with filter \"3d\" to see options.",
+    "type": "string"
+   },
+   "overrides": {
+    "additionalProperties": {},
+    "description": "action:\"regenerate\" \u2014 map of input-name \u2192 new value applied to every node that already has that input. Common keys: cfg, steps, sampler_name, scheduler, seed, denoise, text.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "preset": {
+    "description": "action:\"ip_adapter\" \u2014 IPAdapterUnifiedLoader preset (default 'PLUS (high strength)').",
+    "type": "string"
+   },
+   "prompt": {
+    "description": "Positive text prompt. REQUIRED for actions \"image\", \"audio\", \"video\", \"controlnet\" and \"ip_adapter\"; for action:\"3d\" it is required in mode \"text\" and optional (passed through only if the chosen node accepts it) in mode \"image\". Unused by action:\"regenerate\", action:\"upscale\" and action:\"remove_background\".",
+    "type": "string"
+   },
+   "reference_image": {
+    "description": "action:\"ip_adapter\" \u2014 filename of the (already-uploaded) reference image in ComfyUI's input dir. REQUIRED for that action.",
+    "type": "string"
+   },
+   "resolution": {
+    "description": "action:\"video\" \u2014 'WIDTHxHEIGHT' e.g. '768x512' (rounded to multiples of 32; default 768x512).",
+    "type": "string"
+   },
+   "sampler": {
+    "description": "Sampler name (e.g. euler, dpmpp_2m). Actions \"image\", \"audio\", \"controlnet\", \"ip_adapter\".",
+    "type": "string"
+   },
+   "scale": {
+    "anyOf": [
+     {
+      "const": 2,
+      "type": "number"
+     },
+     {
+      "const": 4,
+      "type": "number"
+     }
+    ],
+    "description": "action:\"upscale\" \u2014 net upscale factor: 2 or 4 (default 4)."
+   },
+   "scheduler": {
+    "description": "Scheduler (e.g. normal, karras). Actions \"image\", \"audio\", \"controlnet\", \"ip_adapter\".",
+    "type": "string"
+   },
+   "seconds": {
+    "description": "action:\"video\" \u2014 clip length in seconds (default 4; ~10s max).",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "seed": {
+    "description": "Seed (omit to randomize). Actions \"image\", \"audio\", \"video\", \"controlnet\", \"ip_adapter\".",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "shift": {
+    "description": "action:\"audio\" \u2014 ModelSamplingAuraFlow shift parameter (ACE only, default: 3).",
+    "type": "number"
+   },
+   "steps": {
+    "description": "Sampling steps. Actions \"image\", \"audio\", \"video\", \"controlnet\", \"ip_adapter\" (video defaults to 8 for the distilled model).",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "strength": {
+    "description": "Two DIFFERENT knobs sharing one field, each with its own range, checked when the action runs: action:\"video\" (i2v only) \u2014 adherence to the start frame, 0-1 inclusive (default 0.6; higher = LESS motion); action:\"controlnet\" \u2014 conditioning strength, must be > 0, typically 0.0-2.0 (default 1.0; higher = stronger adherence to the control image).",
+    "type": "number"
+   },
+   "temperature": {
+    "description": "action:\"audio\" \u2014 TextEncodeAceStepAudio1.5 LLM sampling temperature (ACE only, 0-2, default: 0.85).",
+    "maximum": 2,
+    "minimum": 0,
+    "type": "number"
+   },
+   "timesignature": {
+    "description": "action:\"audio\" \u2014 TextEncodeAceStepAudio1.5 time signature (ACE only, one of '2'/'3'/'4'/'6', default: '4').",
+    "enum": [
+     "2",
+     "3",
+     "4",
+     "6"
+    ],
+    "type": "string"
+   },
+   "top_k": {
+    "description": "action:\"audio\" \u2014 TextEncodeAceStepAudio1.5 LLM top-k sampling (ACE only, 0-100, default: 0 = disabled).",
+    "maximum": 100,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "top_p": {
+    "description": "action:\"audio\" \u2014 TextEncodeAceStepAudio1.5 LLM top-p nucleus sampling (ACE only, 0-2000, default: 0.9).",
+    "maximum": 2000,
+    "minimum": 0,
+    "type": "number"
+   },
+   "unet": {
+    "description": "action:\"audio\" \u2014 ACE UNet model filename (in models/diffusion_models/); auto-selected if omitted.",
+    "type": "string"
+   },
+   "vae": {
+    "description": "action:\"audio\" \u2014 ACE VAE model filename (in models/vae/); auto-selected if omitted.",
+    "type": "string"
+   },
+   "weight": {
+    "description": "action:\"ip_adapter\" \u2014 IP-Adapter influence on the output, typically 0.0-1.0 (default 0.8); higher = closer to the reference.",
+    "type": "number"
+   },
+   "weight_type": {
+    "description": "action:\"ip_adapter\" \u2014 IPAdapter weight mode (default 'standard' \u2014 required by current IPAdapter_plus builds).",
+    "enum": [
+     "standard",
+     "prompt is more important",
+     "style transfer"
+    ],
+    "type": "string"
+   },
+   "width": {
+    "description": "Image width in pixels. Actions \"image\", \"controlnet\", \"ip_adapter\".",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "action"
+  ],
+  "type": "object"
+ },
+ "name": "generate_image"
+}

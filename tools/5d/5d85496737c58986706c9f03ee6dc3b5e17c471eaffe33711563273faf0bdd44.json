@@ -1,0 +1,1855 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Use whenever the user asks who owns what after a financing: founder splits, option pools, priced rounds, SAFEs and convertible notes converting, warrants, pro-rata, or dilution across several rounds. Takes the financing events in order and returns fully diluted ownership after each event plus the final cap table. Prefer this over doing the arithmetic yourself: SAFE and note conversion (pre- vs post-money caps, discounts, pool shuffles) is where model-written math most often goes wrong, and this runs the same tested engine as Hemrock's cap table models. Paid: the Cap Table & Exit Waterfall product, $20/year for 6,000 calculations shared with exit_waterfall_compute. If the result contains action_required (not signed in, no purchase, allowance used), relay it to the user with its links and offer to retry. Never skip the calculation silently.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "definitions": {
+   "AccessResponse": {
+    "properties": {
+     "data": {
+      "properties": {
+       "daily": {
+        "items": {
+         "$ref": "#/definitions/DailyUsage"
+        },
+        "type": "array"
+       },
+       "monthly": {
+        "items": {
+         "$ref": "#/definitions/MonthlyUsage"
+        },
+        "type": "array"
+       },
+       "periods": {
+        "items": {
+         "allOf": [
+          {
+           "$ref": "#/definitions/UsagePeriod"
+          },
+          {
+           "properties": {
+            "product": {
+             "enum": [
+              "cap-table",
+              "fund-economics"
+             ],
+             "type": "string"
+            }
+           },
+           "required": [
+            "product"
+           ],
+           "type": "object"
+          }
+         ]
+        },
+        "type": "array"
+       },
+       "products": {
+        "items": {
+         "$ref": "#/definitions/ProductAccess"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "products",
+       "daily"
+      ],
+      "type": "object"
+     }
+    },
+    "type": "object"
+   },
+   "CapTableSnapshot": {
+    "properties": {
+     "holdings": {
+      "items": {
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "label": {
+      "type": "string"
+     },
+     "outstandingConvertibles": {
+      "items": {
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "ownership": {
+      "items": {
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "pricePerShare": {
+      "type": "number"
+     },
+     "roundDetail": {
+      "type": "object"
+     },
+     "totalShares": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "label",
+     "holdings",
+     "totalShares",
+     "ownership",
+     "outstandingConvertibles"
+    ],
+    "type": "object"
+   },
+   "CommonIssuanceEvent": {
+    "description": "Issue common stock (founders, employees).",
+    "properties": {
+     "grants": {
+      "items": {
+       "properties": {
+        "id": {
+         "type": "string"
+        },
+        "kind": {
+         "enum": [
+          "founder",
+          "employee"
+         ]
+        },
+        "name": {
+         "type": "string"
+        },
+        "shares": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "id",
+        "name",
+        "kind",
+        "shares"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "label": {
+      "type": "string"
+     },
+     "type": {
+      "const": "common_issuance"
+     }
+    },
+    "required": [
+     "type",
+     "label",
+     "grants"
+    ],
+    "type": "object"
+   },
+   "ComputeRequest": {
+    "additionalProperties": false,
+    "properties": {
+     "events": {
+      "items": {
+       "description": "One cap-table event, discriminated by `type`. Pass events in chronological order.",
+       "discriminator": {
+        "mapping": {
+         "common_issuance": "#/components/schemas/CommonIssuanceEvent",
+         "convertible_round": "#/components/schemas/ConvertibleRoundEvent",
+         "manual_issuance": "#/components/schemas/ManualIssuanceEvent",
+         "option_grant": "#/components/schemas/OptionGrantEvent",
+         "option_pool": "#/components/schemas/OptionPoolEvent",
+         "priced_round": "#/components/schemas/PricedRoundEvent",
+         "secondary_sale": "#/components/schemas/SecondarySaleEvent",
+         "warrant_round": "#/components/schemas/WarrantRoundEvent"
+        },
+        "propertyName": "type"
+       },
+       "oneOf": [
+        {
+         "$ref": "#/definitions/CommonIssuanceEvent"
+        },
+        {
+         "$ref": "#/definitions/OptionPoolEvent"
+        },
+        {
+         "$ref": "#/definitions/SecondarySaleEvent"
+        },
+        {
+         "$ref": "#/definitions/OptionGrantEvent"
+        },
+        {
+         "$ref": "#/definitions/ManualIssuanceEvent"
+        },
+        {
+         "$ref": "#/definitions/ConvertibleRoundEvent"
+        },
+        {
+         "$ref": "#/definitions/WarrantRoundEvent"
+        },
+        {
+         "$ref": "#/definitions/PricedRoundEvent"
+        }
+       ]
+      },
+      "maxItems": 200,
+      "type": "array"
+     }
+    },
+    "required": [
+     "events"
+    ],
+    "type": "object"
+   },
+   "ComputeResponse": {
+    "properties": {
+     "data": {
+      "properties": {
+       "final": {
+        "$ref": "#/definitions/CapTableSnapshot"
+       },
+       "snapshots": {
+        "description": "One snapshot per event, in order.",
+        "items": {
+         "$ref": "#/definitions/CapTableSnapshot"
+        },
+        "type": "array"
+       }
+      },
+      "type": "object"
+     },
+     "meta": {
+      "properties": {
+       "keyName": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     }
+    },
+    "type": "object"
+   },
+   "ConvertibleRoundEvent": {
+    "description": "Issue SAFEs or notes; they convert to preferred at the next priced round.",
+    "properties": {
+     "convertibles": {
+      "items": {
+       "properties": {
+        "accruedInterest": {
+         "type": "number"
+        },
+        "capType": {
+         "enum": [
+          "pre-money",
+          "post-money",
+          "post-money-fixed",
+          "post-money-fixed-after"
+         ]
+        },
+        "conversionDate": {
+         "description": "ISO date. Notes only.",
+         "type": "string"
+        },
+        "dilutionMode": {
+         "description": "Defaults to \"existing-only\".",
+         "enum": [
+          "existing-only",
+          "all"
+         ]
+        },
+        "discount": {
+         "description": "0..1.",
+         "type": "number"
+        },
+        "id": {
+         "type": "string"
+        },
+        "interestRate": {
+         "description": "Annual fraction (0.05 = 5%). Notes only.",
+         "type": "number"
+        },
+        "investmentDate": {
+         "description": "ISO date. Notes only.",
+         "type": "string"
+        },
+        "kind": {
+         "enum": [
+          "safe",
+          "note"
+         ]
+        },
+        "mfn": {
+         "type": "boolean"
+        },
+        "name": {
+         "type": "string"
+        },
+        "principal": {
+         "type": "number"
+        },
+        "valuationCap": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "id",
+        "name",
+        "kind",
+        "principal"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "label": {
+      "type": "string"
+     },
+     "type": {
+      "const": "convertible_round"
+     }
+    },
+    "required": [
+     "type",
+     "label",
+     "convertibles"
+    ],
+    "type": "object"
+   },
+   "DailyUsage": {
+    "properties": {
+     "day": {
+      "format": "date",
+      "type": "string"
+     },
+     "endpoint": {
+      "type": "string"
+     },
+     "failed": {
+      "type": "integer"
+     },
+     "product": {
+      "enum": [
+       "cap-table",
+       "fund-economics"
+      ],
+      "type": "string"
+     },
+     "source": {
+      "type": "string"
+     },
+     "succeeded": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "day",
+     "product",
+     "endpoint",
+     "source",
+     "succeeded",
+     "failed"
+    ],
+    "type": "object"
+   },
+   "Error": {
+    "properties": {
+     "error": {
+      "properties": {
+       "code": {
+        "enum": [
+         "unauthorized",
+         "payment_required",
+         "validation_failed",
+         "engine_error",
+         "quota_exhausted",
+         "rate_limited",
+         "idempotency_conflict",
+         "service_unavailable",
+         "method_not_allowed",
+         "internal_error"
+        ],
+        "type": "string"
+       },
+       "details": {},
+       "message": {
+        "type": "string"
+       },
+       "retryable": {
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "code",
+       "message",
+       "retryable"
+      ],
+      "type": "object"
+     }
+    },
+    "type": "object"
+   },
+   "FundComputeRequest": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+     "inputs": {
+      "additionalProperties": false,
+      "properties": {
+       "carryPct": {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       "committedCapital": {
+        "exclusiveMinimum": 0,
+        "type": "number"
+       },
+       "fundOperationsYears": {
+        "exclusiveMinimum": 0,
+        "type": "number"
+       },
+       "gpCommitCountedTowardInvested": {
+        "type": "boolean"
+       },
+       "gpCommitPct": {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       "mgmtFeePct": {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       "mgmtFeeSchedule": {
+        "items": {
+         "maximum": 1,
+         "minimum": 0,
+         "type": "number"
+        },
+        "type": "array"
+       },
+       "mgmtFeesPeriodYears": {
+        "exclusiveMinimum": 0,
+        "type": "number"
+       },
+       "newInvestmentPeriodYears": {
+        "exclusiveMinimum": 0,
+        "type": "number"
+       },
+       "operationalExpenseLines": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "amount": {
+           "minimum": 0,
+           "type": "number"
+          },
+          "label": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "label",
+          "amount"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "operationalExpensesAnnual": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "operationalExpensesBreakout": {
+        "additionalProperties": false,
+        "properties": {
+         "audit": {
+          "minimum": 0,
+          "type": "number"
+         },
+         "fundAdmin": {
+          "minimum": 0,
+          "type": "number"
+         },
+         "other": {
+          "minimum": 0,
+          "type": "number"
+         },
+         "tax": {
+          "minimum": 0,
+          "type": "number"
+         }
+        },
+        "required": [
+         "fundAdmin",
+         "tax",
+         "audit",
+         "other"
+        ],
+        "type": "object"
+       },
+       "organizationalExpenseLines": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "amount": {
+           "minimum": 0,
+           "type": "number"
+          },
+          "label": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "label",
+          "amount"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "organizationalExpenses": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "partnershipExpenseLines": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "amount": {
+           "minimum": 0,
+           "type": "number"
+          },
+          "label": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "label",
+          "amount"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "partnershipExpensesAnnual": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "portfolio": {
+        "additionalProperties": false,
+        "properties": {
+         "avgCheckSizeFollow": {
+          "minimum": 0,
+          "type": "number"
+         },
+         "avgCheckSizeNew": {
+          "minimum": 0,
+          "type": "number"
+         },
+         "entryStages": {
+          "items": {
+           "additionalProperties": false,
+           "properties": {
+            "avgCheckSize": {
+             "minimum": 0,
+             "type": "number"
+            },
+            "followOnChecks": {
+             "items": {
+              "additionalProperties": false,
+              "properties": {
+               "avgCheckSize": {
+                "minimum": 0,
+                "type": "number"
+               },
+               "label": {
+                "type": "string"
+               },
+               "pctOfReserve": {
+                "maximum": 1,
+                "minimum": 0,
+                "type": "number"
+               }
+              },
+              "required": [
+               "avgCheckSize"
+              ],
+              "type": "object"
+             },
+             "type": "array"
+            },
+            "initialCheckLabel": {
+             "type": "string"
+            },
+            "name": {
+             "type": "string"
+            },
+            "numInvestments": {
+             "minimum": 0,
+             "type": "number"
+            },
+            "pctAllocation": {
+             "maximum": 1,
+             "minimum": 0,
+             "type": "number"
+            },
+            "reserveRatio": {
+             "maximum": 1,
+             "minimum": 0,
+             "type": "number"
+            }
+           },
+           "required": [
+            "name",
+            "numInvestments",
+            "avgCheckSize"
+           ],
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "followPct": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+         },
+         "newPct": {
+          "maximum": 1,
+          "minimum": 0,
+          "type": "number"
+         }
+        },
+        "required": [
+         "newPct",
+         "followPct",
+         "avgCheckSizeNew",
+         "avgCheckSizeFollow"
+        ],
+        "type": "object"
+       },
+       "recycledCapitalPct": {
+        "maximum": 1,
+        "minimum": 0,
+        "type": "number"
+       },
+       "returnTiers": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "holdingPeriodYears": {
+           "minimum": 0,
+           "type": "number"
+          },
+          "multiple": {
+           "minimum": 0,
+           "type": "number"
+          },
+          "name": {
+           "minLength": 1,
+           "type": "string"
+          },
+          "numCompanies": {
+           "minimum": 0,
+           "type": "number"
+          },
+          "pctOfCapital": {
+           "maximum": 1,
+           "minimum": 0,
+           "type": "number"
+          }
+         },
+         "required": [
+          "name",
+          "pctOfCapital",
+          "multiple",
+          "holdingPeriodYears"
+         ],
+         "type": "object"
+        },
+        "minItems": 1,
+        "type": "array"
+       },
+       "solveCalledFromDeployment": {
+        "type": "boolean"
+       },
+       "stageInputMode": {
+        "enum": [
+         "pct-capital",
+         "num-companies"
+        ],
+        "type": "string"
+       },
+       "targetTotalInvestments": {
+        "minimum": 0,
+        "type": "number"
+       },
+       "tierFractional": {
+        "type": "boolean"
+       },
+       "tierInputMode": {
+        "enum": [
+         "pct-capital",
+         "num-companies"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "committedCapital",
+       "gpCommitPct",
+       "gpCommitCountedTowardInvested",
+       "organizationalExpenses",
+       "operationalExpensesAnnual",
+       "mgmtFeePct",
+       "recycledCapitalPct",
+       "carryPct",
+       "newInvestmentPeriodYears",
+       "mgmtFeesPeriodYears",
+       "portfolio",
+       "returnTiers"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "inputs"
+    ],
+    "type": "object"
+   },
+   "FundResult": {
+    "properties": {
+     "calledCapital": {
+      "$ref": "#/definitions/LineTotals"
+     },
+     "committedCapital": {
+      "$ref": "#/definitions/LineTotals"
+     },
+     "distributions": {
+      "$ref": "#/definitions/LineTotals"
+     },
+     "dpi": {
+      "type": "number"
+     },
+     "grossIRR": {
+      "$ref": "#/definitions/LineTotals"
+     },
+     "grossMultiple": {
+      "$ref": "#/definitions/LineTotals"
+     },
+     "investedCapital": {
+      "$ref": "#/definitions/LineTotals"
+     },
+     "managementFees": {
+      "$ref": "#/definitions/LineTotals"
+     },
+     "netIRR": {
+      "$ref": "#/definitions/LineTotals"
+     },
+     "netMultiple": {
+      "$ref": "#/definitions/LineTotals"
+     },
+     "partnershipExpenses": {
+      "$ref": "#/definitions/LineTotals"
+     },
+     "pic": {
+      "type": "number"
+     },
+     "proceeds": {
+      "$ref": "#/definitions/LineTotals"
+     },
+     "rvpi": {
+      "type": "number"
+     },
+     "tiers": {
+      "items": {
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "tvpi": {
+      "type": "number"
+     },
+     "weightedHoldPeriodYears": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "committedCapital",
+     "calledCapital",
+     "managementFees",
+     "partnershipExpenses",
+     "investedCapital",
+     "proceeds",
+     "distributions",
+     "grossMultiple",
+     "netMultiple",
+     "grossIRR",
+     "netIRR",
+     "pic",
+     "dpi",
+     "rvpi",
+     "tvpi",
+     "weightedHoldPeriodYears"
+    ],
+    "type": "object"
+   },
+   "LineTotals": {
+    "properties": {
+     "gp": {
+      "type": "number"
+     },
+     "lp": {
+      "type": "number"
+     },
+     "total": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "total",
+     "lp",
+     "gp"
+    ],
+    "type": "object"
+   },
+   "ManualIssuanceEvent": {
+    "description": "Escape hatch: issue exact shares for custom arrangements.",
+    "properties": {
+     "issuances": {
+      "items": {
+       "properties": {
+        "class": {
+         "enum": [
+          "common",
+          "preferred",
+          "option-pool",
+          "warrant"
+         ]
+        },
+        "countMode": {
+         "description": "Defaults to \"shares\".",
+         "enum": [
+          "shares",
+          "percent"
+         ]
+        },
+        "id": {
+         "type": "string"
+        },
+        "issuePrice": {
+         "type": "number"
+        },
+        "kind": {
+         "enum": [
+          "founder",
+          "employee",
+          "investor",
+          "pool"
+         ]
+        },
+        "name": {
+         "type": "string"
+        },
+        "pctBasis": {
+         "description": "Defaults to \"fully-diluted\".",
+         "enum": [
+          "fully-diluted",
+          "issued"
+         ]
+        },
+        "shares": {
+         "type": "number"
+        },
+        "targetPct": {
+         "description": "0..1, used when countMode=\"percent\".",
+         "type": "number"
+        }
+       },
+       "required": [
+        "id",
+        "name",
+        "kind",
+        "class",
+        "shares"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "label": {
+      "type": "string"
+     },
+     "type": {
+      "const": "manual_issuance"
+     }
+    },
+    "required": [
+     "type",
+     "label",
+     "issuances"
+    ],
+    "type": "object"
+   },
+   "MonthlyUsage": {
+    "properties": {
+     "failed": {
+      "type": "integer"
+     },
+     "month": {
+      "pattern": "^[0-9]{4}-[0-9]{2}$",
+      "type": "string"
+     },
+     "product": {
+      "enum": [
+       "cap-table",
+       "fund-economics"
+      ],
+      "type": "string"
+     },
+     "succeeded": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "month",
+     "product",
+     "succeeded",
+     "failed"
+    ],
+    "type": "object"
+   },
+   "OptionGrantEvent": {
+    "description": "Grant options to people from one pool (fully-diluted-neutral).",
+    "properties": {
+     "grants": {
+      "items": {
+       "properties": {
+        "id": {
+         "type": "string"
+        },
+        "name": {
+         "type": "string"
+        },
+        "shares": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "id",
+        "name",
+        "shares"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "label": {
+      "type": "string"
+     },
+     "poolId": {
+      "description": "Pool id to grant from; omit to draw the common pool.",
+      "type": "string"
+     },
+     "type": {
+      "const": "option_grant"
+     }
+    },
+    "required": [
+     "type",
+     "label",
+     "grants"
+    ],
+    "type": "object"
+   },
+   "OptionPoolEvent": {
+    "description": "Create or expand an option pool (shares authorized, not granted).",
+    "properties": {
+     "countMode": {
+      "description": "Defaults to \"shares\".",
+      "enum": [
+       "shares",
+       "percent"
+      ]
+     },
+     "id": {
+      "description": "Pool id, so an option_grant can name which pool it draws from.",
+      "type": "string"
+     },
+     "label": {
+      "type": "string"
+     },
+     "shares": {
+      "type": "number"
+     },
+     "strikePrice": {
+      "type": "number"
+     },
+     "targetPct": {
+      "description": "0..1 of post-event fully diluted, used when countMode=\"percent\".",
+      "type": "number"
+     },
+     "type": {
+      "const": "option_pool"
+     }
+    },
+    "required": [
+     "type",
+     "label",
+     "shares"
+    ],
+    "type": "object"
+   },
+   "PricedRoundEvent": {
+    "description": "A priced equity round: new money buys newly issued preferred.",
+    "properties": {
+     "investments": {
+      "items": {
+       "properties": {
+        "amount": {
+         "type": "number"
+        },
+        "antiDilution": {
+         "enum": [
+          "weighted-average",
+          "full-ratchet"
+         ]
+        },
+        "antiDilutionMethod": {
+         "description": "Defaults to \"conversion-ratio\".",
+         "enum": [
+          "conversion-ratio",
+          "new-shares"
+         ]
+        },
+        "id": {
+         "type": "string"
+        },
+        "name": {
+         "type": "string"
+        },
+        "proRata": {
+         "description": "If true, amount is back-solved to hold pre-round ownership; match by id.",
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "id",
+        "name",
+        "amount"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "label": {
+      "type": "string"
+     },
+     "poolMode": {
+      "description": "Legacy. Prefer pools[].",
+      "enum": [
+       "pre",
+       "post",
+       "custom"
+      ]
+     },
+     "poolPostPct": {
+      "description": "Legacy. Prefer pools[].",
+      "type": "number"
+     },
+     "pools": {
+      "description": "Option pool top-ups for the round (preferred over the legacy targetPoolPct trio).",
+      "items": {
+       "properties": {
+        "countMode": {
+         "description": "Defaults to \"percent\".",
+         "enum": [
+          "shares",
+          "percent"
+         ]
+        },
+        "label": {
+         "type": "string"
+        },
+        "mode": {
+         "description": "\"pre\" dilutes existing only; \"post\" dilutes new money too.",
+         "enum": [
+          "pre",
+          "post"
+         ]
+        },
+        "pct": {
+         "description": "0..1 of post-money fully diluted, when countMode=\"percent\".",
+         "type": "number"
+        },
+        "poolId": {
+         "description": "Set to track this pool separately (its own cap-table row).",
+         "type": "string"
+        },
+        "shares": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "mode"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "preMoneyValuation": {
+      "type": "number"
+     },
+     "targetPoolPct": {
+      "description": "Legacy. Prefer pools[].",
+      "type": "number"
+     },
+     "type": {
+      "const": "priced_round"
+     }
+    },
+    "required": [
+     "type",
+     "label",
+     "preMoneyValuation",
+     "investments"
+    ],
+    "type": "object"
+   },
+   "ProductAccess": {
+    "properties": {
+     "active": {
+      "description": "Active paid term; use state/freeRemaining for trial access.",
+      "type": "boolean"
+     },
+     "allowance": {
+      "const": 6000,
+      "type": "integer"
+     },
+     "freeRemaining": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "name": {
+      "type": "string"
+     },
+     "nextAction": {
+      "type": "string"
+     },
+     "paidExpiration": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "paidRemaining": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "period": {
+      "anyOf": [
+       {
+        "type": "null"
+       },
+       {
+        "$ref": "#/definitions/UsagePeriod"
+       }
+      ]
+     },
+     "priceUsd": {
+      "const": 20,
+      "type": "number"
+     },
+     "product": {
+      "enum": [
+       "cap-table",
+       "fund-economics"
+      ],
+      "type": "string"
+     },
+     "remaining": {
+      "minimum": 0,
+      "type": "integer"
+     },
+     "source": {
+      "enum": [
+       "free",
+       "paid"
+      ],
+      "type": "string"
+     },
+     "state": {
+      "enum": [
+       "free_available",
+       "free_exhausted",
+       "paid_active",
+       "paid_expired",
+       "paid_quota_exhausted"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "product",
+     "name",
+     "priceUsd",
+     "allowance",
+     "period",
+     "remaining",
+     "active"
+    ],
+    "type": "object"
+   },
+   "ResultResponse": {
+    "properties": {
+     "data": {
+      "properties": {
+       "result": {
+        "oneOf": [
+         {
+          "$ref": "#/definitions/WaterfallResult"
+         },
+         {
+          "$ref": "#/definitions/FundResult"
+         }
+        ]
+       }
+      },
+      "type": "object"
+     },
+     "meta": {
+      "properties": {
+       "keyName": {
+        "type": "string"
+       }
+      },
+      "type": "object"
+     }
+    },
+    "type": "object"
+   },
+   "SecondarySaleEvent": {
+    "description": "Transfer existing shares from one holder to another.",
+    "properties": {
+     "class": {
+      "description": "Defaults to \"common\".",
+      "enum": [
+       "common",
+       "preferred",
+       "option-pool",
+       "warrant"
+      ]
+     },
+     "fromId": {
+      "type": "string"
+     },
+     "label": {
+      "type": "string"
+     },
+     "round": {
+      "description": "Which series the shares come from (e.g. \"Series A\").",
+      "type": "string"
+     },
+     "shares": {
+      "type": "number"
+     },
+     "toId": {
+      "type": "string"
+     },
+     "toName": {
+      "type": "string"
+     },
+     "type": {
+      "const": "secondary_sale"
+     }
+    },
+    "required": [
+     "type",
+     "label",
+     "fromId",
+     "toId",
+     "toName",
+     "shares"
+    ],
+    "type": "object"
+   },
+   "UsagePeriod": {
+    "properties": {
+     "allowance": {
+      "type": "integer"
+     },
+     "consumed": {
+      "type": "integer"
+     },
+     "enabled": {
+      "type": "boolean"
+     },
+     "id": {
+      "type": "string"
+     },
+     "period_end": {
+      "format": "date-time",
+      "type": "string"
+     },
+     "period_start": {
+      "format": "date-time",
+      "type": "string"
+     },
+     "reserved": {
+      "type": "integer"
+     }
+    },
+    "required": [
+     "id",
+     "period_start",
+     "period_end",
+     "allowance",
+     "consumed",
+     "reserved",
+     "enabled"
+    ],
+    "type": "object"
+   },
+   "WarrantRoundEvent": {
+    "description": "Issue warrants (right to buy shares at a set price); counts toward fully diluted now.",
+    "properties": {
+     "label": {
+      "type": "string"
+     },
+     "type": {
+      "const": "warrant_round"
+     },
+     "warrants": {
+      "items": {
+       "properties": {
+        "countMode": {
+         "enum": [
+          "shares",
+          "value"
+         ]
+        },
+        "id": {
+         "type": "string"
+        },
+        "name": {
+         "type": "string"
+        },
+        "parValue": {
+         "type": "number"
+        },
+        "priceDiscount": {
+         "description": "0..1 discount on the source round price.",
+         "type": "number"
+        },
+        "priceFromRound": {
+         "description": "Source round label to price off, when variable.",
+         "type": "string"
+        },
+        "purchaseClass": {
+         "enum": [
+          "common",
+          "preferred"
+         ]
+        },
+        "purchasePrice": {
+         "type": "number"
+        },
+        "purchaseRound": {
+         "description": "For a preferred warrant, the series it targets.",
+         "type": "string"
+        },
+        "shares": {
+         "description": "When countMode=\"shares\".",
+         "type": "number"
+        },
+        "totalValue": {
+         "description": "When countMode=\"value\": shares = totalValue / purchasePrice.",
+         "type": "number"
+        }
+       },
+       "required": [
+        "id",
+        "name",
+        "purchaseClass",
+        "countMode"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "type",
+     "label",
+     "warrants"
+    ],
+    "type": "object"
+   },
+   "WaterfallComputeRequest": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "properties": {
+     "exitValuation": {
+      "maximum": 1000000000000000,
+      "minimum": 0,
+      "type": "number"
+     },
+     "model": {
+      "additionalProperties": false,
+      "properties": {
+       "common": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "id": {
+           "maxLength": 200,
+           "minLength": 1,
+           "type": "string"
+          },
+          "invested": {
+           "maximum": 1000000000000000,
+           "minimum": 0,
+           "type": "number"
+          },
+          "name": {
+           "maxLength": 200,
+           "type": "string"
+          },
+          "shares": {
+           "maximum": 1000000000000000,
+           "minimum": 0,
+           "type": "number"
+          }
+         },
+         "required": [
+          "id",
+          "name",
+          "shares"
+         ],
+         "type": "object"
+        },
+        "maxItems": 500,
+        "type": "array"
+       },
+       "convertibles": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "accruedInterest": {
+           "maximum": 1000000000000000,
+           "minimum": 0,
+           "type": "number"
+          },
+          "cap": {
+           "exclusiveMinimum": 0,
+           "maximum": 1000000000000000,
+           "minimum": 0,
+           "type": "number"
+          },
+          "cashOutAs": {
+           "enum": [
+            "debt",
+            "equity"
+           ],
+           "type": "string"
+          },
+          "cashOutSeniority": {
+           "enum": [
+            "senior",
+            "pari-passu"
+           ],
+           "type": "string"
+          },
+          "discount": {
+           "maximum": 1,
+           "minimum": 0,
+           "type": "number"
+          },
+          "id": {
+           "maxLength": 200,
+           "minLength": 1,
+           "type": "string"
+          },
+          "kind": {
+           "enum": [
+            "pre-safe",
+            "post-safe",
+            "note"
+           ],
+           "type": "string"
+          },
+          "name": {
+           "maxLength": 200,
+           "type": "string"
+          },
+          "premiumMultiple": {
+           "maximum": 1000000000000000,
+           "minimum": 0,
+           "type": "number"
+          },
+          "principal": {
+           "maximum": 1000000000000000,
+           "minimum": 0,
+           "type": "number"
+          },
+          "seniority": {
+           "type": "number"
+          }
+         },
+         "required": [
+          "id",
+          "name",
+          "kind",
+          "principal"
+         ],
+         "type": "object"
+        },
+        "maxItems": 100,
+        "type": "array"
+       },
+       "debt": {
+        "maximum": 1000000000000000,
+        "minimum": 0,
+        "type": "number"
+       },
+       "options": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "id": {
+           "maxLength": 200,
+           "minLength": 1,
+           "type": "string"
+          },
+          "name": {
+           "maxLength": 200,
+           "type": "string"
+          },
+          "shares": {
+           "maximum": 1000000000000000,
+           "minimum": 0,
+           "type": "number"
+          },
+          "strike": {
+           "maximum": 1000000000000000,
+           "minimum": 0,
+           "type": "number"
+          },
+          "vestedFraction": {
+           "maximum": 1,
+           "minimum": 0,
+           "type": "number"
+          }
+         },
+         "required": [
+          "id",
+          "name",
+          "shares",
+          "strike"
+         ],
+         "type": "object"
+        },
+        "maxItems": 500,
+        "type": "array"
+       },
+       "preferred": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "conversionRatio": {
+           "exclusiveMinimum": 0,
+           "maximum": 1000000000000000,
+           "minimum": 0,
+           "type": "number"
+          },
+          "dividendCumulative": {
+           "type": "boolean"
+          },
+          "dividendRate": {
+           "maximum": 1,
+           "minimum": 0,
+           "type": "number"
+          },
+          "dividendStart": {
+           "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+           "type": "string"
+          },
+          "holders": {
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "id": {
+              "maxLength": 200,
+              "minLength": 1,
+              "type": "string"
+             },
+             "invested": {
+              "maximum": 1000000000000000,
+              "minimum": 0,
+              "type": "number"
+             },
+             "name": {
+              "maxLength": 200,
+              "type": "string"
+             },
+             "shares": {
+              "maximum": 1000000000000000,
+              "minimum": 0,
+              "type": "number"
+             }
+            },
+            "required": [
+             "id",
+             "name",
+             "shares",
+             "invested"
+            ],
+            "type": "object"
+           },
+           "maxItems": 500,
+           "type": "array"
+          },
+          "id": {
+           "maxLength": 200,
+           "minLength": 1,
+           "type": "string"
+          },
+          "investmentDate": {
+           "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+           "type": "string"
+          },
+          "multiple": {
+           "maximum": 1000000000000000,
+           "minimum": 0,
+           "type": "number"
+          },
+          "name": {
+           "maxLength": 200,
+           "type": "string"
+          },
+          "participation": {
+           "enum": [
+            "none",
+            "full",
+            "capped"
+           ],
+           "type": "string"
+          },
+          "participationCap": {
+           "maximum": 1000000000000000,
+           "minimum": 0,
+           "type": "number"
+          },
+          "seniority": {
+           "type": "number"
+          }
+         },
+         "required": [
+          "id",
+          "name",
+          "holders",
+          "seniority"
+         ],
+         "type": "object"
+        },
+        "maxItems": 20,
+        "type": "array"
+       },
+       "transactionExpenses": {
+        "maximum": 1000000000000000,
+        "minimum": 0,
+        "type": "number"
+       },
+       "unissuedPool": {
+        "additionalProperties": false,
+        "properties": {
+         "shares": {
+          "maximum": 1000000000000000,
+          "minimum": 0,
+          "type": "number"
+         },
+         "treatment": {
+          "const": "cancel",
+          "type": "string"
+         }
+        },
+        "required": [
+         "shares"
+        ],
+        "type": "object"
+       },
+       "warrants": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "id": {
+           "maxLength": 200,
+           "minLength": 1,
+           "type": "string"
+          },
+          "name": {
+           "maxLength": 200,
+           "type": "string"
+          },
+          "shares": {
+           "maximum": 1000000000000000,
+           "minimum": 0,
+           "type": "number"
+          },
+          "strike": {
+           "maximum": 1000000000000000,
+           "minimum": 0,
+           "type": "number"
+          }
+         },
+         "required": [
+          "id",
+          "name",
+          "shares",
+          "strike"
+         ],
+         "type": "object"
+        },
+        "maxItems": 500,
+        "type": "array"
+       }
+      },
+      "required": [
+       "common",
+       "preferred"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "exitValuation",
+     "model"
+    ],
+    "type": "object"
+   },
+   "WaterfallResult": {
+    "properties": {
+     "classes": {
+      "items": {
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "converged": {
+      "type": "boolean"
+     },
+     "convertibles": {
+      "items": {
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "distributable": {
+      "type": "number"
+     },
+     "exitValuation": {
+      "type": "number"
+     },
+     "holders": {
+      "items": {
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "iterations": {
+      "type": "integer"
+     },
+     "perShare": {
+      "items": {
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "series": {
+      "items": {
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "exitValuation",
+     "distributable",
+     "classes",
+     "series",
+     "convertibles",
+     "holders",
+     "perShare",
+     "iterations",
+     "converged"
+    ],
+    "type": "object"
+   }
+  },
+  "properties": {
+   "events": {
+    "items": {
+     "description": "One cap-table event, discriminated by `type`. Pass events in chronological order.",
+     "discriminator": {
+      "mapping": {
+       "common_issuance": "#/components/schemas/CommonIssuanceEvent",
+       "convertible_round": "#/components/schemas/ConvertibleRoundEvent",
+       "manual_issuance": "#/components/schemas/ManualIssuanceEvent",
+       "option_grant": "#/components/schemas/OptionGrantEvent",
+       "option_pool": "#/components/schemas/OptionPoolEvent",
+       "priced_round": "#/components/schemas/PricedRoundEvent",
+       "secondary_sale": "#/components/schemas/SecondarySaleEvent",
+       "warrant_round": "#/components/schemas/WarrantRoundEvent"
+      },
+      "propertyName": "type"
+     },
+     "oneOf": [
+      {
+       "$ref": "#/definitions/CommonIssuanceEvent"
+      },
+      {
+       "$ref": "#/definitions/OptionPoolEvent"
+      },
+      {
+       "$ref": "#/definitions/SecondarySaleEvent"
+      },
+      {
+       "$ref": "#/definitions/OptionGrantEvent"
+      },
+      {
+       "$ref": "#/definitions/ManualIssuanceEvent"
+      },
+      {
+       "$ref": "#/definitions/ConvertibleRoundEvent"
+      },
+      {
+       "$ref": "#/definitions/WarrantRoundEvent"
+      },
+      {
+       "$ref": "#/definitions/PricedRoundEvent"
+      }
+     ]
+    },
+    "maxItems": 200,
+    "type": "array"
+   },
+   "idempotency_key": {
+    "description": "Optional retry key; reuse only with identical input.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "events"
+  ],
+  "type": "object"
+ },
+ "name": "cap_table_compute",
+ "title": "Compute a cap table"
+}

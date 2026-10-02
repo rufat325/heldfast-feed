@@ -1,0 +1,82 @@
+{
+ "description": "Submit work to the ComfyUI execution queue \u2014 the primary way an agent starts a render. Driven by the `action` parameter:\n- action:\"enqueue\" \u2014 Submit an API-format workflow you are already holding (one you built with create_workflow, loaded with get_workflow, or edited with create_workflow action:\"modify\"). Returns immediately with the prompt_id and queue position; does NOT wait for completion. Seed values in the workflow are used EXACTLY as supplied \u2014 they are NOT re-randomized, so a run is reproducible by resubmitting the same workflow (for a fresh-seed re-run of a past job, use action:\"rerun\"). `workflow` is required. Use queue (action:\"status\") to check progress later, or get_history (action:\"list\") to retrieve results and images after completion.\n- action:\"rerun\" \u2014 Re-run the workflow behind a PREVIOUS generation. Retrieves the prompt graph from execution history (by `prompt_id`, or the most recent run when omitted \u2014 chosen by ComfyUI's queue number, same logic as get_history) and re-enqueues it, optionally applying `inputs` overrides. Seeds are re-randomized (within each node's declared range) unless disable_random_seed is set or the seed is pinned via `inputs`. Returns the new prompt_id and the source prompt_id it came from. Clear error if no matching history exists. To re-run from a registered ASSET instead of history, use generate_image (action:\"regenerate\").\n- action:\"run_url\" \u2014 Read (and optionally execute) a SHARED workflow from a URL. Fetches the workflow JSON, accepts API-format prompt graphs or UI-format exports (UI is auto-converted via the same converter as get_workflow), validates it, and summarizes it. Supports raw .json links and GitHub blob/raw URLs (blob is normalized to raw); other share hosts that need a site API return a clear 'paste the raw JSON URL' error. The fetch is bounded (http/https only, timeout + size cap, loopback/private/metadata IPs rejected to prevent SSRF). READ-ONLY unless run=true; when run=true it enqueues the workflow (applying optional `inputs` overrides) and returns the prompt_id. `url` is required.\n- action:\"template_schema\" \u2014 Get a template's OVERRIDABLE run-time parameters (its 'slots') BEFORE running it. Pass a bundled pack name (from list_packs action:\"list\") or a custom-node-contributed workflow template name (from list_packs action:\"list_templates\") as `template`. Returns `slots` \u2014 the meaningful knobs: positive/negative prompt, seed, steps, cfg, sampler/scheduler, width/height, checkpoint/LoRA/model files, denoise, batch_size, input image \u2014 plus `other_slots` (every remaining overridable widget), each with a stable key \"<nodeId>.<widget_name>\", semantic role, type, current value, and min/max/options where the node schema is known. Read-only. Feed the keys DIRECTLY into action:\"run_template\"'s `overrides` (same convention) for a schema\u2192run round-trip.\n- action:\"run_template\" \u2014 ONE-SHOT: run a named workflow template (a bundled pack from list_packs) with optional `overrides`. Resolves the template's expert graph, applies overrides, and enqueues it \u2014 replacing the manual list_packs (action:\"read_workflow\") \u2192 create_workflow (action:\"modify\") \u2192 action:\"enqueue\" chain. Override keys are '<nodeId>.<widget_name>' (e.g. {'6.text': 'a cat', '3.seed': 42}) \u2014 the SAME keys action:\"template_schema\" reports (when available), so schema\u2192run round-trips; only widget values can be overridden, never graph connections. By default returns {prompt_id} immediately; pass wait:true to block until the job completes and return its outputs (images etc.). Unresolvable template names return a clear error with near-matches. `template` is required.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "action": {
+    "description": "Which enqueue entry point to use. action:\"enqueue\" requires `workflow`; action:\"rerun\" takes an optional `prompt_id` (+ `inputs`); action:\"run_url\" requires `url` (+ `run`/`inputs`); action:\"template_schema\" and action:\"run_template\" require `template`; with action:\"run_template\" you may also pass `overrides`/`wait`/`timeout_s`.",
+    "enum": [
+     "enqueue",
+     "rerun",
+     "run_url",
+     "template_schema",
+     "run_template"
+    ],
+    "type": "string"
+   },
+   "disable_random_seed": {
+    "description": "If true, do not randomize seed values \u2014 applies to action:\"rerun\" and action:\"run_template\" (for action:\"rerun\", combine with inputs.seed to reproduce exactly). It is a NO-OP for action:\"enqueue\", whose seeds are always used exactly as supplied (issue #865).",
+    "type": "boolean"
+   },
+   "inputs": {
+    "additionalProperties": {},
+    "description": "Overrides applied to every node with a matching input name (e.g. cfg, steps, sampler_name, seed, text). Used by action:\"rerun\", and by action:\"run_url\" only when run=true.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "overrides": {
+    "additionalProperties": {},
+    "description": "action:\"run_template\" \u2014 widget overrides keyed '<nodeId>.<widget_name>' (action:\"template_schema\"'s keys), e.g. {'6.text': 'a red fox', '3.steps': 20}.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "prompt_id": {
+    "description": "action:\"rerun\" \u2014 prompt ID of the generation to re-run. If omitted, uses the most recent execution.",
+    "type": "string"
+   },
+   "run": {
+    "default": false,
+    "description": "action:\"run_url\" \u2014 if true, enqueue the fetched workflow for execution and return the prompt_id. Default false: only fetch, validate, and summarize (read-only).",
+    "type": "boolean"
+   },
+   "template": {
+    "description": "Template name/id: a bundled pack directory name (list_packs action:\"list\") or a custom-node-contributed workflow template name (list_packs action:\"list_templates\"). REQUIRED for action:\"template_schema\" and action:\"run_template\".",
+    "minLength": 1,
+    "type": "string"
+   },
+   "timeout_s": {
+    "description": "action:\"run_template\" \u2014 max seconds to wait when wait:true (default 300). On timeout the job keeps running; poll queue (action:\"status\").",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "url": {
+    "description": "action:\"run_url\" \u2014 URL of the workflow JSON. Raw .json links and GitHub blob/raw URLs work directly. REQUIRED for that action.",
+    "type": "string"
+   },
+   "wait": {
+    "description": "action:\"run_template\" \u2014 block until the job completes and return its outputs. Default false: return {prompt_id} immediately.",
+    "type": "boolean"
+   },
+   "workflow": {
+    "additionalProperties": {},
+    "description": "action:\"enqueue\" \u2014 ComfyUI workflow in API format (node ID -> {class_type, inputs}). REQUIRED for that action.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   }
+  },
+  "required": [
+   "action"
+  ],
+  "type": "object"
+ },
+ "name": "enqueue_workflow"
+}

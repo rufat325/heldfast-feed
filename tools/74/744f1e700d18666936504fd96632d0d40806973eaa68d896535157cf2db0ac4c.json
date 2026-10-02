@@ -1,0 +1,434 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Historical measurement series for one pollutant at one station over a date range \u2014 for trend analysis and \"was last week worse than the monthly average?\". Pass a locationId and a parametersId and work in stations \u2014 you get the series for that pollutant at that station. Choose aggregation: raw (every reported value), hourly, or daily \u2014 daily and hourly add a per-bucket statistical summary (min, median, max, mean, sd). A date-only bound means the station's local calendar day. Large ranges produce thousands of rows and stage on a DataCanvas: the response returns a preview plus a canvasId and table name \u2014 call openaq_dataframe_describe on the canvasId for the table's columns, then openaq_dataframe_query to run SQL over it. Passing a canvas_id stages the series there whatever its size, so two stations land on one canvas for a side-by-side comparison. Values carry their unit; the server never converts between \u00b5g/m\u00b3, ppm, and ppb.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "aggregation": {
+    "default": "raw",
+    "description": "Time bucketing. \"raw\" = every reported value (often hourly at source). \"hourly\"/\"daily\" = server-side rollups with a statistical summary per bucket; an hour is labeled by the time it ends, and a day is the station's local calendar day. Use \"daily\" for multi-month trends to keep the series small; \"raw\" for fine-grained recent analysis.",
+    "enum": [
+     "raw",
+     "hourly",
+     "daily"
+    ],
+    "type": "string"
+   },
+   "canvas_id": {
+    "description": "DataCanvas id from a prior openaq_get_measurements call, to put this series on the same canvas (e.g. to compare two stations' series side by side). Supplying it stages the series whatever its size. Reuse stages one table per sensor, so a second sensor adds a table while the same sensor overwrites its earlier series \u2014 the response says so when that happens. Omit to start fresh; the response returns a new canvas_id when the series overflows the inline preview.",
+    "pattern": "^[A-Za-z0-9_-]{10}$",
+    "type": "string"
+   },
+   "datetimeFrom": {
+    "description": "Start of the range, inclusive. A date \"YYYY-MM-DD\" opens at local midnight of that day in the station's timezone (UTC midnight when OpenAQ lists none); a full UTC \"YYYY-MM-DDTHH:MM:SSZ\" is sent as is. Omit to start from the sensor's earliest data \u2014 the series runs oldest first, so on a long-running station an open start fills the row cap with its oldest values; set datetimeFrom to reach recent ones. effectiveRange echoes the instant sent.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}:\\d{2}Z)?$",
+    "type": "string"
+   },
+   "datetimeTo": {
+    "description": "End of the range, inclusive. A date \"YYYY-MM-DD\" covers that whole station-local day, closing at the next local midnight, so a DST day spans 23 or 25 hours; a full UTC \"YYYY-MM-DDTHH:MM:SSZ\" is sent as is. Must land after datetimeFrom \u2014 the two forms mix freely, so \"2026-06-25\" to \"2026-06-25\" is a valid one-day range. Omit for \"up to now\". effectiveRange echoes the instant sent.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}(T\\d{2}:\\d{2}:\\d{2}Z)?$",
+    "type": "string"
+   },
+   "limit": {
+    "default": 1000,
+    "description": "Max rows per page from the API (1\u20131000). Default 1000. The tool pages internally up to the 5000-row pull ceiling.",
+    "maximum": 1000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "locationId": {
+    "description": "Station id from openaq_find_locations.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "parametersId": {
+    "description": "Parameter id to pull the series for (e.g. 2 = PM2.5 \u00b5g/m\u00b3). Get ids from openaq_list_parameters. Must be a parameter the station measures \u2014 find_locations lists each station's parameters.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "locationId",
+   "parametersId"
+  ],
+  "type": "object"
+ },
+ "name": "openaq_get_measurements",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "location",
+     "parameter",
+     "sensorId",
+     "aggregation",
+     "series",
+     "rowCount",
+     "pulledCount",
+     "pullComplete",
+     "totalCount",
+     "effectiveRange"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "aggregation": {
+    "description": "Bucketing applied",
+    "enum": [
+     "raw",
+     "hourly",
+     "daily"
+    ],
+    "type": "string"
+   },
+   "canvasId": {
+    "description": "DataCanvas id holding the staged series \u2014 pulledCount rows of it. Call openaq_dataframe_describe on this id for the table's columns, then openaq_dataframe_query to run SQL. Present whenever staging succeeded, which includes a series that fit inline on a canvas_id you supplied.",
+    "type": "string"
+   },
+   "effectiveRange": {
+    "additionalProperties": false,
+    "description": "The range sent to OpenAQ as UTC instants \u2014 date-only bounds expanded to the station's local day.",
+    "properties": {
+     "datetimeFrom": {
+      "description": "Lower bound sent to OpenAQ, UTC. Null when datetimeFrom was omitted.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "datetimeTo": {
+      "description": "Upper bound sent to OpenAQ, UTC. Null when datetimeTo was omitted.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "datetimeFrom",
+     "datetimeTo"
+    ],
+    "type": "object"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `location_not_found`: The locationId does not exist. `parameter_not_at_location`: No sensor at the station measures parametersId (often the wrong unit variant was chosen). `no_data_for_range`: The sensor has no measurements in the requested date range. `invalid_date_range`: The range is empty \u2014 once date-only bounds are expanded to the station's local day, datetimeTo does not land after datetimeFrom. `canvas_not_found`: The supplied canvas_id is unknown or has expired, so the series cannot be staged onto it. `upstream_error`: OpenAQ returned 5xx or an unreadable body on every retry. `rate_limited`: OpenAQ returned 429 \u2014 the request budget for this key is exhausted. `upstream_timeout`: OpenAQ did not respond within the request timeout on every retry. `invalid_api_key`: OpenAQ returned 401 \u2014 the configured OPENAQ_API_KEY is missing, invalid, or revoked. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "location_not_found",
+         "parameter_not_at_location",
+         "no_data_for_range",
+         "invalid_date_range",
+         "canvas_not_found",
+         "upstream_error",
+         "rate_limited",
+         "upstream_timeout",
+         "invalid_api_key"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "gapCount": {
+    "description": "Missing intervals inside an hourly or daily series \u2014 a span between buckets that do not touch, or a bucket with a null value, merged where contiguous \u2014 counted over every pulled row, not only the preview. 0 when nothing is missing; absent for raw, whose rows follow no fixed cadence.",
+    "type": "number"
+   },
+   "gaps": {
+    "description": "The first 20 missing intervals, oldest first. Omitted when gapCount is 0.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One missing interval",
+     "properties": {
+      "datetimeFrom": {
+       "description": "Start of the missing interval, UTC",
+       "type": "string"
+      },
+      "datetimeTo": {
+       "description": "End of the missing interval, UTC",
+       "type": "string"
+      }
+     },
+     "required": [
+      "datetimeFrom",
+      "datetimeTo"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "location": {
+    "additionalProperties": false,
+    "description": "Station the series came from",
+    "properties": {
+     "id": {
+      "description": "Station id",
+      "type": "number"
+     },
+     "name": {
+      "description": "Station name",
+      "type": "string"
+     },
+     "provider": {
+      "description": "Network that operates the station \u2014 cite it alongside OpenAQ. Null when OpenAQ lists none.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "providerId": {
+      "description": "Provider id, usable as providersId in openaq_find_locations. Null when OpenAQ lists none.",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "timezone": {
+      "description": "IANA timezone of the station (e.g. \"America/Los_Angeles\"). Daily buckets and date-only bounds follow its calendar days. Null when OpenAQ lists none.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "id",
+     "name",
+     "provider",
+     "providerId",
+     "timezone"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "What limited this response or where the rest of it lives \u2014 the row cap, a failed page, a station with no timezone, an edge bucket clipped by the range, missing intervals, DataCanvas being unavailable, or the canvas table the series was staged on and the tools that read it.",
+    "type": "string"
+   },
+   "parameter": {
+    "additionalProperties": false,
+    "description": "What was measured, resolved from the station's sensor",
+    "properties": {
+     "displayName": {
+      "description": "Human-readable pollutant name",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "id": {
+      "description": "Parameter id",
+      "type": "number"
+     },
+     "name": {
+      "description": "Pollutant code",
+      "type": "string"
+     },
+     "unit": {
+      "description": "Unit for every value in this series. The server does not convert units.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "name",
+     "unit",
+     "displayName"
+    ],
+    "type": "object"
+   },
+   "pullComplete": {
+    "description": "True when pulledCount is the whole series for the requested range. False when the 5000-row cap or a failed page stopped the pull early \u2014 the rows past that point are in neither this response nor the canvas table, and the notice says how to reach them.",
+    "type": "boolean"
+   },
+   "pulledCount": {
+    "description": "Rows pulled from OpenAQ, at most 5000 \u2014 the canvas table's row count when canvasId is present. Equals rowCount when the whole series fit inline; larger when series is a preview.",
+    "type": "number"
+   },
+   "rowCount": {
+    "description": "Rows in this response (preview length when spilled)",
+    "type": "number"
+   },
+   "sensorId": {
+    "description": "Resolved sensor id the series was pulled from",
+    "type": "number"
+   },
+   "series": {
+    "description": "The (possibly previewed) series in the order OpenAQ returns it (oldest first). An hourly/daily series either skips a missing bucket or returns it with a null value \u2014 gapCount and gaps report both. Every row here is also rendered in the text output. When truncated, this is a preview of pulledCount rows \u2014 query canvasId for the rest.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One bucket in the series, with its value and (for rollups) statistics",
+     "properties": {
+      "datetimeFrom": {
+       "description": "Bucket start, UTC (ISO 8601)",
+       "type": "string"
+      },
+      "datetimeTo": {
+       "description": "Bucket end, UTC (ISO 8601)",
+       "type": "string"
+      },
+      "flagged": {
+       "description": "True if the source flagged this value (quality concern)",
+       "type": "boolean"
+      },
+      "percentComplete": {
+       "description": "Coverage of the bucket as OpenAQ reports it \u2014 observed readings as a percentage of expected ones. Low values flag gappy data. Usually 0\u2013100, but it exceeds 100 when a bucket holds more readings than expected, e.g. 200 on the hour a DST fall-back repeats",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "summary": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "avg": {
+           "description": "Mean reading in the bucket",
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "max": {
+           "description": "Maximum reading in the bucket",
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "median": {
+           "description": "Median reading in the bucket",
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "min": {
+           "description": "Minimum reading in the bucket",
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "sd": {
+           "description": "Standard deviation \u2014 null when only one reading in the bucket",
+           "type": [
+            "number",
+            "null"
+           ]
+          }
+         },
+         "required": [
+          "min",
+          "median",
+          "max",
+          "avg",
+          "sd"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Per-bucket statistics \u2014 present for hourly/daily, null for raw. Every field is null in a gap bucket"
+      },
+      "value": {
+       "description": "Value for the bucket (the measurement for raw; the bucket aggregate for hourly/daily). Null for a gap bucket the sensor reported nothing into \u2014 the bucket is kept so the series stays evenly spaced on the time axis",
+       "type": [
+        "number",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "datetimeFrom",
+      "datetimeTo",
+      "value",
+      "summary",
+      "percentComplete",
+      "flagged"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "tableName": {
+    "description": "Canvas table holding the staged series (e.g. \"measurements_1701\"). openaq_dataframe_describe lists its columns; reference this name in openaq_dataframe_query SQL. One table per sensor, so re-staging the same sensor on this canvas overwrites it.",
+    "type": "string"
+   },
+   "totalCount": {
+    "description": "Rows in the full series for this range. A floor rather than an exact count when totalCountIsLowerBound is set; never below pulledCount.",
+    "type": "number"
+   },
+   "totalCountIsLowerBound": {
+    "description": "Set when totalCount is only a floor: the pull stopped early and OpenAQ reported the range total as \">N\" instead of an exact number, so more rows exist than totalCount states. Absent when the count is exact.",
+    "type": "boolean"
+   },
+   "truncated": {
+    "description": "True when the series exceeded the inline limit, so series is a preview of the pulled rows. Absent/false when every pulled row is inline. It describes the preview only \u2014 canvasId reports whether the rows were staged, and pullComplete whether the pull itself finished.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "openaq-mcp-server: get measurements"
+}

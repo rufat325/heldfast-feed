@@ -1,0 +1,463 @@
+{
+ "_meta": {
+  "smarterweather.dev/input_examples": [
+   {
+    "lead_hours": 72,
+    "location": "Denver",
+    "variable": "temperature_2m"
+   },
+   {
+    "lat": 39.7392,
+    "lon": -104.9903
+   },
+   {
+    "lead_hours": 24,
+    "location": "Dallas, TX",
+    "variable": "precipitation_probability"
+   },
+   {
+    "location": "Chicago",
+    "regime": "SEA:DJF",
+    "variable": "temperature_2m"
+   },
+   {
+    "lead_hours": 24,
+    "location": "Houston",
+    "variable": "precipitation_gt_0p254mm"
+   }
+  ],
+  "smarterweather.dev/required_one_of": [
+   [
+    "location"
+   ],
+   [
+    "lat",
+    "lon"
+   ]
+  ]
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Get forecast skill"
+ },
+ "description": "How accurate our forecasts have actually been near a location, measured against observed analysis truth. Returns bias (positive = the model runs high), mean absolute error, RMSE, and a skill score against local climatology, per model, weather variable, and forecast lead time; continuous and vector entries also carry persistenceSkillScore, skill against the analysis at forecast issue time (null means not enough persist pairs, not zero skill -- do not compare it to skillScore as if they shared a denominator), and analysisDisagreementMae, the analyses' own disagreement at that lead -- a floor on how good the forecast can look, not a skill score and not an excuse (null means the sibling row is missing or below minimumSamples); for probability forecasts, the Brier score and a reliability breakdown. Use this to qualify a forecast rather than assert it -- \"NBM has been running 1.8F warm at 3-day leads near you, so treat that 72 as around 70\" -- and to answer \"how much should I trust this forecast\", \"is the model biased here\", or \"how accurate were you last month\". Evidence is reported at three scopes side by side: the exact point (strongest, slowest to accumulate), the ~50km neighborhood, and the ~300km region. Prefer the most specific scope that has samples. Metrics below minimumSamples observations are withheld and listed under insufficientHistory with their count -- say that history is still accumulating rather than treating thin numbers as evidence. Coverage is a rolling recent window over verified US variables, not all of history. Entries are per model and their samples are not matched, so never conclude that one model beats another by comparing their numbers here. Each entry states the truth field it was measured against -- one designated analysis per variable -- so never compare numbers carrying different truth values either. Each entry also states the regime it was measured under: ALL for every observation regardless of weather, or a conditioned tier such as SEA:DJF (winter), SCN1:WINDY / SCN1:WET / SCN1:QUIET (what the forecast was showing), or JC1:NW (a circulation pattern). Pass the regime parameter to ask for a conditioned track record. It falls back, so asking for SCN1:WINDY and getting back regime ALL is a successful answer, not a missing one -- always read the regime field and qualify the claim with it, because \"NBM runs warm here when it shows windy\" and \"NBM runs warm here\" are different statements. Regimes overlap by construction across families, so entries under different regimes are alternative answers to one question and must never be compared or added; within SCN1: the labels are mutually exclusive. Entries with a categorical block answer a yes/no question instead of an error magnitude -- did it rain, at the thresholdMm stated on the entry -- with pod (of the times it happened, how often we called it), far (of the times we called it, how often it did not happen), and frequencyBias (above 1 = we call it too often). Use these for \"will it actually rain\" questions, where a small average error means nothing if the rain lands in the wrong hour. A null rate means the sample cannot answer it -- the event has not happened, or been forecast, enough times to divide by -- and must be reported as unknown, never as zero. The counts beside it are still evidence, and for a rare event they are often the whole answer: \"it has only rained twice here in the record\" is a useful thing to say.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "lat": {
+    "description": "Latitude in decimal degrees (-90 to 90). Most tools also accept a `location` place-name string instead of lat/lon.",
+    "maximum": 90,
+    "minimum": -90,
+    "type": "number"
+   },
+   "lead_hours": {
+    "description": "Narrow to the lead time being asked about, in hours; the containing lead bucket is selected for you (60 gives the 48-72h bucket). Use the lead of the forecast you are qualifying: ~24 for tomorrow, ~72 for three days out. Never approximated -- a lead we have not verified returns no entries rather than a nearby bucket, so an empty result means we cannot speak to that range.",
+    "minimum": 1,
+    "type": "integer"
+   },
+   "location": {
+    "description": "Free-text place: city (\"Denver\"), city+state (\"Portland, OR\"), US ZIP (\"50219\"), or \"lat,lon\" (\"39.74,-104.99\"). Provide either this OR explicit lat+lon, not both.",
+    "maxLength": 200,
+    "minLength": 1,
+    "type": "string"
+   },
+   "lon": {
+    "description": "Longitude in decimal degrees (-180 to 180). For continental US use negative values (west of the prime meridian).",
+    "maximum": 180,
+    "minimum": -180,
+    "type": "number"
+   },
+   "model": {
+    "description": "Narrow to one model, e.g. nbm or rrfs.",
+    "type": "string"
+   },
+   "regime": {
+    "description": "Ask for a track record measured only under particular conditions, as a comma-separated preference chain, most specific first, e.g. \"SCN1:WINDY,SEA:JJA\". SEA: is the meteorological season (DJF, MAM, JJA, SON); SCN1: is a forecast-conditioned scenario (WINDY, WET, QUIET \u2014 mutually exclusive within the family); JC1: is a circulation pattern. The most specific tier with enough observations answers and the unconditioned record is the last resort, so this never empties a result the way truth does -- it degrades. Read the regime field on each entry to see which tier actually answered. Pass this when the question is conditional (\"is it worse in winter\", \"how does it do when the model shows windy\"); omit it otherwise, since conditioned tiers are thinner and slower to earn numbers.",
+    "type": "string"
+   },
+   "truth": {
+    "description": "Measure against a named truth source instead of the default one for each variable, e.g. urma. Only pass this if the user asked which analysis was used or named one; the default is already the designated source, and the analyses disagree, so switching changes the numbers.",
+    "type": "string"
+   },
+   "unit": {
+    "description": "Units for the error magnitudes. Default imperial (bias/MAE/RMSE in \u00b0F, mph, in).",
+    "enum": [
+     "imperial",
+     "metric",
+     "si"
+    ],
+    "type": "string"
+   },
+   "variable": {
+    "description": "Narrow to one variable, e.g. temperature_2m, dew_point_2m, wind_speed_10m, wind_gusts_10m, wind_vector_10m, cloud_cover, precipitation, precipitation_probability, or a thresholded rain event such as precipitation_gt_0p254mm (any measurable rain) or precipitation_gt_2p54mm. Omit for everything measured at the location.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "get_forecast_skill",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "cells": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "insufficientHistory": {
+    "items": {
+     "additionalProperties": true,
+     "properties": {
+      "leadBucketHours": {
+       "type": "number"
+      },
+      "model": {
+       "type": "string"
+      },
+      "regime": {
+       "type": "string"
+      },
+      "samples": {
+       "type": "number"
+      },
+      "scope": {
+       "enum": [
+        "point",
+        "neighborhood",
+        "region"
+       ],
+       "type": "string"
+      },
+      "truth": {
+       "type": "string"
+      },
+      "variable": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "model",
+      "variable",
+      "leadBucketHours",
+      "scope",
+      "samples"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "location": {
+    "additionalProperties": false,
+    "properties": {
+     "lat": {
+      "type": "number"
+     },
+     "lon": {
+      "type": "number"
+     },
+     "name": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "lat",
+     "lon"
+    ],
+    "type": "object"
+   },
+   "minimumSamples": {
+    "type": "number"
+   },
+   "skill": {
+    "items": {
+     "additionalProperties": true,
+     "properties": {
+      "categorical": {
+       "additionalProperties": false,
+       "properties": {
+        "baseRate": {
+         "type": "number"
+        },
+        "baseVariable": {
+         "type": "string"
+        },
+        "correctNegatives": {
+         "type": "number"
+        },
+        "csi": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "ets": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "falseAlarms": {
+         "type": "number"
+        },
+        "far": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "frequencyBias": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "hits": {
+         "type": "number"
+        },
+        "misses": {
+         "type": "number"
+        },
+        "pod": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "samples": {
+         "type": "number"
+        },
+        "thresholdMm": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "samples",
+        "thresholdMm",
+        "hits",
+        "misses",
+        "falseAlarms",
+        "correctNegatives",
+        "baseRate"
+       ],
+       "type": "object"
+      },
+      "continuous": {
+       "additionalProperties": false,
+       "properties": {
+        "analysisDisagreementMae": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "analysisDisagreementSamples": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "bias": {
+         "type": "number"
+        },
+        "mae": {
+         "type": "number"
+        },
+        "meanObserved": {
+         "type": "number"
+        },
+        "observedVariance": {
+         "type": "number"
+        },
+        "persistenceSkillScore": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "rmse": {
+         "type": "number"
+        },
+        "samples": {
+         "type": "number"
+        },
+        "skillScore": {
+         "type": [
+          "number",
+          "null"
+         ]
+        }
+       },
+       "required": [
+        "samples",
+        "bias",
+        "mae",
+        "rmse",
+        "meanObserved",
+        "observedVariance"
+       ],
+       "type": "object"
+      },
+      "leadBucketHours": {
+       "type": "number"
+      },
+      "metric": {
+       "type": "string"
+      },
+      "model": {
+       "type": "string"
+      },
+      "probabilistic": {
+       "additionalProperties": false,
+       "properties": {
+        "baseRate": {
+         "type": "number"
+        },
+        "brier": {
+         "type": "number"
+        },
+        "reliability": {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "bin": {
+            "type": "number"
+           },
+           "meanForecast": {
+            "type": "number"
+           },
+           "observedFrequency": {
+            "type": "number"
+           },
+           "samples": {
+            "type": "number"
+           }
+          },
+          "required": [
+           "bin",
+           "samples",
+           "meanForecast",
+           "observedFrequency"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "samples": {
+         "type": "number"
+        },
+        "skillScore": {
+         "type": [
+          "number",
+          "null"
+         ]
+        }
+       },
+       "required": [
+        "samples",
+        "brier",
+        "baseRate",
+        "reliability"
+       ],
+       "type": "object"
+      },
+      "regime": {
+       "type": "string"
+      },
+      "scope": {
+       "enum": [
+        "point",
+        "neighborhood",
+        "region"
+       ],
+       "type": "string"
+      },
+      "truth": {
+       "type": "string"
+      },
+      "unit": {
+       "type": "string"
+      },
+      "variable": {
+       "type": "string"
+      },
+      "vector": {
+       "additionalProperties": false,
+       "properties": {
+        "analysisDisagreementMae": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "analysisDisagreementSamples": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "persistenceSkillScore": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "samples": {
+         "type": "number"
+        },
+        "skillScore": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "vectorRmse": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "samples",
+        "vectorRmse"
+       ],
+       "type": "object"
+      }
+     },
+     "required": [
+      "model",
+      "variable",
+      "leadBucketHours",
+      "scope",
+      "metric"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "tracked": {
+    "description": "Whether this exact coordinate is one the verification pipeline tracks.",
+    "type": "boolean"
+   },
+   "units": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "location",
+   "units",
+   "minimumSamples",
+   "tracked",
+   "skill",
+   "insufficientHistory"
+  ],
+  "type": "object"
+ },
+ "title": "Get forecast skill"
+}

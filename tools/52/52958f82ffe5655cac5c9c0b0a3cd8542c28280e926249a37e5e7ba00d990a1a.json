@@ -1,0 +1,72 @@
+{
+ "description": "Inspect and manage the ComfyUI execution queue. Driven by the `action` parameter:\n- action:\"list\" \u2014 The job running now plus all pending jobs, each with its prompt_id and position. Read-only; requires a reachable ComfyUI server (works against local or remote --comfyui-url). Omits queued workflow payloads by default to keep output small; set include_workflows:true when you need to inspect or edit the exact pending payload. Use this before action:\"cancel\" (running), action:\"cancel_queued\"/action:\"clear\" (pending), action:\"move\", or action:\"edit\".\n- action:\"status\" \u2014 Check ONE job by its prompt_id (the id returned by enqueue_workflow). Queries the connected ComfyUI server; requires it to be running. Returns JSON with running, pending, and done booleans, plus optional status_str, error details, and execution_stats from ComfyUI history once the job is done. If the prompt is neither running nor queued AND /history has no record of it (a restart wipes both), it returns done:false + found:false with an explanatory message \u2014 a prompt ComfyUI never executed is NOT a completion, so do not wait for its outputs. Also returns text_outputs when the workflow contained text-preview nodes (Preview as Text, ShowText, \u2026) \u2014 those produce no image file, so this is the ONLY way to read their result; report that text back to the user. Use action:\"list\" to see the whole queue at once, and get_history for full output filenames.\n- action:\"get_workflow\" \u2014 The full workflow payload for one PENDING queue item by prompt_id. Read-only. Does not work for the currently running job because ComfyUI cannot safely edit a job after execution starts.\n- action:\"move\" \u2014 Move a PENDING queue item to the front or back by removing it and re-enqueuing its saved workflow payload; `position` (\"front\"|\"back\") is required. The job receives a NEW prompt_id; the old prompt_id is removed. Running jobs cannot be moved.\n- action:\"edit\" \u2014 Edit a PENDING queue item by removing it and re-enqueuing an updated workflow. Provide either a complete replacement `workflow` or `node_inputs` patches keyed by node id; `position` selects where to requeue (default back). The job receives a NEW prompt_id; the old prompt_id is removed. Running jobs cannot be edited.\n- action:\"cancel\" \u2014 Stop the CURRENTLY RUNNING job ROBUSTLY. Sends an interrupt, then WAITS and verifies the job actually stopped \u2014 ComfyUI only honors interrupts BETWEEN steps, so a long single step (e.g. a high-res video sampler) can ignore a plain cancel. If the interrupt isn't honored it escalates to freeing VRAM (POST /free) and re-checks; if it STILL won't die it reports the job as WEDGED and tells you to restart_comfyui (an HTTP cancel cannot kill a stuck step). Set clear_pending:true to also drop ALL pending jobs in the same call \u2014 the correct \"reset the queue\" action, since cancelling alone leaves pending jobs that would run next. The partial result is discarded. With `prompt_id` given, only interrupts the running job when its prompt_id matches; omit to interrupt whatever is currently running. Use action:\"cancel_queued\" to remove one specific PENDING job instead.\n- action:\"cancel_queued\" \u2014 Remove one specific PENDING job from the queue by prompt_id, then VERIFY the removal against a live /queue read on both sides of it. Only PENDING jobs can be removed this way: ComfyUI silently ignores the request for a job it has already started, so if the job won the race and is now RUNNING this reports isError and tells you the outputs will still be delivered \u2014 use action:\"cancel\" to interrupt that. Also reports isError when the prompt_id was not in the queue at all (it already finished, or was never queued) rather than calling that a removal.\n- action:\"clear\" \u2014 Clear ALL pending jobs from the queue. Does not affect the currently running job.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "action": {
+    "description": "Which queue operation to perform. \"list\" and \"clear\" take no other parameters; \"status\", \"get_workflow\" and \"cancel_queued\" require `prompt_id`; \"move\" requires `prompt_id` + `position`; \"edit\" requires `prompt_id` (optional `workflow`/`node_inputs`/`position`); \"cancel\" takes an optional `prompt_id` and `clear_pending`.",
+    "enum": [
+     "list",
+     "status",
+     "get_workflow",
+     "move",
+     "edit",
+     "cancel",
+     "cancel_queued",
+     "clear"
+    ],
+    "type": "string"
+   },
+   "clear_pending": {
+    "description": "action:\"cancel\" \u2014 also clear ALL pending jobs (recommended when resetting after a stuck/slow render, so a re-queue doesn't stack behind a backlog). Default false.",
+    "type": "boolean"
+   },
+   "include_workflows": {
+    "description": "action:\"list\" \u2014 include each running/pending job's workflow payload and extra_data. Can be large.",
+    "type": "boolean"
+   },
+   "node_inputs": {
+    "additionalProperties": {
+     "additionalProperties": {},
+     "propertyNames": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "description": "action:\"edit\" \u2014 optional input patches keyed by node id, e.g. {\"3\":{\"steps\":30,\"cfg\":7}}.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "position": {
+    "description": "Where to requeue the job. REQUIRED for action:\"move\". OPTIONAL for action:\"edit\" \u2014 defaults to back.",
+    "enum": [
+     "front",
+     "back"
+    ],
+    "type": "string"
+   },
+   "prompt_id": {
+    "description": "The prompt_id of a job (the id returned by enqueue_workflow). REQUIRED for actions \"status\", \"get_workflow\", \"move\", \"edit\" and \"cancel_queued\" (a PENDING queue item for all but \"status\"). OPTIONAL for action:\"cancel\" \u2014 if given, only interrupts the running job when its prompt_id matches; omit to interrupt whatever is currently running.",
+    "type": "string"
+   },
+   "workflow": {
+    "additionalProperties": {},
+    "description": "action:\"edit\" \u2014 optional complete replacement API-format workflow. If omitted, the existing queued workflow is patched with `node_inputs`.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   }
+  },
+  "required": [
+   "action"
+  ],
+  "type": "object"
+ },
+ "name": "queue"
+}

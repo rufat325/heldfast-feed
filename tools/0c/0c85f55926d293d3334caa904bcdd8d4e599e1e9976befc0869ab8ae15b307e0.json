@@ -1,0 +1,83 @@
+{
+ "description": "Bundled ComfyUI knowledge \u2014 installer packs, model-family skills, workflow templates \u2014 plus the two workflow-readiness checks. Driven by the `action` parameter:\n- action:\"list\" \u2014 List the bundled installer packs under packs/: one-command setups for a model family (custom nodes + model weights via manifest.yaml) PLUS a ready workflow.json graph. Each entry reports its family/kind, its runtime (these packs are LOCAL-GPU / FREE \u2014 they run on the user's own GPU and never spend paid API credits), whether it has a ready workflow + manifest, and the manifest path for install_comfyui apply_manifest. When asked to \"set up / build a <model-family> workflow\", PREFER applying the matching pack and loading its ready workflow (panel_load_workflow pack:<name>) over building a generic graph from scratch. Read the ready graph with action:\"read_workflow\", and inspect its install manifest with action:\"read_manifest\".\n- action:\"read_workflow\" \u2014 Return a bundled pack's ready workflow.json graph by pack name (`name`; discover names + which packs have a workflow with action:\"list\"). This is the EXPERT graph for that model family \u2014 use it as the source of truth when setting up the family on the user's canvas: recreate it node-by-node with the panel_* tools (panel_add_node / panel_connect / panel_set_widget) so it lands on their live canvas, or enqueue it headlessly. Prefer this over inventing a graph from scratch. Names are validated (no path traversal) and must match an existing pack directory.\n- action:\"read_manifest\" \u2014 Return a bundled pack's install manifest (its manifest.yaml \u2014 the custom nodes + model weights apply_manifest would install) by pack name (`name`; discover names + which packs have a manifest with action:\"list\"). READ-ONLY \u2014 the way to INSPECT what a pack will install BEFORE calling the mutating apply_manifest. Names are validated (no path traversal) and must match an existing pack directory.\n- action:\"list_templates\" \u2014 List CUSTOM-NODE-contributed ComfyUI workflow templates on the connected ComfyUI, grouped by source (each pack's own example_workflows/*.json). Hits the live server's /api/workflow_templates index. SCOPE LIMIT: this endpoint does NOT include ComfyUI's own core bundled templates from the comfyui-workflow-templates package (e.g. \"Flux.1 Inpaint\") \u2014 those are served to the frontend as static assets via a separate code path this action cannot see, so a small/empty result here does NOT mean no official template exists, only that no custom-node pack contributed one. When asked to \"set up / build a <model-family> workflow\", check here for a custom-node-contributed starter AFTER checking the bundled skills + installer packs (action:\"skill_list\" / action:\"list\"), and also tell the user to check the ComfyUI frontend's own Templates browser directly for core templates, since this action cannot enumerate those. NOTE: this lists what's available; loading a template onto the canvas is done in the ComfyUI frontend's Templates browser (the panel agent cannot load a template graph headlessly yet) \u2014 surface the matching template name to the user.\n- action:\"check_runtime\" \u2014 Determine whether a workflow runs on the user's OWN GPU (LOCAL \u2014 free) or uses hosted API NODES (PAID api credits). Pass `pack` (a bundled pack name \u2014 always local/free) OR `graph` (a UI or API/prompt workflow JSON, as object or string). It scans the workflow's node class_types against the connected ComfyUI's API-node set (the same signal list_api_nodes uses) and returns { runtime: 'local'|'api'|'mixed'|'unknown', usesApiNodes, apiNodes[], externalApiNodes[], unknownNodes[] } \u2014 'unknown' means some nodes couldn't be classified (could be paid), so treat it (and 'api'/'mixed') as POSSIBLY PAID; only 'local' is confirmed free. `externalApiNodes` is the THIRD-PARTY paid kind (a fal.ai-style pack, or any node taking a service credential): those are INSTALLED LOCALLY yet still cost money, billed by that provider on the user's own account with them rather than out of Comfy api credits \u2014 so when you ask the user, name the provider, not \"Comfy credits\" (`externalProviders` names it when recognised \u2014 e.g. [\"fal.ai\"]; it is absent when the node was flagged only by taking a service credential, which proves it authenticates somewhere but not to whom). ALWAYS call this before building OR loading a non-pack/ad-hoc workflow so you can ASK the user before spending paid API credits \u2014 never silently use API nodes.\n- action:\"extract_deps\" \u2014 Analyze a ComfyUI workflow (`workflow`, API JSON) and determine which custom node packs it requires. Maps each node class_type to its owning node pack using ComfyUI-Manager mappings and the server's installed node definitions, reporting which packs are installed vs missing. READ-ONLY \u2014 it installs nothing. Works remotely (HTTP only) \u2014 mirrors `comfy-cli node deps-in-workflow`.\n- action:\"install_deps\" \u2014 MUTATING: this is the ONE action on this tool that INSTALLS anything. Resolve and INSTALL the custom node packs a ComfyUI workflow (`workflow`) requires, via ComfyUI-Manager: it determines the missing packs, resets the Manager queue, QUEUES THE INSTALLS, starts the worker, and reports what was installed/already-present/unresolved. Installing a pack downloads and runs third-party code (and may pull large files) on the connected ComfyUI host \u2014 local OR remote --comfyui-url \u2014 and a ComfyUI restart is typically needed before new nodes load. Use action:\"extract_deps\" first if you only want to SEE what is missing. Mirrors `comfy-cli node install-deps`.\n- action:\"skill_list\" \u2014 List the bundled ComfyUI model-family + workflow skills shipped with comfyui-mcp (name + description for each). These encode per-family expertise (e.g. krea2-txt2img: native krea2 CLIPLoader, Qwen3-VL encoder, 8-step turbo settings) and the installer-packs system. Call this BEFORE hand-building a <model-family> workflow from scratch \u2014 if a matching skill exists, read its full guidance with action:\"skill_read\" and prefer a ready installer pack (action:\"list\") over a generic graph. Claude loads these natively; this action gives the SAME knowledge to any MCP client (e.g. the Codex backend).\n- action:\"skill_read\" \u2014 Return the full body of a bundled skill's SKILL.md by name (`name`; discover names with action:\"skill_list\"). Gives you the family's complete expertise on demand \u2014 model slots, node graph, recommended settings, and gotchas \u2014 so you can build the right workflow instead of guessing. Names are validated (no path traversal) and must match an existing skill directory.\n- action:\"generate_skill\" \u2014 MUTATING: it WRITES to the read-through skill cache on every cache miss, and when `install_in` is set it ALSO creates that directory and overwrites any SKILL.md in it. Generate a Claude skill (SKILL.md) documenting a ComfyUI custom node pack: its nodes, inputs/outputs, and example workflows. `source` accepts a ComfyUI Registry ID (resolved via api.comfy.org) or a GitHub repository URL. Uses a read-through cache under ~/.comfyui-mcp/skill-cache (override COMFYUI_SKILL_CACHE_DIR); set refresh:true to bypass it. On cache miss, fetches the repo README and scans its Python NODE_CLASS_MAPPINGS and example workflows over the network (uses GITHUB_TOKEN if set to avoid rate limits), so internet access is required. If a ComfyUI server is reachable it enriches node input/output types from /object_info, but the server is optional. Returns the SKILL.md markdown with structured cache metadata; if install_in is set, also creates that directory (recursively) and writes SKILL.md there, overwriting any existing file.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "action": {
+    "description": "Which knowledge operation to perform. \"list\", \"list_templates\" and \"skill_list\" take no other parameters; \"read_workflow\", \"read_manifest\" and \"skill_read\" require `name`; \"check_runtime\" takes `pack` OR `graph`; \"extract_deps\" and \"install_deps\" require `workflow` (and \"install_deps\" INSTALLS custom nodes \u2014 the only action here that installs, though \"generate_skill\" also WRITES to disk: its skill cache on every miss, plus `install_in` when set); \"generate_skill\" requires `source` (optional `install_in`/`refresh`).",
+    "enum": [
+     "list",
+     "read_workflow",
+     "read_manifest",
+     "list_templates",
+     "check_runtime",
+     "extract_deps",
+     "install_deps",
+     "skill_list",
+     "skill_read",
+     "generate_skill"
+    ],
+    "type": "string"
+   },
+   "graph": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "additionalProperties": {},
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     }
+    ],
+    "description": "action:\"check_runtime\" \u2014 a workflow graph to classify (UI or API/prompt format), as an object or a JSON string. Use this for ad-hoc/generated workflows."
+   },
+   "install_in": {
+    "description": "action:\"generate_skill\" \u2014 optional directory to write the generated SKILL.md into. Created recursively if missing; an existing SKILL.md is overwritten. Omit to only return the markdown without touching disk.",
+    "type": "string"
+   },
+   "name": {
+    "description": "REQUIRED for action:\"read_workflow\" and action:\"read_manifest\" \u2014 the pack name (a directory under packs/, e.g. 'krea2-txt2img-manual'), from action:\"list\". REQUIRED for action:\"skill_read\" \u2014 the skill name (a directory under plugin/skills/, e.g. 'krea2-txt2img'), from action:\"skill_list\".",
+    "minLength": 1,
+    "type": "string"
+   },
+   "pack": {
+    "description": "action:\"check_runtime\" \u2014 a bundled pack name (from action:\"list\"). Packs are local/free; this confirms it from the actual graph.",
+    "type": "string"
+   },
+   "refresh": {
+    "description": "action:\"generate_skill\" \u2014 bypass the read-through cache and rebuild the SKILL.md, overwriting the cached entry.",
+    "type": "boolean"
+   },
+   "source": {
+    "description": "REQUIRED for action:\"generate_skill\" \u2014 a ComfyUI Registry node ID (e.g. 'comfyui-impact-pack') or a GitHub repository URL.",
+    "type": "string"
+   },
+   "workflow": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "additionalProperties": {},
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     }
+    ],
+    "description": "REQUIRED for action:\"extract_deps\" and action:\"install_deps\" \u2014 a ComfyUI workflow in API format (JSON string or object)."
+   }
+  },
+  "required": [
+   "action"
+  ],
+  "type": "object"
+ },
+ "name": "list_packs"
+}
