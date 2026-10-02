@@ -1,0 +1,177 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "Email clients of this company. Describe the audience (a course/programme, a class schedule, a specific booking, one client, a saved segment, an ad-hoc cohort, or course-level labels) and the content (an existing template `type` from comms_list_templates, or a custom subject + body which may use *|MERGE_VAR|* tags from comms_list_merge_vars).\n\nTWO CALLS. First WITHOUT `token`: sends NOTHING. Returns the estimated recipient count, a sample of recipients, the content as it will be sent, warnings (unknown merge tags, zero recipients), and a single-use token. Show that plan to the operator and get explicit confirmation. Then call again with `token` + `confirmed: true` to actually send. Calling the first form again with adjusted filters is free and repeatable \u2014 refine the audience that way rather than guessing.\n\nLARGE SENDS need a SECOND confirmation. If the recipient count exceeds the approval threshold, the sending call returns `requires_second_confirmation: true` with the count and job id and sends NOTHING yet. Show the operator the exact recipient count and ask again (e.g. \"Send to all 105 clients?\"). Only after they explicitly agree, call once more with the SAME token, `confirmed: true`, and `confirm_large_send: true`. If they decline, send nothing.\n\nResolve names to ids first: classes_find_courses for a course/programme \u2192 course_id, classes_find_classes for a class/group by name \u2192 schedule_id, sessions_find_events for a single session \u2192 event_id; never guess ids. When the operator names an ad-hoc cohort rather than the whole company \u2014 \"everyone who hasn't paid\", the unpaid roster, the waitlist, this week's sign-ups \u2014 resolve it with bookings_find and pass the resulting registration_id LIST as audience.registration_id. Reserve audience.whole_company for genuinely company-wide sends; do NOT use it as a shortcut for a named subset, or you email far more people than the operator asked for.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "audience": {
+    "additionalProperties": false,
+    "description": "Who receives the message. At least one targeting field is required.",
+    "properties": {
+     "active_only": {
+      "description": "Only meaningful with whole_company. true (DEFAULT) = only clients with an ACTIVE (registered) booking \u2014 the safe choice. false = literally EVERYONE incl. cancelled/inactive/past clients (spammy) \u2014 use only when the operator has explicitly asked for that. When whole_company is set, ASK the operator which they mean and state plainly that the default skips cancelled/inactive people.",
+      "type": "boolean"
+     },
+     "course_id": {
+      "description": "Everyone registered in this course/programme.",
+      "exclusiveMinimum": 0,
+      "type": "integer"
+     },
+     "exclude": {
+      "description": "Registration ids to leave out.",
+      "items": {
+       "exclusiveMinimum": 0,
+       "type": "integer"
+      },
+      "type": "array"
+     },
+     "guests": {
+      "description": "Default false. Also send to guest registrations (added at send time; not in the count estimate).",
+      "type": "boolean"
+     },
+     "inactive_customers": {
+      "description": "Default false. Include inactive registrations.",
+      "type": "boolean"
+     },
+     "labels": {
+      "description": "Registrations in COURSES labeled with any of these label ids \u2014 labels attach at course level, not per person.",
+      "items": {
+       "exclusiveMinimum": 0,
+       "type": "integer"
+      },
+      "type": "array"
+     },
+     "registration_id": {
+      "anyOf": [
+       {
+        "exclusiveMinimum": 0,
+        "type": "integer"
+       },
+       {
+        "items": {
+         "exclusiveMinimum": 0,
+         "type": "integer"
+        },
+        "minItems": 1,
+        "type": "array"
+       }
+      ],
+      "description": "One booking, or a LIST of bookings \u2014 pass a single id or an array (e.g. the registration_ids from a bookings_find result set, so you can message an ad-hoc cohort like the unpaid roster without a saved segment)."
+     },
+     "schedule_id": {
+      "description": "Everyone in this class (schedule).",
+      "exclusiveMinimum": 0,
+      "type": "integer"
+     },
+     "segment_id": {
+      "description": "A saved registration segment.",
+      "exclusiveMinimum": 0,
+      "type": "integer"
+     },
+     "user_id": {
+      "description": "One client (all their registrations).",
+      "exclusiveMinimum": 0,
+      "type": "integer"
+     },
+     "whole_company": {
+      "description": "Broadcast to the ENTIRE company \u2014 every booking, one email per client. The only audience needing no id. ONLY for genuinely company-wide sends. For a NAMED subset \u2014 the unpaid roster, the waitlist, one class \u2014 do NOT use this; resolve the cohort with bookings_find and pass its registration_id list to registration_id instead. This can reach a LOT of people, so ALWAYS confirm scope with the operator first, and make the all-vs-active choice explicit (see active_only) \u2014 do NOT silently email everyone. Pair with active_only.",
+      "type": "boolean"
+     }
+    },
+    "type": "object"
+   },
+   "bcc": {
+    "description": "Comma-separated BCC addresses.",
+    "type": "string"
+   },
+   "channel": {
+    "description": "Only 'email' is implemented. WhatsApp is specced and coming \u2014 do not promise it yet.",
+    "enum": [
+     "email"
+    ],
+    "type": "string"
+   },
+   "company_id": {
+    "description": "Zooza company id to operate against. Optional: if the user has exactly one company, the server defaults to it \u2014 you can omit this field. With multiple companies, you MUST specify which; get the id list from `whoami.available_companies[].id`. If the user hasn't indicated which company they mean, ask them before guessing.",
+    "exclusiveMinimum": 0,
+    "type": "integer"
+   },
+   "confirm_large_send": {
+    "description": "Different from `confirmed`. Set true ONLY on the follow-up call after a send came back requires_second_confirmation: true AND the operator explicitly approved the recipient COUNT. Never set it on the first sending call, and never without that separate approval.",
+    "type": "boolean"
+   },
+   "confirmed": {
+    "description": "Required (true) on the apply call, alongside `token`. Asserts that you have SHOWN the user the preview from the first call and they approved it \u2014 not that you believe the change is correct. If the user has not seen the preview, show it and ask before setting this. Must be omitted on the preview call.",
+    "type": "boolean"
+   },
+   "content": {
+    "additionalProperties": false,
+    "description": "EITHER template_type OR subject+body \u2014 not both.",
+    "properties": {
+     "body": {
+      "description": "Custom email body (HTML or text); may contain *|MERGE|* tags.",
+      "type": "string"
+     },
+     "subject": {
+      "description": "Custom email subject; may contain *|MERGE|* tags.",
+      "type": "string"
+     },
+     "template_type": {
+      "description": "Existing email template type from comms_list_templates, e.g. \"registration_cancellation\".",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "marketing": {
+    "description": "REQUIRED on the FIRST call. true = promotional content (consent rules apply; say so to the operator). false = operational (schedule changes, payment reminders, session info).",
+    "type": "boolean"
+   },
+   "schedule_at": {
+    "additionalProperties": false,
+    "description": "Omit to send immediately on commit.",
+    "properties": {
+     "date": {
+      "description": "Local send date, YYYY-MM-DD.",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "type": "string"
+     },
+     "hour": {
+      "description": "Local send hour, 0-23 (24-hour clock).",
+      "maximum": 23,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "minute": {
+      "description": "Local send minute, 0-59.",
+      "maximum": 59,
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "date",
+     "hour",
+     "minute"
+    ],
+    "type": "object"
+   },
+   "token": {
+    "description": "Omit on the FIRST call \u2014 that call previews the change and returns a token. Pass the token back on the SECOND call to apply the previewed change. Single-use, expires in 15 minutes; if it is expired or already used, run the preview again.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "comms_send_message",
+ "title": "Email clients (plan, then send)"
+}

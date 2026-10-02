@@ -1,0 +1,119 @@
+{
+ "_meta": {
+  "openai/toolInvocation/invoked": "Chunk staged",
+  "openai/toolInvocation/invoking": "Uploading a file chunk"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "Stream a single file across multiple calls when its content exceeds the per-MCP-call output budget. LAST RESORT \u2014 try these first: (1) add_files with encoding:'gzip+base64' fits ~250 KB of text source in ONE call (gzip locally, base64, send \u2014 no chunking, no ordering hazards); (2) begin_deploy's uploadUrl takes a 100 MB tarball in one HTTP POST if your sandbox can reach mcp.vibedeploy.be; (3) deploy_from_url if the files are fetchable from a public URL. Only chunk when none of those work. When you DO chunk, gzip+base64 each chunk too \u2014 it quadruples the source bytes per chunk. Mark the first chunk with isFirst=true (truncates + mkdir) and the last with isLast=true (returns assembled size). Send chunks for the same path serially \u2014 concurrent chunks interleave and corrupt the file.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "content": {
+    "description": "This chunk's bytes. Either raw UTF-8 (default) or base64-encoded \u2014 set encoding accordingly. PRACTICAL CHUNK SIZE: bounded by your LLM client's tool-output token budget, NOT by VibeDeploy's server. Empirically ~80 KB of base64 (\u224860 KB raw bytes) per chunk is the safe upper bound for current Claude / GPT clients before tool output gets truncated. The server itself accepts up to 100 MB per call (Caddy cap) and 500 MB cumulative across the session. If you keep hitting truncation: split into smaller chunks, OR sidestep tool-output entirely via `deploy_from_url` (publish a tarball to github raw / gist / S3 \u2192 1 tool call) or POST to begin_deploy's uploadUrl from your code-execution sandbox if it can reach mcp.vibedeploy.be.",
+    "type": "string"
+   },
+   "deployId": {
+    "description": "Session id returned by begin_deploy.",
+    "type": "string"
+   },
+   "encoding": {
+    "description": "utf8 (default), base64 (binary files), or gzip+base64 (compress this chunk's bytes locally first; server gunzips before append). Encoding is per-chunk \u2014 you can mix across chunks of the same file (e.g. gzip+base64 for big text chunks, base64 for binary tail).",
+    "enum": [
+     "utf8",
+     "base64",
+     "gzip+base64"
+    ],
+    "type": "string"
+   },
+   "expectedByteOffset": {
+    "description": "Optional alignment check. The byte offset where THIS chunk should start in the assembled file: 0 for isFirst, otherwise the sum of all prior chunks' decoded bytes for this path. If the server's actual offset disagrees, the call fails with MISALIGNED_CHUNK before any bytes are written \u2014 catches the classic 'split base64 on a 4-char boundary that wasn't a byte boundary' bug. Omit to skip the check.",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "isFirst": {
+    "description": "True on the FIRST chunk of a file. Truncates any existing scratch entry at this path and creates parent directories. Subsequent chunks must set false.",
+    "type": "boolean"
+   },
+   "isLast": {
+    "description": "True on the FINAL chunk. Triggers an assembled-size stat and refreshes session file count. Mid-stream chunks set false.",
+    "type": "boolean"
+   },
+   "path": {
+    "description": "Target path inside the site root, e.g. 'portaal-admin.html'. Same path validation as add_files.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "deployId",
+   "path",
+   "content",
+   "isFirst",
+   "isLast"
+  ],
+  "type": "object"
+ },
+ "name": "add_file_chunk",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "bytesWritten": {
+    "description": "Decoded bytes written by THIS chunk.",
+    "type": "number"
+   },
+   "deployId": {
+    "type": "string"
+   },
+   "fileSize": {
+    "description": "Assembled file size on the pod after this chunk. Returned only when isLast=true so the caller can verify the concat succeeded.",
+    "type": "number"
+   },
+   "isLast": {
+    "type": "boolean"
+   },
+   "path": {
+    "type": "string"
+   },
+   "remainingBudget": {
+    "description": "Bytes still available before hitting the 500 MB cap.",
+    "type": "number"
+   },
+   "totalBytes": {
+    "description": "Session-wide cumulative bytes across all add_files / add_file_chunk calls.",
+    "type": "number"
+   },
+   "totalFiles": {
+    "description": "Session-wide file count after this chunk. Returned only when isLast=true.",
+    "type": "number"
+   }
+  },
+  "required": [
+   "deployId",
+   "path",
+   "bytesWritten",
+   "totalBytes",
+   "remainingBudget",
+   "isLast"
+  ],
+  "type": "object"
+ },
+ "securitySchemes": [
+  {
+   "scopes": [
+    "deploy",
+    "sites:write"
+   ],
+   "type": "oauth2"
+  }
+ ],
+ "title": "Append one chunk of a single file to a staging session"
+}

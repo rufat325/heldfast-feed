@@ -1,0 +1,138 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "List **events** (scheduled sessions of classes) in the caller's company. Use this whenever you need to resolve an `event_id` from natural language (\"my next class,\" \"Monday's ballet,\" \"all swim sessions this week,\" \"Sarah's classes tomorrow\") before chaining into another tool like `sessions_get_attendance` or `sessions_mark_attendance`. With no filters at all, returns the company's **upcoming** scheduled sessions (from today onward, earliest first) \u2014 not just the caller's \u2014 so a bare call stays near-term instead of dumping years of history. **Any** filter you add returns the FULL matching set, including PAST sessions: pass a `schedule_id` to get a class's entire history (past + future), or use `from`/`to` for an explicit window. There is no `past` flag \u2014 past sessions are just a range with `from` set early (or omitted alongside another scope). Filters cover date window, course, schedule, trainer, place, room, segment, billing period, status, and event-type (over-capacity, substituted, cancelled, etc.). Each returned row includes denormalised names (trainer, place, event-number), the event's date and duration, `capacity`, `free_spots` (remaining places = capacity \u2212 going, or null for open/unlimited events \u2014 use this to answer \"which sessions still have space\"), and an `attendance_counts` object (`going`, `attended`, `noshow`, `canceled`, `canceled_late`, `waitlist`). Read-only \u2014 does not modify events.\n\n**Additional lecturers.** Two separate fields, and they mean different things. `additional_trainers` = who is actually working THAT session alongside the main instructor. `class_additional_trainers` = the parent class's roster of people ELIGIBLE to work it, who are not necessarily on that session. Answer \"who is helping on Wednesday?\" from `additional_trainers`, never from the roster. Both are always arrays (`[]` = nobody), and neither includes the main instructor, who stays in `trainer_id`/`trainer_name`. Each entry is `{trainer_id, trainer_name, role}`; `role` is the raw enum \u2014 show it to operators as `secondary` = \"Secondary instructor\", `assistant` = \"Assistant\", `helper` = \"Assistant instructor\", `trainer` = \"Instructor\". `trainer_name` can be null if the lookup failed \u2014 that is not proof the trainer is gone. To CHANGE any of this, use `trainers_add_helpers`.\n\n**Critical: \"my sessions\" / \"what am I teaching\" / \"my classes today\".** When the user is asking for THEIR OWN sessions (any first-person framing), you MUST pass `trainer_id` matching `whoami.identity.user_id`. Without it, this tool returns every trainer's events in the company \u2014 which is almost never what the user meant when they said \"my.\" The only exception: when the caller's role is `member` or `external_member`, the server silently auto-scopes to their assignments anyway; `meta.scoped_to` in the response flags when this has happened.\n\nFilter notes:\n- `trainer_id` matches across FIVE trainer relationships including pre-substitution and schedule-level extras. Treat it as \"events trainer X is connected to,\" not strictly \"events trainer X currently teaches.\"\n- `status` uses raw db terms: `scheduled` (default \u2014 only state attendance can be tracked on), `unplanned` (includes cancelled events), `finished`, or `any`.\n- `segment_id=[0]` is a sentinel matching events with NO segment assignment.\n- Counters in `attendance_counts` may be sub-second-stale; for real-time counts on one event, chain into `sessions_get_attendance`. DISPLAYING A CLASS'S TIMETABLE: when the user wants to SEE a class's sessions (e.g. viewing or COPYING a class), render them as a weekly GRID \u2014 days across the top (Mon\u2013Sun), time down the left, like the Zooza app calendar \u2014 collapsed to the weekday+time pattern with the run range + session count in a one-line caption; list individual dates only if the user explicitly asks. (Display only \u2014 ignore when you are merely resolving an event_id to chain into another tool.)",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "billing_period_id": {
+    "$ref": "#/properties/course_id",
+    "description": "Restrict to sessions in one or more billing periods (term blocks). Resolve with classes_find_billing_periods."
+   },
+   "company_id": {
+    "description": "Zooza company id to operate against. Optional: if the user has exactly one company, the server defaults to it \u2014 you can omit this field. With multiple companies, you MUST specify which; get the id list from `whoami.available_companies[].id`. If the user hasn't indicated which company they mean, ask them before guessing.",
+    "exclusiveMinimum": 0,
+    "type": "integer"
+   },
+   "course_id": {
+    "anyOf": [
+     {
+      "exclusiveMinimum": 0,
+      "type": "integer"
+     },
+     {
+      "items": {
+       "exclusiveMinimum": 0,
+       "type": "integer"
+      },
+      "minItems": 1,
+      "type": "array"
+     }
+    ],
+    "description": "Restrict to sessions of one or more programmes (courses). Resolve with classes_find_courses."
+   },
+   "date": {
+    "description": "YYYY-MM-DD, exact-day match.",
+    "type": "string"
+   },
+   "from": {
+    "description": "YYYY-MM-DD, inclusive lower bound on event date. To see PAST sessions, set this (e.g. from a schedule's start) \u2014 there is no `past` flag; past + future is simply an unbounded-below range.",
+    "type": "string"
+   },
+   "ids": {
+    "description": "Specific event (session) ids to fetch. Bypasses the upcoming/scheduled defaults so the requested rows come back as-is.",
+    "items": {
+     "exclusiveMinimum": 0,
+     "type": "integer"
+    },
+    "minItems": 1,
+    "type": "array"
+   },
+   "page": {
+    "description": "0-based page index (default 0).",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "page_size": {
+    "description": "Number of results per page (max 200).",
+    "maximum": 200,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "place_id": {
+    "$ref": "#/properties/course_id",
+    "description": "Restrict to sessions at one or more venues (places). Resolve with classes_find_places."
+   },
+   "room_id": {
+    "$ref": "#/properties/course_id",
+    "description": "Restrict to sessions held in one or more specific rooms within a venue."
+   },
+   "schedule_id": {
+    "description": "Restrict to sessions belonging to one class. Resolve with classes_find_classes.",
+    "exclusiveMinimum": 0,
+    "type": "integer"
+   },
+   "segment_id": {
+    "description": "Schedule-segment id(s). Pass [0] to match events with NO segment assignment (sentinel).",
+    "items": {
+     "minimum": 0,
+     "type": "integer"
+    },
+    "minItems": 1,
+    "type": "array"
+   },
+   "sort": {
+    "description": "Result ordering. date_asc/date_desc sort by session date; event_no_asc/event_no_desc by event number; created_asc/created_desc by record creation time. Default date_asc.",
+    "enum": [
+     "date_asc",
+     "date_desc",
+     "event_no_asc",
+     "event_no_desc",
+     "created_asc",
+     "created_desc"
+    ],
+    "type": "string"
+   },
+   "status": {
+    "description": "Event lifecycle status. Default \"scheduled\" (matches dashboard; attendance can only be tracked on scheduled events). \"unplanned\" covers cancelled events. \"any\" expands to (scheduled, unplanned).",
+    "enum": [
+     "scheduled",
+     "unplanned",
+     "finished",
+     "any"
+    ],
+    "type": "string"
+   },
+   "to": {
+    "description": "YYYY-MM-DD, inclusive upper bound on event date.",
+    "type": "string"
+   },
+   "trainer_id": {
+    "$ref": "#/properties/course_id",
+    "description": "Restrict to sessions an instructor is connected to (one or more). Resolve with trainers_find. See the trainer filter note above \u2014 this matches across five trainer relationships."
+   },
+   "type": {
+    "description": "Event-shape filter. \"cancelled\" surfaces events explicitly cancelled (server-side maps to status=unplanned). Other values target dashboard cases: oversold, undersold, ad-hoc replacements, etc.",
+    "enum": [
+     "over_capacity",
+     "under_capacity",
+     "custom_replacement",
+     "rescheduled",
+     "substituted",
+     "cancelled"
+    ],
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "sessions_find_events",
+ "title": "Find events (scheduled sessions)"
+}

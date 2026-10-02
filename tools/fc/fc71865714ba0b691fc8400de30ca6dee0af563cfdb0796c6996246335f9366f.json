@@ -1,0 +1,197 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false
+ },
+ "description": "Edit specific individual sessions (events) of a class, OR add new sessions to a class. Two modes, one tool.\n\nEDIT-MODE \u2014 pass `event_ids` + `changes`: reschedule a session's date/time, or change a hand-picked session's instructor, venue/room, block, or duration. Works on one session or a chosen set.\n\nADD-MODE \u2014 pass `schedule_id` + `sessions`: CREATE one or more new sessions on an existing class (e.g. \"add one more session at the end\", \"add a make-up class on 2026-05-04\"). Each new session needs a `date`; its time, duration, trainer, venue and room default from the class. To append after the last session, first resolve the class's latest session with sessions_find_events, then pass the next date. New sessions are created billable so a priced class keeps charging.\n\nThe two modes are mutually exclusive \u2014 send event_ids/changes OR schedule_id/sessions, never both.\n\nTWO CALLS either way. First WITHOUT `token`: returns a preview (per-session before\u2192after for edits, or the list of sessions to be created for adds) plus a single-use token. Show it to the operator and get explicit approval (and, if `notify` is set, confirm that clients will be emailed). Then call again with `token` + `confirmed: true` to apply \u2014 send nothing else, the plan is frozen.\n\nUse EDIT-MODE when the user points at particular sessions (\"move next Tuesday's class to Wednesday 5pm\", \"give Friday's session to Jana\"). To change an attribute across ALL or all upcoming sessions of a class in one go, use classes_update with session_scope instead. To cancel sessions, use the cancellation tools \u2014 this tool does not cancel.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "changes": {
+    "additionalProperties": false,
+    "description": "EDIT-MODE. The edits to apply to `event_ids`.",
+    "properties": {
+     "duration": {
+      "description": "New session length in minutes.",
+      "exclusiveMinimum": 0,
+      "type": "integer"
+     },
+     "place_id": {
+      "description": "Move the session(s) to a different venue (place); must be sent together with room_id. Resolve with classes_find_places.",
+      "exclusiveMinimum": 0,
+      "type": "integer"
+     },
+     "reschedule": {
+      "anyOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "date": {
+          "description": "New session date, YYYY-MM-DD.",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+          "type": "string"
+         },
+         "mode": {
+          "const": "set",
+          "description": "Reschedule mode: move the session(s) to an explicit date (and optional time).",
+          "type": "string"
+         },
+         "time": {
+          "description": "New start time, HH:MM. Omit to keep each session's existing time.",
+          "pattern": "^\\d{2}:\\d{2}$",
+          "type": "string"
+         }
+        },
+        "required": [
+         "mode",
+         "date"
+        ],
+        "type": "object"
+       },
+       {
+        "additionalProperties": false,
+        "properties": {
+         "mode": {
+          "const": "unify_time",
+          "description": "Reschedule mode: set every selected session to the same time on its existing date.",
+          "type": "string"
+         },
+         "time": {
+          "description": "Start time, HH:MM, applied to every selected session.",
+          "pattern": "^\\d{2}:\\d{2}$",
+          "type": "string"
+         }
+        },
+        "required": [
+         "mode",
+         "time"
+        ],
+        "type": "object"
+       },
+       {
+        "additionalProperties": false,
+        "properties": {
+         "days": {
+          "description": "Days to shift each session by; negative moves it earlier.",
+          "type": "integer"
+         },
+         "minutes": {
+          "description": "Minutes to shift each session's time by; negative moves it earlier.",
+          "type": "integer"
+         },
+         "mode": {
+          "const": "shift",
+          "description": "Reschedule mode: move each session by a relative offset (days and/or minutes).",
+          "type": "string"
+         }
+        },
+        "required": [
+         "mode"
+        ],
+        "type": "object"
+       }
+      ],
+      "description": "Move the selected session(s) to a new date/time. Pick a mode: set (explicit date), unify_time (same time on existing dates), or shift (relative offset)."
+     },
+     "room_id": {
+      "description": "Room within the venue for the session(s); must be sent together with place_id.",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "segment": {
+      "anyOf": [
+       {
+        "minimum": 0,
+        "type": "integer"
+       },
+       {
+        "type": "string"
+       }
+      ],
+      "description": "Block: existing segment id (int), a new block name (string, auto-created), or 0 to clear."
+     },
+     "trainer_id": {
+      "description": "Reassign the session(s) to a different instructor. Resolve with trainers_find.",
+      "exclusiveMinimum": 0,
+      "type": "integer"
+     },
+     "trainer_rate_type_id": {
+      "description": "Set the instructor pay-rate type for the session(s). Resolve with trainers_find_rate_types.",
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "type": "object"
+   },
+   "company_id": {
+    "description": "Zooza company id to operate against. Optional: if the user has exactly one company, the server defaults to it \u2014 you can omit this field. With multiple companies, you MUST specify which; get the id list from `whoami.available_companies[].id`. If the user hasn't indicated which company they mean, ask them before guessing.",
+    "exclusiveMinimum": 0,
+    "type": "integer"
+   },
+   "confirmed": {
+    "description": "Required (true) on the apply call, alongside `token`. Asserts that you have SHOWN the user the preview from the first call and they approved it \u2014 not that you believe the change is correct. If the user has not seen the preview, show it and ask before setting this. Must be omitted on the preview call.",
+    "type": "boolean"
+   },
+   "event_ids": {
+    "description": "EDIT-MODE. Existing session ids to change; pair with `changes`. Resolve with sessions_find_events. Not with schedule_id/sessions.",
+    "items": {
+     "exclusiveMinimum": 0,
+     "type": "integer"
+    },
+    "minItems": 1,
+    "type": "array"
+   },
+   "notify": {
+    "description": "Default false. true emails enrolled clients about the change \u2014 confirm intent with the operator first. Set it on the FIRST call; it is frozen into the plan.",
+    "type": "boolean"
+   },
+   "schedule_id": {
+    "description": "ADD-MODE. Class to append NEW sessions to; pair with `sessions`. Resolve with classes_find_classes. Not with event_ids/changes.",
+    "exclusiveMinimum": 0,
+    "type": "integer"
+   },
+   "sessions": {
+    "description": "ADD-MODE. New sessions to create on `schedule_id`. Each needs a date; time/duration default from the class. For \"one more at the end\", get the last session via sessions_find_events and pass the next date.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "date": {
+       "description": "New session date, YYYY-MM-DD.",
+       "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+       "type": "string"
+      },
+      "duration": {
+       "description": "Length in minutes. Omit \u2192 class default.",
+       "exclusiveMinimum": 0,
+       "type": "integer"
+      },
+      "time": {
+       "description": "Start time HH:MM. Omit \u2192 class default.",
+       "pattern": "^\\d{2}:\\d{2}$",
+       "type": "string"
+      }
+     },
+     "required": [
+      "date"
+     ],
+     "type": "object"
+    },
+    "minItems": 1,
+    "type": "array"
+   },
+   "token": {
+    "description": "Omit on the FIRST call \u2014 that call previews the change and returns a token. Pass the token back on the SECOND call to apply the previewed change. Single-use, expires in 15 minutes; if it is expired or already used, run the preview again.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "sessions_update",
+ "title": "Edit specific sessions (preview, then apply)"
+}

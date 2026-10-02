@@ -1,0 +1,149 @@
+{
+ "_meta": {
+  "fastmcp": {
+   "tags": []
+  }
+ },
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Search North Carolina (NC) money judgments and criminal sentences"
+ },
+ "description": "Search North Carolina (NC) money judgments and criminal sentences by party name.\n\nREQUIRES AT LEAST ONE OF `party`, `case_number`, `alias` OR `from_date`. The other\narguments are FILTERS, not searches \u2014 `county` or `judgment_type` alone is rejected,\nand so is a call with no arguments at all.\n\nThis is the JUDGMENT index, NOT the case index. A judgment is what a court\nENTERED on a case \u2014 a money judgment against someone, or a criminal sentence.\nUse this for \"does X have a judgment against them\", \"how much do they owe on\nit\", \"is it still active\", \"find liens/judgments before I lend or rent\".\nFor the case itself \u2014 charges, hearings, next court date, parties, service \u2014\nuse `search_cases_by_party` (by name) or `lookup_court_case` (by number).\nEvery row carries `case_number`: that is the handoff key into\n`lookup_court_case` when the user wants the underlying case.\n\nIT CARRIES REAL PROPERTY LIENS, WHICH IS NOT OBVIOUS. NC files these as \"Civil\nMisc. Judgment\" records on the judgment docket, so this index \u2014 not the case\nsearch \u2014 is where they live. `cause_of_action` on each row says which kind, and\nthe values seen in production include:\n\n    CV - Claim of Lien              (G.S. 44A claim of lien on real property)\n    CV - Federal Tax Lien           CV - NC Certificate of Tax Liability\n    CV - Lien                       CV - Employment Security Comm Lien\n    CV - Institutional Lien (Hospitals)\n    CV - Lis Pendens                (pending action against the property)\n    CV - Transcript of Judgment     (a judgment docketed from another county)\n    CV - Summary Ejectment, CV - Money Owed, CV - Possession,\n    CV - Collection on Account, CV - Other, FAM - Divorce, ...\n\nSo \"are there any liens against this person?\" is answerable HERE, and answerable\nwell: this index has no 200-cap, so a clean search really does mean none found.\n\nDO NOT FILTER TO \"lien\" TO ANSWER \"ARE THERE ANY LIENS?\" \u2014 that under-reports badly.\nA money judgment docketed with the clerk is ITSELF a lien on the debtor's real\nproperty in that county, whatever its cause of action says. So `CV - Money Owed`,\n`CV - Collection on Account` and `CV - Transcript of Judgment` rows are encumbrances\ntoo. Measured on one name: 4 rows whose cause contains \"lien\", and 35 further\ndocketed money judgments the filter would silently drop \u2014 roughly a tenfold\nunder-count. For a lien or title question, DO NOT filter; report the whole set and\nlet the reader classify.\n\n`cause_of_action` is for isolating a RECORD TYPE \u2014 \"show me only the lis pendens\",\n\"only the summary ejectments\" \u2014 not for deciding what counts as a lien.\n\nASK WHICH RECORD TYPES THEY WANT \u2014 do not guess. Run the search, read\n`narrowing[\"Cause of Action\"]` (computed from the actual rows, BEFORE any filter, so\nit always shows the full menu), tell them what is there, and let them choose.\n\n`cause_of_action` MATCHES ON SUBSTRING AND FILTERS CLIENT-SIDE. `\"lien\"` catches\nevery lien variant above; `\"Claim of Lien\"` catches only G.S. 44A. Because the\nindex offers no server-side filter for it, the match runs over the rows already\nfetched \u2014 so when `results_total` exceeds what was fetched, `cause_of_action_note`\nwill say the count is NOT a total. Read that note before reporting a number.\n\nNOT in this index, and not anywhere in this server: UCC financing statements\n(those are NC Secretary of State), Register of Deeds records, and lien-agent\nnotices under G.S. 44A-11.1 (liensnc.com is not a court system). Say so plainly\nrather than implying a clean search covered them.\n\nARGUMENT FORMATS (the requirement itself is stated at the top).\n`party` is a name in \"LAST, FIRST\" form (business names work as-is).\n`case_number` accepts dashed or undashed. `from_date`/`to_date` bound the\ndate the judgment was ORDERED (not the case filing date, and not a hearing\ndate) \u2014 ISO `YYYY-MM-DD` or `MM/DD/YYYY`, both accepted.\n\nA PARTY SEARCH DOES NOT COVER ALIASES, so this tool checks them for you.\n`party` and `alias` are separate indexes with no overlap \u2014 measured, a search for\n\"WILLIAMS, PAMALA\" as a party misses a judgment filed against \"MCARDELL, PAMALA\"\nthat lists \"WILLIAMS, PAMALA\" as an alias. Whenever you pass a full `party` name,\nan alias sweep runs automatically alongside it and its hits come back in\n`alias_matches`, separate from `results`.\n\nREAD `alias_sweep.status` BEFORE CALLING ANYONE CLEAR:\n  \"ran\"     -> aliases were checked. Zero matches is a real negative.\n  \"failed\"  -> they were NOT checked. Say so; do not report the search as clear.\n  \"skipped\" -> not applicable, EXCEPT when the reason says the name was a surname\n               only. Ask for a full \"LAST, FIRST\" name and re-run.\n\nAN ALIAS IS NOT NECESSARILY A FORMER NAME. It is any other name recorded for that\nparty \u2014 a maiden or married name, a hyphenated or reordered variant\n(\"LEWIS-WILLIAMS, FARRAH\" vs \"WILLIAMS, FARRAH LEWIS\"), or a fuller spelling\n(\"WILLIAMS, SHANE\" vs \"WILLIAMS, SHANE CHRISTOPHER\"). Measured, 15% share the\nparty's own surname. Do NOT describe an alias as a name that was \"changed\", and do\nnot infer a marriage or divorce from one \u2014 the record does not say.\n\nAn `alias_matches` row is filed against a party recorded under a DIFFERENT NAME, so\nit may be the same person or an unrelated namesake. Report those rows as leads to\nconfirm \u2014 never state them as this person's judgments, and never merge them into a\ntotal owed. They carry no amounts.\n\n`alias` as an INPUT searches the alias index directly and takes the same\n\"LAST, FIRST\" form (\"PAMALA WILLIAMS\" returns nothing). Passing it explicitly\nturns the automatic sweep off, since it would repeat the same query.\n\nRow-level `debtor_aliases` / `creditor_aliases` list other names recorded for that\nparty. They are populated essentially only on alias searches \u2014 empty on a party\nsearch is normal and means nothing.\n\nCIVIL vs CRIMINAL \u2014 read this before reporting a null. Each row has a\n`case_category` of CV, CR or FAM. `judgment_type` populates on civil rows;\n`sentence_type` populates on criminal rows. A null on either one means NOT\nAPPLICABLE to that row's category \u2014 it is NOT an absence of fact, and must\nnever be reported as \"no sentence recorded\" or \"no judgment type\".\n\nDOLLAR AMOUNTS ARE FETCHED AUTOMATICALLY WHEN THE RESULT SET IS SMALL \u2014 do\nNOT ask the user whether to pull them. Leave `detail` unset and this tool\ndecides: a `case_number` search, or any search returning 10 rows or fewer,\ncomes back with amounts already included. Check `detail_included` to see what\nhappened, and `detail_skipped_reason` when it didn't.\n\nThe reason it is not unconditional: `detail` fans out one upstream call PER\nROW. A broad name search with detail forced on has been measured timing out at\n60s \u2014 \"ANDERSON, DAVID\" returns 153 judgments, and asking for 153 amounts at\nonce fails outright, whereas the same search without detail succeeds. So on a\nlarge result set the amounts are deliberately skipped and\n`detail_skipped_reason` tells you how to narrow (county, date range,\njudgment_type, or a specific case_number). Narrow and re-run rather than\nforcing it.\n\nOverride only if you must: `detail=true` still respects the row guard and will\nnot fan out over a large set; `detail=false` suppresses amounts entirely.\n\nWith detail, each row gains `total_judgment_amount`, `principal_amount`,\n`court_costs`, `attorney_fees`, `interest_rate`, `judgment_status` and the\nfor/against party roster. Amounts are strings; a null means the court recorded\nno value, which is different from \"0.00\". Where `detail` is null on a row, no\ndollar figure is available \u2014 never infer or state an amount from such a row.\n\nFilters:\n  - `county` \u2014 a plain county name (\"Wake\"). Filtered SERVER-SIDE and exactly,\n    covering both that county's District and Superior court. Unlike\n    `search_cases_by_party`, this filter does not eat into a result cap.\n  - `judgment_type` \u2014 civil, comma-separated, e.g. \"Recorded\",\n    \"Granted in Whole or Part\", \"Default Civil\".\n  - `sentence_type` \u2014 criminal, comma-separated, e.g. \"Active\", \"Community\",\n    \"Intermediate\", \"Fine\".\n  Every valid value for all three is returned in `facets` with live counts,\n  so read `facets` rather than guessing a filter value.\n\nSpeed: ~1-3 seconds. This tool is the FAST exception \u2014 it does NOT run the\nslow WAF-gated portal search that `search_cases_by_party` and\n`lookup_court_case` do, so do not warn the user about a long wait here.\n\nCompleteness: `results_total` is the TRUE statewide total. This index has no\n200-case cap, so the truncation caveat that applies to `search_cases_by_party`\ndoes NOT apply here. `results_truncated` reflects only the display `limit`;\npage further with `offset` if needed.\n\nRead-only. NC only. Informational, not legal advice. A name match is not an\nidentity confirmation \u2014 same-name people are common.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "alias": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "case_number": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "cause_of_action": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "county": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "detail": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "from_date": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "judgment_type": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "limit": {
+    "default": 200,
+    "type": "integer"
+   },
+   "party": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "sentence_type": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "sort": {
+    "default": "relevance",
+    "enum": [
+     "relevance",
+     "ordered_date",
+     "case_number",
+     "party_name"
+    ],
+    "type": "string"
+   },
+   "to_date": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   }
+  },
+  "type": "object"
+ },
+ "name": "search_judgments",
+ "outputSchema": {
+  "additionalProperties": true,
+  "type": "object"
+ },
+ "title": "Search North Carolina (NC) money judgments and criminal sentences (incl. aliases)"
+}
