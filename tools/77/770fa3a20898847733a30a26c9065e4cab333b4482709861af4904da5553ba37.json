@@ -1,0 +1,98 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "REQUIRES API KEY (bookings:write scope). Creates a new RIGShare booking for the authenticated user. Call rigshare_quote_booking FIRST to preview the exact cost (dry-run, nothing charged) and confirm it with the renter before committing money here. Server computes all prices from the equipment's canonical rates \u2014 client-side price hints are ignored. Enforces identity verification and, when the API key has them, its per-transaction and daily spend caps (both optional; a new key has neither, and there is no monthly cap). The caps are checked against the pre-tax amount, so sales tax can take the charge above them; for a METERED booking the full budget_usd counts against them. METERED listings (billing.mode === 'METERED' on the equipment, Tech remote-access only): bill per minute instead of upfront \u2014 you MUST pass budget_usd (the maximum authorized session spend; only actual usage is charged, no deposit). PHYSICAL (non-remote) equipment: coverage_path is REQUIRED ('WAIVER' needs the renter's explicit, informed consent to the damage waiver \u2014 never accept it on their behalf without asking; 'BYOCOI' means they'll upload their own insurance certificate). START TIME RULE: for FOUR_HOURS bookings pass start_date / end_date as ISO date-times WITH a UTC offset in the equipment's local time (e.g. 2026-09-15T08:00:00-05:00 \u2192 2026-09-15T12:00:00-05:00); four-hour sessions must start by 4:00 PM local. A date-only start is read as UTC midnight, the previous afternoon or evening in the US: it is usually refused, but where UTC midnight is at or before 4:00 PM local (Pacific time in winter, Alaska, Hawaii) it books a four-hour block on the previous afternoon. HOURLY bookings are billed for every started hour between the two instants, so send real date-times there too (date-only values are UTC midnights, so a date-only start and end are billed 24 hours per day between them). Returns confirmation code + booking ID + payment status + a next_action (who acts next and the exact URL). A request matched as a duplicate (see idempotency_key) returns the existing booking, or a 409 when its key differs. An agent NEVER enters a card. Auto-pay is off on a new API key. With auto-pay enabled on the key and a saved card, an instant-book listing is paid when the booking is created (a METERED budget is authorized as a card hold, not charged). Otherwise the renter pays at the booking URL: right away for an instant-book listing, and after the owner approves for a request-to-book listing, where auto-pay never applies. Poll rigshare_get_booking afterwards.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "budget_usd": {
+    "description": "METERED listings only, and required for them: the maximum session spend to authorize, in USD, fees included. Only the minutes actually used are charged. rigshare_quote_booking returns the minimum budget and presets.",
+    "maximum": 25000,
+    "minimum": 0.5,
+    "type": "number"
+   },
+   "coverage_path": {
+    "description": "Required for physical (non-remote) equipment. WAIVER = the renter accepts RIGShare's Liability Acknowledgment Waiver (only with the renter's explicit, informed consent); BYOCOI = the renter will provide their own certificate of insurance.",
+    "enum": [
+     "WAIVER",
+     "BYOCOI"
+    ],
+    "type": "string"
+   },
+   "duration_type": {
+    "description": "Pricing unit. HOURLY bills every started hour between start and end; FOUR_HOURS bills 4-hour blocks and must start by 4:00 PM equipment-local time; DAILY bills per day; WEEKLY per started 7 days; MONTHLY per started 30 days.",
+    "enum": [
+     "HOURLY",
+     "FOUR_HOURS",
+     "DAILY",
+     "WEEKLY",
+     "MONTHLY"
+    ],
+    "type": "string"
+   },
+   "end_date": {
+    "description": "ISO 8601 date or date-time, after start_date. Same format rules as start_date.",
+    "type": "string"
+   },
+   "equipment_id": {
+    "description": "Listing UUID.",
+    "format": "uuid",
+    "type": "string"
+   },
+   "idempotency_key": {
+    "description": "Optional, recommended: a new value for each booking you intend, the same value when retrying it (printable ASCII, up to 100 characters \u2014 a UUID works). A request that matches a pending, approved or confirmed booking you created in the last 5 minutes (same equipment, same dates \u2014 for a same-day remote session, the same UTC day \u2014 same duration type, and the same price, usage budget, compute environment, pickup/delivery choice and coverage choice) is never booked or charged a second time: with the same key, or with no key, you get that booking back, marked idempotent, with its payment state and next action; with a different key it is normally refused with HTTP 409 IDENTICAL_BOOKING_RECENT, which names the existing booking \u2014 confirm with the user before booking the same thing again (if the original request's key isn't on record, you get the booking back instead). Reusing a key for a request that doesn't match its booking is refused with HTTP 422 IDEMPOTENCY_KEY_REUSED: check that booking before booking again. For a per-minute (metered) listing, two requests with the same usage budget match whatever their length; a listing that serves one renter at a time has no room for a second same-day session anyway.",
+    "maxLength": 100,
+    "pattern": "^[\\x20-\\x7E]*$",
+    "type": "string"
+   },
+   "pickup_type": {
+    "description": "SELF_PICKUP, or OWNER_DELIVERY (adds the owner's delivery fee). rigshare_create_booking refuses OWNER_DELIVERY on a listing that does not offer delivery and on any remote-access listing; rigshare_quote_booking does not check this, so a quote can succeed for a booking that will be refused. Omitted = REMOTE_ACCESS, which is treated as self pickup; whether a booking is remote comes from the listing itself.",
+    "enum": [
+     "SELF_PICKUP",
+     "OWNER_DELIVERY",
+     "REMOTE_ACCESS"
+    ],
+    "type": "string"
+   },
+   "qualification_answers": {
+    "additionalProperties": {
+     "maxLength": 500,
+     "type": "string"
+    },
+    "description": "Answers to the renter-qualification questionnaire, required only when the listing requires renter qualification. The questionnaire is not available through this API, so if a booking is refused for qualification the renter must book that listing on the web; retrying here will not get past it.",
+    "type": "object"
+   },
+   "qualification_version": {
+    "description": "Version of the questionnaire the answers were given against; must match the current version.",
+    "maxLength": 50,
+    "type": "string"
+   },
+   "start_date": {
+    "description": "ISO 8601 date or date-time. A date alone is read as UTC midnight (the previous afternoon or evening in US time zones), so for HOURLY and FOUR_HOURS send a date-time with a UTC offset in the equipment's local time, e.g. 2026-09-15T08:00:00-05:00.",
+    "type": "string"
+   },
+   "waiver_version": {
+    "description": "Version of the waiver the renter accepted. Omit to use the current version.",
+    "maxLength": 50,
+    "type": "string"
+   }
+  },
+  "required": [
+   "equipment_id",
+   "start_date",
+   "end_date",
+   "duration_type"
+  ],
+  "type": "object"
+ },
+ "name": "rigshare_create_booking",
+ "title": "Create booking"
+}

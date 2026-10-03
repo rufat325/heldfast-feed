@@ -1,0 +1,103 @@
+{
+ "_meta": {
+  "fastmcp": {
+   "tags": []
+  }
+ },
+ "description": "BETA. Estimate what a cross-border payment will COST, split by WHO\nPAYS: the sending bank's published fee (the sender's side), what\ncorrespondents deduct in transit and what the beneficiary's own bank\ncharges to credit it (the beneficiary's side), and what actually lands.\n\nThis estimator is in BETA. Present every number as a typical case and a\nhigh case, never as a quote, and never let a user commit to a contractual\namount on it. The payload carries beta=true while this holds.\n\nHOW TO READ THE ANSWER (relay these honestly):\n- `answered=false` means we REFUSED. The most common reason is that we\n  hold no published tariff rule for the sending bank, in which case there\n  is deliberately no total and no \"recipient receives\" figure. Say we do\n  not know what that bank charges. Do NOT add up the parts yourself and\n  present a total: treating the unknown fee as zero is the exact defect\n  this tool was built to remove.\n- The correspondent fee is a RANGE (`p50` typical, `p90` high case), not a\n  point. The spread is real: SWIFT tracking never reveals whether a\n  payment was sent OUR, SHA or BEN, so a single cohort mixes all three.\n- THREE FEES, THREE DIFFERENT PAYERS, AND THEY ARE NOT INTERCHANGEABLE.\n  `sending_fee` is billed to the SENDER by their own bank.\n  `correspondent_fee` comes out of the payment in transit, so the\n  BENEFICIARY bears it. `beneficiary_fee` is what the RECEIVING bank\n  charges its own customer to credit the payment, so the beneficiary bears\n  that too - and it is frequently the largest of the three (measured\n  2026-08-22 on one live corridor: 35.26 USD of sender-side cost against a\n  245.68 USD beneficiary bank fee). Never quote one of them as \"the cost\",\n  and never call the beneficiary bank's fee a correspondent charge.\n  `total` is the sending fee plus the transit deduction; `total_both_sides`\n  adds the beneficiary bank's fee and is the all-in figure.\n- WHERE EACH NUMBER COMES FROM. The correspondent fee is OBSERVED, from\n  payments we have tracked. `beneficiary_fee.source` is `tariff` (or\n  `tariff_fallback`, see below) and never `observed`: a beneficiary bank\n  deducts after the last bank that reports to GPI, so no tracking data can\n  see it, and we read it off that bank's published incoming tariff\n  instead. Say which is which when the user leans on a figure.\n- `beneficiary_fee.known=false` means WE HOLD NO INCOMING TARIFF for that\n  bank (we hold one for roughly two thirds of beneficiary banks). Its\n  charge is then missing from every figure, `total_both_sides` is null,\n  and `recipient_receives.typical` is an UPPER BOUND -\n  `recipient_receives.beneficiary_fee_known` says so. Do not fill that gap\n  with a zero, a guess or a typical figure; say the receiving bank's own\n  charge is not included and point the user at that bank's tariff.\n- `beneficiary_fee.applies=false` under OUR / OUR-OUR: the instruction says\n  the sender covers every downstream charge, so the bank claims it back\n  rather than taking it off the credit. The figure is reported but NOT\n  subtracted. Our data ends before the account is credited, so we can\n  neither confirm nor refute that it was honoured on a given payment.\n- `beneficiary_fee.segment` says which of the bank's incoming price lists\n  was read. `segment_fallback=true` means the account type asked for had\n  no usable schedule so the other one answered - which can only happen\n  when `beneficiary_segment` was NOT supplied, i.e. when we were assuming\n  the beneficiary matches the sender. Say that you assumed it.\n- `beneficiary_fee.reason='other_segment_only'` means you DID supply\n  `beneficiary_segment`, and that bank publishes an incoming tariff for\n  the other account type only (`beneficiary_fee.other_segment` names it).\n  We decline to quote it. Do NOT report this as \"we hold no tariff for\n  that bank\": we hold one, for a different kind of account. Tell the user\n  which, because it is often the useful half of the answer.\n- `basis.n` is how many observed payments back the correspondent figure and\n  `confidence` reflects it. At \"low\", present the range as rough.\n- `basis.level` says how specific the evidence is: `corridor` is this\n  correspondent into this destination country, `correspondent` is that\n  bank overall, and `currency` or `global` mean we hold nothing specific\n  and are quoting a pool. Say so when it is a pool.\n- ON A REFUSAL `basis` IS NULL, and the same two figures are still on each\n  entry of `correspondent_fee.legs[]` as `level` and `n`. Read them there.\n  Do not read a missing `basis` as corridor-specific evidence: on a\n  measured DE->AM screen the legs said `level: \"currency\", n: 146`, a\n  currency-wide pool, and the answer described it as a single well-priced\n  hop because the top-level key was absent.\n- `assumptions` is a list of plain sentences explaining what shaped the\n  number (SEPA, OUR honoured, PSD2, a modelled BEN uplift, a stale\n  tariff). Relay the ones that matter to the user's question.\n- under OUR the correspondent leg carries `our_breach`: the measured share\n  of OUR payments that lose a charge in transit anyway, and what that\n  costs. p50 is 0 and p90 is that loss. Quote BOTH - \"the beneficiary\n  should receive the full amount, and in about 7% of the OUR payments we\n  can follow end to end they do not\" - never the p50 alone as a promise.\n- `chain.status` = `no_chain` means the pair settles on local rails (SEPA,\n  domestic, same banking group) with NO correspondent deduction at all.\n\nIMPORTANT ON CHARGE TYPE: charge_type is an INPUT and is never inferred\nfrom tracking. OUR is a real instruction and usually holds - of 150\npayments whose own MT103 declared OUR and which we could follow from the\ninstructed amount to the settled one, 139 reached the beneficiary intact,\nagainst 6 of 52 under SHA. It is NOT a guarantee: the other 11 lost a flat\ncorrespondent charge in transit, and we find no evidence that this depends\non the destination country or on a US correspondent being in the chain, so\ndo not tell a user that OUR is safe everywhere except the US. BEN is\nmaterially more expensive than SHA and our high case models it rather than\nmeasuring it. If the user has not said which they will use, ask, or state\nwhich one you assumed.\n\nPass `beneficiary_bic` whenever the user knows the receiving bank: without\nit there is no correspondent chain to price and no beneficiary bank to\nread a tariff from, so the answer is the sending fee alone and no total.\n\n`customer_segment` selects which side of the SENDING bank's published price\nlist is read. It is not cosmetic: of 30 banks publishing both schedules, 9\nof the 17 that answered on both quote a different fee, one of them 220 PLN\nfor a company against free for a person. It defaults to `individual` here;\npass `business` when the payer is a company, and say which you assumed.\n\n`beneficiary_segment` does the same for the RECEIVING side, which is a\ndifferent bank's price list and not a restatement of the sender's. Of 120\nbanks publishing both schedules, 28 quote a different incoming fee\n(measured 2026-08-24), and it runs both ways: Hipotekarna banka (HBBAMEPG)\ncredits a 100,000 EUR payment free of charge to a company and takes 0.1%\nof it from a person, while Nordea charges a person 60 SEK and a company\n250. Omit it and we assume the beneficiary matches the sender, which is\nwhat this tool did before 2026-08-24 - so if you omit it, say you assumed\nit. Supply it when the user has told you who is being paid, and prefer\nasking over guessing when the amount makes the difference material.\n\nAvailable to any caller with an active subscription. The estimate itself\ncosts no credits (tracking a payment does cost credits; never describe\ntracking as free).\n\nArgs:\n    bank_swift: Sending bank BIC (8 or 11 chars)\n    amount: Transfer amount\n    currency: 3-letter transfer currency\n    charge_type: SHA (default), OUR or BEN. Ask the user rather than guessing\n    beneficiary_bic: Receiving bank BIC; needed for a total\n    channel: online | branch | mobile_app | any\n    customer_segment: individual | business | financial_institution - the SENDER\n    beneficiary_segment: individual | business | financial_institution - the\n        party being PAID. Omitted, it mirrors customer_segment\n    customer_sub_segment: standard | premium | private_banking | vip\n    api_key: Optional API key (internal calls ride the MCP secret)",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "amount": {
+    "type": "number"
+   },
+   "api_key": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "bank_swift": {
+    "type": "string"
+   },
+   "beneficiary_bic": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "beneficiary_segment": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "channel": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "charge_type": {
+    "default": "SHA",
+    "type": "string"
+   },
+   "currency": {
+    "type": "string"
+   },
+   "customer_segment": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "customer_sub_segment": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   }
+  },
+  "required": [
+   "bank_swift",
+   "amount",
+   "currency"
+  ],
+  "type": "object"
+ },
+ "name": "transfer_cost",
+ "outputSchema": {
+  "additionalProperties": true,
+  "type": "object"
+ }
+}

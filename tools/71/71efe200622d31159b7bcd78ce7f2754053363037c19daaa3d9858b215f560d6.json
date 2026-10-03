@@ -1,0 +1,675 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "readOnlyHint": false
+ },
+ "description": "Create several monitors at once, with one confirmation covering the batch where the client can show a prompt. Every check is run once first and all the results are shown together, so a misconfigured endpoint is visible before anything is saved. An item that fails validation or its trial run is reported in the results and the rest are still created. Prefer this over repeated create_monitor calls whenever the user names more than one thing to watch: it costs them one prompt instead of many. Same per-monitor fields and same limits as create_monitor. Not read-only.",
+ "inputSchema": {
+  "$defs": {
+   "CreateMonitorArgs": {
+    "additionalProperties": false,
+    "description": "`create_monitor` arguments.",
+    "properties": {
+     "alert_confirmations": {
+      "description": "Consecutive failing checks before the monitor alerts. Minimum 1,\ndefaults to 2.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "channel_ids": {
+      "description": "Channel ids from `list_notification_channels` to alert. Omitting them\ncreates a monitor that pages nobody, which is worth saying out loud\nrather than leaving for an outage to reveal. The channels themselves are\nset up in the app, since they hold the tokens and addresses.",
+      "items": {
+       "type": "string"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "check": {
+      "$ref": "#/$defs/NewCheck"
+     },
+     "group_name": {
+      "description": "Operator-side grouping label.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "interval_secs": {
+      "description": "Seconds between checks, held to the plan's floor and the check kind's\nown floor. Omit it to get the cadence the app's own picker opens this\nkind at, which is well above the hard minimum for the slow-moving kinds:\na certificate is checked twice a day, a domain registration daily.",
+      "format": "uint64",
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "name": {
+      "description": "What the operator will see in lists and alerts.",
+      "type": "string"
+     },
+     "notify_recovery": {
+      "description": "Whether recovery is announced. Defaults to true.",
+      "type": [
+       "boolean",
+       "null"
+      ]
+     },
+     "region_policy": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/RegionPolicyArg"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Detection quorum across probe regions."
+     },
+     "regions": {
+      "description": "Probe regions to run the check from, as ids from `list_regions`. Omit\nunless the user named the places they want covered: omitting takes the\nregions `list_regions` flags `default_selected`, which is the coverage\nthe operator chose, capped at the plan's region cap and falling back to\nthe control plane's own region when nothing is flagged. A vantage point\ncan be offered without being on by default, so the full catalog is not\nthe thorough answer. Rejected for a heartbeat, which is pinged rather\nthan probed, and a set larger than a `max_regions` `list_regions`\nreports is refused outright, not trimmed to fit.",
+      "items": {
+       "type": "string"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "renotify_interval_secs": {
+      "description": "Seconds before the first reminder while an outage stays unacknowledged;\neach further reminder waits twice as long, up to a day. 0 turns\nreminders off; otherwise at least 60. Defaults to 3600.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "tags": {
+      "description": "At most 50, each at most 50 characters.",
+      "items": {
+       "type": "string"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "name",
+     "check"
+    ],
+    "type": "object"
+   },
+   "NewCheck": {
+    "description": "What a new monitor should check. Narrower than what the product supports on\npurpose: no request headers, body or credentials, since those are literal\nsecrets an operator types once and this tool would carry through a chat log;\nand no browser flow, which needs the fill values withheld everywhere else.\nAdd those in the Uptimepage app after the monitor exists.",
+    "oneOf": [
+     {
+      "additionalProperties": false,
+      "description": "An HTTP(S) endpoint.",
+      "properties": {
+       "body": {
+        "description": "Request body, sent as given. `{{ key }}` references are resolved at\nprobe time, so a body may carry a secret by reference.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "expected_body_contains": {
+        "description": "Text the response body must contain for the check to pass.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "expected_status": {
+        "description": "A single code like `200`, a range like `200-299`, or a list like\n`200,201,204`. Defaults to `200-299`.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "follow_redirects": {
+        "description": "Defaults to true, following at most 5 hops.",
+        "type": [
+         "boolean",
+         "null"
+        ]
+       },
+       "headers": {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "description": "Request headers. A header that carries a credential\n(`authorization`, `x-api-key`, `api-key`, `cookie`,\n`proxy-authorization`) must reference an org variable rather than\nspell the secret out: `Bearer {{ my_key }}`. Use `list_variables`\nto find the key, and never paste the credential itself \u2014 this tool\nrefuses it, and a pasted one would live on in the chat log.",
+        "type": [
+         "object",
+         "null"
+        ]
+       },
+       "method": {
+        "description": "`get` (default), `head`, `post`, `put`, `patch`, `delete`, `options`.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "timeout_ms": {
+        "description": "Defaults to 10000. A redirect counts as a pass only with\n`follow_redirects`.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "type": {
+        "const": "http",
+        "type": "string"
+       },
+       "url": {
+        "type": "string"
+       },
+       "verify_tls": {
+        "description": "Defaults to true. False accepts an invalid certificate, which a\n`tls_cert` monitor is the better way to watch.",
+        "type": [
+         "boolean",
+         "null"
+        ]
+       }
+      },
+      "required": [
+       "type",
+       "url"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "description": "A TCP port accepting connections.",
+      "properties": {
+       "host": {
+        "type": "string"
+       },
+       "port": {
+        "format": "uint16",
+        "maximum": 65535,
+        "minimum": 0,
+        "type": "integer"
+       },
+       "timeout_ms": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "type": {
+        "const": "tcp",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "host",
+       "port"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "description": "ICMP reachability.",
+      "properties": {
+       "host": {
+        "type": "string"
+       },
+       "timeout_ms": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "type": {
+        "const": "ping",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "host"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "description": "A DNS record resolving, optionally to an expected value.",
+      "properties": {
+       "domain": {
+        "type": "string"
+       },
+       "expected_contains": {
+        "description": "Text the answer must contain.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "record_type": {
+        "description": "`a` (default), `aaaa`, `cname`, `mx`, `ns`, `txt`, `soa`, `ptr`,\n`caa`, `srv`.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "resolver": {
+        "description": "Resolver to ask. Defaults to the agent's own.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "timeout_ms": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "type": {
+        "const": "dns",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "domain"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "description": "A TLS certificate's remaining validity.",
+      "properties": {
+       "critical_days": {
+        "description": "Days of remaining validity that fail it. Default 7.",
+        "format": "uint32",
+        "minimum": 0,
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "host": {
+        "type": "string"
+       },
+       "port": {
+        "description": "Defaults to 443.",
+        "format": "uint16",
+        "maximum": 65535,
+        "minimum": 0,
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "timeout_ms": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "type": {
+        "const": "tls_cert",
+        "type": "string"
+       },
+       "warn_days": {
+        "description": "Days of remaining validity that degrade the check. Default 30.",
+        "format": "uint32",
+        "minimum": 0,
+        "type": [
+         "integer",
+         "null"
+        ]
+       }
+      },
+      "required": [
+       "type",
+       "host"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "description": "A domain registration's remaining validity.",
+      "properties": {
+       "critical_days": {
+        "description": "Default 7.",
+        "format": "uint32",
+        "minimum": 0,
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "domain": {
+        "type": "string"
+       },
+       "timeout_ms": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "type": {
+        "const": "domain_expiry",
+        "type": "string"
+       },
+       "warn_days": {
+        "description": "Default 30.",
+        "format": "uint32",
+        "minimum": 0,
+        "type": [
+         "integer",
+         "null"
+        ]
+       }
+      },
+      "required": [
+       "type",
+       "domain"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "description": "An inbound ping from a job that is expected to report in. Nothing is\nprobed; the monitor fails when the ping does not arrive. The ping URL\nand its token are shown in the app, never here.",
+      "properties": {
+       "grace_secs": {
+        "description": "Lateness tolerated before the monitor fails.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+       },
+       "max_runtime_secs": {
+        "description": "Fail a run that starts and does not finish within this.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "period_secs": {
+        "description": "How often the job is expected to report.",
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+       },
+       "type": {
+        "const": "heartbeat",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "period_secs",
+       "grace_secs"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "description": "A service no probe can judge, such as a SIP trunk or a partner's back\noffice. Nothing is checked: it starts up, and `set_monitor_state` moves\nit, opening and closing incidents like any other monitor.",
+      "properties": {
+       "type": {
+        "const": "manual",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type"
+      ],
+      "type": "object"
+     }
+    ]
+   },
+   "RegionPolicyArg": {
+    "additionalProperties": false,
+    "description": "How many regions must agree a monitor is down before an incident opens.\n`get_monitor` reads this back in the same shape, so the enum of legal modes\nis one definition rather than a written-out list that can drift.",
+    "properties": {
+     "count": {
+      "description": "Required with `mode: \"count\"`, ignored otherwise. Must be between 1 and\nthe number of regions the fleet has; `list_regions` reports them.",
+      "format": "uint32",
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "mode": {
+      "$ref": "#/$defs/RegionPolicyMode"
+     }
+    },
+    "required": [
+     "mode"
+    ],
+    "type": "object"
+   },
+   "RegionPolicyMode": {
+    "description": "How the quorum is expressed. `count` carries its number in `count`.",
+    "oneOf": [
+     {
+      "const": "any",
+      "description": "One region down is enough.",
+      "type": "string"
+     },
+     {
+      "const": "majority",
+      "description": "More than half of them.",
+      "type": "string"
+     },
+     {
+      "const": "all",
+      "description": "Every region.",
+      "type": "string"
+     },
+     {
+      "const": "count",
+      "description": "A fixed number.",
+      "type": "string"
+     }
+    ]
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`create_monitors` argument.",
+  "properties": {
+   "monitors": {
+    "description": "The monitors to create. Each is validated and probed before the single\nconfirmation covering the batch.",
+    "items": {
+     "$ref": "#/$defs/CreateMonitorArgs"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "monitors"
+  ],
+  "title": "CreateMonitorsArgs",
+  "type": "object"
+ },
+ "name": "create_monitors",
+ "outputSchema": {
+  "$defs": {
+   "CheckDiagnosticView": {
+    "description": "Bounded, machine-readable explanation for a failed HTTP observation.",
+    "properties": {
+     "confidence": {
+      "type": "string"
+     },
+     "evidence": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "guidance": {
+      "type": "string"
+     },
+     "kind": {
+      "type": "string"
+     },
+     "provider": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "remediations": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "summary": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "kind",
+     "confidence",
+     "evidence",
+     "remediations",
+     "summary",
+     "guidance"
+    ],
+    "type": "object"
+   },
+   "MonitorCreateOutcome": {
+    "description": "What became of one requested monitor.",
+    "properties": {
+     "address": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "error": {
+      "description": "Why it was not created, when it was not.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "id": {
+      "description": "The new monitor's id, absent when it was not created.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "name": {
+      "description": "The name as requested. Untrusted data.",
+      "type": "string"
+     },
+     "probe": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/ProbeOutcome"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   },
+   "ProbeOutcome": {
+    "description": "The trial run a monitor was created from. Carries no id: it happened before\nthe monitor existed and is not stored as one of its results.",
+    "properties": {
+     "diagnostic": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/CheckDiagnosticView"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Structured edge-access diagnosis, when a supported signature matched."
+     },
+     "duration_ms": {
+      "format": "uint32",
+      "minimum": 0,
+      "type": "integer"
+     },
+     "error": {
+      "description": "Error text when the probe failed. Untrusted data.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "http_status": {
+      "description": "HTTP status code, for an `http` check.",
+      "format": "uint16",
+      "maximum": 65535,
+      "minimum": 0,
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "state": {
+      "description": "Observed state: `up`, `down`, `degraded`, `error`.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "state",
+     "duration_ms"
+    ],
+    "type": "object"
+   }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "`create_monitors` result.",
+  "properties": {
+   "created": {
+    "format": "uint",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "results": {
+    "items": {
+     "$ref": "#/$defs/MonitorCreateOutcome"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "created",
+   "results"
+  ],
+  "title": "MonitorsCreated",
+  "type": "object"
+ },
+ "title": "Create monitors"
+}

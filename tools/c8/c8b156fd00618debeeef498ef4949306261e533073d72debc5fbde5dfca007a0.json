@@ -1,0 +1,186 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Run one read-only SELECT (DuckDB SQL) across the df_<id> dataframes that fdic_query_financials and fdic_get_deposits staged or an earlier register_as saved; joins, aggregates, window functions, and CTEs work. Before writing SQL, pass each table name to fdic_dataframe_describe to read its columns. DOUBLE columns come back as JSON numbers and dollar columns are thousands of US dollars; BIGINT results such as COUNT(*) come back as strings, so CAST them to INTEGER or DOUBLE for arithmetic. Writes, DDL, file-reading functions, and system catalogs are rejected. register_as materializes the result as a new dataframe with a fresh TTL.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "preview": {
+    "description": "Rows to return inline (0\u201310,000); defaults to row_limit, and a value above row_limit is treated as row_limit. Set it low when register_as keeps the full result.",
+    "maximum": 10000,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "register_as": {
+    "description": "Materialize the full result as a new dataframe under this unused name (df_XXXXX_XXXXX: uppercase letters and digits). A name already staged fails as register_as_clash \u2014 including on a repeat of a call that already saved it. The live dataframes share a 1,000,000-row budget: the oldest are dropped to make room, and a result over the budget on its own fails as register_as_too_large. Omit to return rows only.",
+    "pattern": "^df_[A-Z0-9]{5}_[A-Z0-9]{5}$",
+    "type": "string"
+   },
+   "row_limit": {
+    "default": 1000,
+    "description": "Hard cap on rows materialized (1\u201310,000). A query matching more stops here and row_count_capped comes back true; use register_as to keep the whole result.",
+    "maximum": 10000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "sql": {
+    "description": "One SELECT against df_<id> tables named in a dataset field or by fdic_dataframe_describe, up to 20,000 characters.",
+    "maxLength": 20000,
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "sql"
+  ],
+  "type": "object"
+ },
+ "name": "fdic_dataframe_query",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "columns",
+     "row_count",
+     "row_count_capped",
+     "rows"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cap": {
+    "description": "The cap that bound: preview when lower, else row_limit.",
+    "type": "number"
+   },
+   "columns": {
+    "description": "Columns in projection order.",
+    "items": {
+     "description": "Column name.",
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `canvas_unavailable`: DataCanvas is not configured in this deployment. `missing_table`: A table the SQL names is not staged \u2014 a df_ name that expired, was dropped to make room for newer dataframes, or is mistyped, or any other table name. `invalid_sql`: A SELECT fails to parse or prepare (syntax error, unknown column or function, bad expression). `sql_execution_error`: SELECT prepared but failed on the data. `non_select_statement`: The statement is not a SELECT, or cannot be parsed as one. `multi_statement`: The SQL holds more than one statement. `denied_function`: The SQL calls a file-reading or external-data table function such as read_csv or read_parquet. `plan_operator_not_allowed`: The query plan uses an operator outside the read-only allowlist (scans of staged tables, filters, joins, aggregates, set operations, sorts, window functions, CTEs, unnest). `system_catalog_access`: The SQL references a system catalog: information_schema, pg_catalog, sqlite_master, or a duckdb_*() function. `register_as_clash`: register_as names a dataframe that is already staged. `register_as_too_large`: The register_as result holds more rows than the staging budget (1,000,000 rows) allows on its own. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "canvas_unavailable",
+         "missing_table",
+         "invalid_sql",
+         "sql_execution_error",
+         "non_select_statement",
+         "multi_statement",
+         "denied_function",
+         "plan_operator_not_allowed",
+         "system_catalog_access",
+         "register_as_clash",
+         "register_as_too_large"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "expires_at": {
+    "description": "When the register_as dataframe is dropped (ISO 8601).",
+    "type": "string"
+   },
+   "notice": {
+    "description": "Guidance when the query returned no rows or a cap withheld some.",
+    "type": "string"
+   },
+   "registered_as": {
+    "description": "Name of the dataframe register_as created.",
+    "type": "string"
+   },
+   "row_count": {
+    "description": "Rows the query produced, up to row_limit; with register_as, the exact count of the new dataframe.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "row_count_capped": {
+    "description": "True when the query matched more rows than row_limit, so row_count is that cap.",
+    "type": "boolean"
+   },
+   "rows": {
+    "description": "Result rows, bounded by preview and row_limit.",
+    "items": {
+     "additionalProperties": {},
+     "description": "One result row: column \u2192 value.",
+     "propertyNames": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "shown": {
+    "description": "Rows returned inline.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when rows were withheld by preview or row_limit.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Query staged dataframes with SQL"
+}
