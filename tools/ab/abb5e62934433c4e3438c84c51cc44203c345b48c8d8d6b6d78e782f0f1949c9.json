@@ -1,0 +1,311 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Open in Studio"
+ },
+ "description": "Save the model as a kernelCAD project AND show it: persists a project revision, returns the interactive Studio viewer (MCP Apps / ChatGPT outputTemplate), and includes a PNG preview in the SAME tool result (image content + previewUrl when available). CONTINUE, DO NOT DUPLICATE: to change a model you already saved, pass `project: '<slug>'` from the last result (or from list_my_projects) \u2014 this adds a revision to that project. Without `project`, the project this chat already saved (or saved under the same title) is updated. Pass `new_project: true` only when the user wants a separate model. The result says which project it updated or created. Use this when the user wants to SEE or share the model \u2014 do NOT call get_latest_render afterwards for the happy path; the preview is already here when previewDelivered is true. Pass the full `.kcad` source as `code` (optional if you just called evaluate_script \u2014 omitting reuses that last evaluated source). Multi-body assemblies must declare connectors + mates/joints before publish \u2014 otherwise evaluate_script fails with mechanism.orphan-part (disconnected components). Use type: 'axis' + revolute mates for shafts/hinges/gears; type: 'frame' + fastened for rigid mounts; or arm.revolute/.prismatic/.ball/.fixed. Connector types are only frame|axis|planar|ball. Status fields: ok=true means publish succeeded (under CDN, meshStatus ready/building; ok=false + meshStatus=failed means hard mesh persist failure \u2014 do not claim the viewer is ready). previewDelivered=true means this result carries a displayable PNG \u2014 only then may you tell the user a preview was shown. meshStatus mirrors get_project (ready|building|failed|missing). Under CDN, open_in_studio waits up to ~20s (OPEN_IN_STUDIO_MESH_SYNC_BUDGET_MS) for the revision mesh before returning; heavier publishes usually land meshStatus=ready. If still meshStatus=building + meshReady=false: TRANSIENT \u2014 meshUrl is the expected CDN pin; embed retries 404s. Poll get_project({slug}) until ready, or re-call open_in_studio with same code+project \u2014 never treat building as permanent failure/404. ALWAYS pass `code` when you have it (avoid no_code_to_reuse); evaluate_script reuse is a fallback. Paint phases: projectSaved / meshReady / previewDelivered are set here; viewerPainted is ONLY true after widget ack (model context / widgetState) \u2014 never claim paint from this tool alone. Do NOT call get_model_mesh or get_latest_render for interactive paint. INDEPENDENT OF EXPORT/STEP: call this for shaded paint even while export is running, timed out, or returned export.deferred \u2014 mesh paint does not wait on STEP. Never block open_in_studio on a STEP download. Pass include_preview:false to skip the rasterizer (save + viewer URLs only). Trigger phrases: \"open it in Studio\", \"let me see it\", \"show me the model\"; also call after you finish a build and after each meaningful revision while iterating. ORGANIC/CAR SUCCESS GATE: for final likeness claims pass likeness_profile:\"automotive\" (and body_bbox/wheels/still_verdicts, or a prior verify body-likeness pass for this code). If the gate fails, ok:false with DX reference.likeness.publish-blocked|gate-required \u2014 do not claim success. Omit likeness_profile for WIP previews only.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "anon_token": {
+    "description": "Anonymous owner token returned as `anonToken` by an earlier open_in_studio result. Pass it on every open_in_studio call, also in a new chat, so all your anonymous projects stay together and move to the user's account when they sign in. Omit when you have none.",
+    "maxLength": 128,
+    "type": "string"
+   },
+   "attachments": {
+    "description": "Complementary project files referenced by relative path from the .kcad source.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "assetSha256": {
+       "pattern": "^[a-f0-9]{64}$",
+       "type": "string"
+      },
+      "bytesBase64": {
+       "type": "string"
+      },
+      "path": {
+       "maxLength": 240,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "required": [
+      "path"
+     ],
+     "type": "object"
+    },
+    "maxItems": 32,
+    "type": "array"
+   },
+   "body_bbox": {
+    "description": "Body AABB { min:[x,y,z], max:[x,y,z] } mm \u2014 for likeness_profile gate when no session attest.",
+    "type": "object"
+   },
+   "cabin_bbox": {
+    "description": "Optional cabin AABB for likeness gate.",
+    "type": "object"
+   },
+   "code": {
+    "description": "The full .kcad source of the model to open in Studio (the script you have been editing). Optional: omit to reuse the source from your most recent evaluate_script call.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "include_preview": {
+    "description": "Default true: render an iso PNG preview into this same tool result (reuses the server render cache when this source was already rendered). Set false to skip rasterization and return save/viewer URLs only.",
+    "type": "boolean"
+   },
+   "intent": {
+    "description": "The user's request in one sentence, in the user's own words and language (e.g. 'M4 bracket for a 25 mm tube, print on Bambu A1'). Helps kernelCAD improve; leave out personal data.",
+    "maxLength": 2000,
+    "type": "string"
+   },
+   "likeness_profile": {
+    "description": "Hard success gate for organic/car bodies. When set, open_in_studio returns ok:false unless body-likeness is publishReady (inline body_bbox/wheels/still_verdicts, or a prior verify body-likeness pass for this exact code). Omit for WIP previews.",
+    "enum": [
+     "automotive"
+    ],
+    "type": "string"
+   },
+   "new_project": {
+    "description": "Pass true only when the user wants a separate, new model. Default: continue this chat's project.",
+    "type": "boolean"
+   },
+   "parameters": {
+    "description": "Optional list of the model's editable parameters, so Studio can render parameter controls. Each item is one control derived from the .kcad params.",
+    "items": {
+     "properties": {
+      "defaultValue": {
+       "description": "Current/default value of the parameter; type matches `kind`.",
+       "oneOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "string"
+        }
+       ]
+      },
+      "description": {
+       "description": "Optional human-readable explanation of the parameter.",
+       "maxLength": 200,
+       "type": "string"
+      },
+      "kind": {
+       "description": "Control type Studio should render for this parameter.",
+       "enum": [
+        "number",
+        "integer",
+        "boolean",
+        "string"
+       ],
+       "type": "string"
+      },
+      "max": {
+       "description": "Optional inclusive upper bound (numeric params).",
+       "type": "number"
+      },
+      "min": {
+       "description": "Optional inclusive lower bound (numeric params).",
+       "type": "number"
+      },
+      "name": {
+       "description": "Parameter identifier as used in the script (e.g. \"width\").",
+       "maxLength": 40,
+       "minLength": 1,
+       "type": "string"
+      },
+      "step": {
+       "description": "Optional slider/step increment (numeric params).",
+       "type": "number"
+      },
+      "unit": {
+       "description": "Optional unit label shown next to the control (e.g. \"mm\", \"deg\").",
+       "maxLength": 8,
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "defaultValue",
+      "kind"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "project": {
+    "description": "Slug of the project to update (from the last open_in_studio result, a \"Saved to your projects\" note, list_my_projects, or a /p/<slug> link). Adds a new revision to that project instead of creating a new one, and live-updates the user's open Studio tab.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "require_stills": {
+    "description": "Forwarded to body-likeness gate (default true).",
+    "type": "boolean"
+   },
+   "slug": {
+    "description": "Older name for `project`. Use `project`.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "still_verdicts": {
+    "description": "Agent still checklist for likeness gate [{ code, passed, finding, view? }].",
+    "items": {
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "title": {
+    "description": "Optional human-readable title for the model (shown in Studio). Defaults to \"Model from Claude\".",
+    "type": "string"
+   },
+   "wheels": {
+    "description": "Wheel centres + radii for likeness gate [{ center:[x,y,z], radius }].",
+    "items": {
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [],
+  "type": "object"
+ },
+ "name": "open_in_studio",
+ "outputSchema": {
+  "additionalProperties": true,
+  "properties": {
+   "animUrl": {
+    "description": "CDN transforms-only animation bake URL when the script declares animationView(). ChatGPT embed Play/scrub uses this \u2014 no live session remesh.",
+    "type": "string"
+   },
+   "assetHashes": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "attachmentCount": {
+    "minimum": 0,
+    "type": "integer"
+   },
+   "embedUrl": {
+    "description": "Read-only, chrome-free /embed/<slug> viewer URL \u2014 drop into an <iframe> to embed the live model in any site or widget (no login). Includes meshUrl when a revision mesh artifact is available.",
+    "type": "string"
+   },
+   "hasAnimation": {
+    "description": "True when animUrl is present (animationView timeline baked at publish).",
+    "type": "boolean"
+   },
+   "meshError": {
+    "description": "Sanitized persist/repair error when meshStatus is failed.",
+    "type": "string"
+   },
+   "meshHint": {
+    "description": "When meshStatus=building: transient OCCT/CDN write \u2014 poll get_project or re-open_in_studio; never imply permanent 404/failure. Present under CDN when building.",
+    "type": "string"
+   },
+   "meshReady": {
+    "description": "True only when meshStatus===ready. building+meshUrl means embed is still polling.",
+    "type": "boolean"
+   },
+   "meshStatus": {
+    "description": "ready | building | failed | missing \u2014 explicit CDN artifact state (never silently omit meshUrl under CDN mode).",
+    "enum": [
+     "ready",
+     "building",
+     "failed",
+     "missing"
+    ],
+    "type": "string"
+   },
+   "meshUrl": {
+    "description": "Revision-matched mesh artifact URL when available \u2014 prefer this over re-executing CAD in the embed. When meshStatus is building, this is the expected CDN URL (retry until ready).",
+    "type": "string"
+   },
+   "ok": {
+    "description": "Whether publish succeeded. Under CDN mode, false when mesh persist hard-failed (meshStatus:failed) \u2014 never ok:true with meshUrl silently omitted.",
+    "type": "boolean"
+   },
+   "paintHint": {
+    "description": "Agent guidance: do not claim interactive paint until viewerPainted.",
+    "type": "string"
+   },
+   "previewBytes": {
+    "type": "number"
+   },
+   "previewCached": {
+    "type": "boolean"
+   },
+   "previewDelivered": {
+    "description": "True when this result includes a displayable PNG (image content and/or previewUrl). Only then may the agent claim a preview was shown to the user.",
+    "type": "boolean"
+   },
+   "previewHeight": {
+    "type": "number"
+   },
+   "previewHint": {
+    "type": "string"
+   },
+   "previewStatus": {
+    "description": "included = PNG + URL; included_inline = PNG only; unavailable = save ok but no preview; skipped = include_preview:false.",
+    "enum": [
+     "included",
+     "included_inline",
+     "unavailable",
+     "skipped"
+    ],
+    "type": "string"
+   },
+   "previewUrl": {
+    "description": "HTTPS URL of the PNG preview when storage signed successfully.",
+    "type": "string"
+   },
+   "previewView": {
+    "type": "string"
+   },
+   "previewWidth": {
+    "type": "number"
+   },
+   "projectSaved": {
+    "description": "True when the project/revision was persisted. Not the same as viewerPainted.",
+    "type": "boolean"
+   },
+   "project_note": {
+    "description": "Which project was updated or created, its URL, and how to keep working on it.",
+    "type": "string"
+   },
+   "serverBuild": {
+    "description": "Deploy identity so connector vs server mismatch is observable.",
+    "type": "string"
+   },
+   "slug": {
+    "description": "The project slug. Pass it back as `project` to save the next change to this project.",
+    "type": "string"
+   },
+   "updated": {
+    "description": "True when an existing project was updated; false when a new one was created.",
+    "type": "boolean"
+   },
+   "url": {
+    "description": "The /p/<slug> Studio link for the model.",
+    "type": "string"
+   },
+   "version": {
+    "description": "Immutable Studio revision persisted by this call. Read it with get_project_revision using this slug and version.",
+    "minimum": 1,
+    "type": "integer"
+   },
+   "viewerPainted": {
+    "description": "Always false on tools/call. The Studio widget sets viewerPainted:true via updateModelContext after a correlated model_displayed ack.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Open in Studio"
+}

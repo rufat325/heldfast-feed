@@ -1,0 +1,145 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "readOnlyHint": false,
+  "title": "Apply Timeline Manifest"
+ },
+ "description": "Write a WHOLE cut into a sequence in one call \u2014 clips in order with their lengths, an optional dissolve between them, an optional bed underneath. This is the counterpart to lab_get_sequence: that one reads the timeline, this one writes it. Prefer it over a chain of lab_add_clip calls whenever you already know the whole cut: a chain that breaks in the middle leaves half a sequence behind, this either applies or refuses. Costs nothing \u2014 it validates and writes rows, it generates nothing. Every video_id is checked against the project BEFORE anything is written, so a wrong id is a refusal here and not a gap in the cut nobody notices. Pass `sequence_id` to write into THAT sequence; omit it and a new one is created. Pass `sequence_id` WITHOUT a manifest to read back the stored cut as a manifest \u2014 for an agent that already has the sequence_id and wants to see what is in there before changing it. (The Resolve bridge does NOT go through here: it talks to the FilmLab server directly with its own bridge key and does not know this MCP.) Reworking a cut you read back? Keep each clip's `clip_id`. A clip that comes back with its identity keeps its track, its in-point in the source and its scene, and the shots bound to it stay bound; a clip without one is treated as new and gets a fresh identity, which orphans whatever pointed at the old one. Two honest limits: the Resolve bridge applies the clips but reports `uebergang` and the bed's level/fade as not applied (its scripting API has neither a transition call nor a clip volume property). The FilmLab sequence render applies the bed with its level and fade, but NOT `uebergang` yet \u2014 dissolves are stored and render as hard cuts (checked 2026-10-03).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "erwartete_revision": {
+    "description": "The `revision` you read (from lab_get_sequence or this tool's read-back). The cut is written only if the sequence still has exactly that content \u2014 otherwise nothing is written and you get `revision_veraltet` with the current revision: read again, merge, write again. Without it this tool still protects the moment between its own read and write, but not the time since YOU read the sequence.",
+    "maxLength": 64,
+    "type": "string"
+   },
+   "manifest": {
+    "description": "The cut as one object. Omit it only together with a `sequence_id`, to read back what is stored",
+    "properties": {
+     "bett": {
+      "description": "A bed under the whole cut. Stored on the sequence; the Resolve bridge places the clip but can set neither level nor fade",
+      "properties": {
+       "asset_key": {
+        "description": "Storage key of an audio file in this project (from lab_add_media or lab_list_assets). Stable \u2014 prefer it over a URL: the URLs lab_list_assets hands out are signed and expire after 24 h",
+        "type": "string"
+       },
+       "audio_id": {
+        "description": "Id of an audio row in this project (from lab_list_audio). One of audio_id, asset_key, url",
+        "type": "string"
+       },
+       "fade_s": {
+        "description": "Fade in and out of the bed",
+        "maximum": 30,
+        "minimum": 0,
+        "type": "number"
+       },
+       "pegel_db": {
+        "description": "Bed level relative to the clips",
+        "maximum": 6,
+        "minimum": -60,
+        "type": "number"
+       },
+       "url": {
+        "description": "Direct URL of the bed (external). A signed FilmLab asset URL is turned into its storage key, so it does not expire inside the sequence",
+        "type": "string"
+       }
+      },
+      "required": [
+       "pegel_db",
+       "fade_s"
+      ],
+      "type": "object"
+     },
+     "clips": {
+      "description": "The cut, in cutting order. The order here IS the order on the timeline",
+      "items": {
+       "properties": {
+        "asset_key": {
+         "description": "Storage key of a clip that has no video row. Either this or video_id",
+         "type": "string"
+        },
+        "clip_id": {
+         "description": "Identity of an EXISTING clip in this sequence, as read back by this tool or by lab_get_sequence. Pass it whenever you are reworking a cut you read: the clip keeps its track, its in-point in the source and its scene, and every shot bound to it stays bound. Omit it for a clip you are adding \u2014 one is assigned",
+         "type": "string"
+        },
+        "dauer_s": {
+         "description": "Length of this clip on the timeline. Required unless you give both in_s and out_s \u2014 a clip without a length would silently inherit the backend default, and the sequence duration and the render would drift apart",
+         "maximum": 300,
+         "minimum": 0.1,
+         "type": "number"
+        },
+        "in_s": {
+         "description": "In point inside the source clip",
+         "maximum": 3600,
+         "minimum": 0,
+         "type": "number"
+        },
+        "out_s": {
+         "description": "Out point inside the source clip \u2014 must be greater than in_s",
+         "maximum": 3600,
+         "minimum": 0,
+         "type": "number"
+        },
+        "video_id": {
+         "description": "Id of a generated video in THIS project (from lab_list_assets). Either this or asset_key",
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "maxItems": 200,
+      "minItems": 1,
+      "type": "array"
+     },
+     "uebergang": {
+      "description": "One transition kind between ALL clips. Stored on the sequence \u2014 but neither the Resolve bridge nor the FilmLab render applies it yet: the cut renders with hard cuts",
+      "properties": {
+       "art": {
+        "const": "dissolve",
+        "description": "Only 'dissolve' \u2014 nothing else is implemented downstream",
+        "type": "string"
+       },
+       "dauer_s": {
+        "description": "Length of each dissolve",
+        "maximum": 10,
+        "minimum": 0.1,
+        "type": "number"
+       }
+      },
+      "required": [
+       "art",
+       "dauer_s"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "clips"
+    ],
+    "type": "object"
+   },
+   "project_id": {
+    "description": "Project id (from lab_list_projects) \u2014 positive integer as string",
+    "type": "string"
+   },
+   "sequence_id": {
+    "description": "Sequence to write into (from lab_create_sequence/lab_list_sequences). Omit to create a new one. Given WITHOUT a manifest, the stored manifest is read back instead of written",
+    "type": "string"
+   },
+   "title": {
+    "description": "Title for the sequence created when `sequence_id` is omitted",
+    "type": "string"
+   }
+  },
+  "required": [
+   "project_id"
+  ],
+  "type": "object"
+ },
+ "name": "lab_timeline_apply",
+ "title": "Apply Timeline Manifest"
+}
