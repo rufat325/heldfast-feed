@@ -1,0 +1,311 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Weather forecast for coordinates: hourly and/or daily variables for up to 16 days ahead, with optional past_days (up to 92) for recent history. Use past_days instead of openmeteo_get_historical for dates within the last 1\u20135 days, since the archive\u2019s ERA5 components lag by up to ~5 days. Returns per-timestamp records \u2014 each hourly entry contains a \"time\" field (ISO 8601) plus one key per requested variable; each daily entry contains a \"time\" field (YYYY-MM-DD) plus requested variables. Common hourly variables: temperature_2m, precipitation, wind_speed_10m, relative_humidity_2m, cloud_cover, uv_index, apparent_temperature, precipitation_probability, weather_code, surface_pressure, visibility, wind_direction_10m, wind_gusts_10m, dew_point_2m. Common daily variables: temperature_2m_max, temperature_2m_min, precipitation_sum, wind_speed_10m_max, sunrise, sunset, uv_index_max, precipitation_hours, weather_code. Set current_variables for conditions at this instant \u2014 Open-Meteo serves those from 15-minute model data, which is more precise than picking the nearest hourly row, and the response carries a current object plus a current_units map. A wide window \u2014 a large past_days plus many hourly variables \u2014 produces thousands of records; these spill to a DataCanvas when canvas is enabled, returning canvas_id and table_name with truncated: true \u2014 inspect the staged columns with openmeteo_dataframe_describe, then query the full set with openmeteo_dataframe_query. With canvas disabled they return a bounded preview instead. At least one of current_variables, hourly_variables, or daily_variables is required.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "canvas_id": {
+    "description": "DataCanvas token for wide past_days or multi-variable queries. When a result is too large to return inline \u2014 driven by total payload size, so a wide multi-variable pull can spill at any row count \u2014 it spills to this canvas: pass the returned token to openmeteo_dataframe_describe to list the staged table and its columns, then to openmeteo_dataframe_query to run SQL against it. Omit to create a fresh canvas.",
+    "pattern": "^[A-Za-z0-9_-]{10}$",
+    "type": "string"
+   },
+   "current_variables": {
+    "description": "Variables to return for the current instant (e.g., [\"temperature_2m\", \"precipitation\", \"wind_speed_10m\", \"weather_code\"]). Uses Open-Meteo's 15-minute current-conditions data, so it answers \"what is it doing right now?\" without requesting an hourly series and picking a row. Takes the hourly variable names; a daily-only name such as temperature_2m_max comes back null with the unit \"undefined\" and is reported in the notice. Satisfies the variable requirement on its own.",
+    "items": {
+     "type": "string"
+    },
+    "maxItems": 50,
+    "type": "array"
+   },
+   "daily_variables": {
+    "description": "Daily summary variables (e.g., [\"temperature_2m_max\", \"temperature_2m_min\", \"precipitation_sum\", \"wind_speed_10m_max\", \"sunrise\", \"sunset\", \"uv_index_max\"]). Daily names only \u2014 an hourly name such as cloud_cover or temperature_2m belongs in hourly_variables and is rejected here; for a daily summary of an hourly variable use its published aggregate (cloud_cover_max, cloud_cover_mean, cloud_cover_min). At least one of current_variables, hourly_variables, or daily_variables is required.",
+    "items": {
+     "type": "string"
+    },
+    "maxItems": 50,
+    "type": "array"
+   },
+   "forecast_days": {
+    "default": 7,
+    "description": "Number of forecast days (1\u201316). Default 7.",
+    "maximum": 16,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "hourly_variables": {
+    "description": "Hourly variables to fetch (e.g., [\"temperature_2m\", \"precipitation\", \"wind_speed_10m\", \"relative_humidity_2m\", \"cloud_cover\", \"uv_index\", \"apparent_temperature\"]). Hourly names only \u2014 a daily aggregate such as temperature_2m_max or precipitation_sum belongs in daily_variables and is rejected here. At least one of current_variables, hourly_variables, or daily_variables is required.",
+    "items": {
+     "type": "string"
+    },
+    "maxItems": 50,
+    "type": "array"
+   },
+   "latitude": {
+    "description": "Latitude in decimal degrees (e.g., 47.6062 for Seattle). Use openmeteo_search_locations to resolve a place name to coordinates.",
+    "maximum": 90,
+    "minimum": -90,
+    "type": "number"
+   },
+   "longitude": {
+    "description": "Longitude in decimal degrees (e.g., -122.3321 for Seattle).",
+    "maximum": 180,
+    "minimum": -180,
+    "type": "number"
+   },
+   "past_days": {
+    "default": 0,
+    "description": "Include this many days of past data before today (0\u201392). Use for recent history \u2014 the archive\u2019s ERA5 components lag by up to ~5 days. Default 0.",
+    "maximum": 92,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "precipitation_unit": {
+    "default": "mm",
+    "description": "Precipitation unit: \"mm\" or \"inch\". Default \"mm\".",
+    "enum": [
+     "mm",
+     "inch"
+    ],
+    "type": "string"
+   },
+   "temperature_unit": {
+    "default": "celsius",
+    "description": "Temperature unit. Default \"celsius\".",
+    "enum": [
+     "celsius",
+     "fahrenheit"
+    ],
+    "type": "string"
+   },
+   "timezone": {
+    "default": "auto",
+    "description": "IANA timezone (e.g., \"America/Los_Angeles\") or \"auto\" to use the location's local timezone. Default \"auto\". The timezone from openmeteo_search_locations is ideal to pass here.",
+    "type": "string"
+   },
+   "wind_speed_unit": {
+    "default": "kmh",
+    "description": "Wind speed unit: \"kmh\" (km/h), \"mph\", \"ms\" (m/s), or \"kn\" (knots). Default \"kmh\".",
+    "enum": [
+     "kmh",
+     "mph",
+     "ms",
+     "kn"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "latitude",
+   "longitude"
+  ],
+  "type": "object"
+ },
+ "name": "openmeteo_get_forecast",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "latitude",
+     "longitude",
+     "elevation",
+     "timezone",
+     "utc_offset_seconds",
+     "record_count",
+     "truncated"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "canvas_id": {
+    "description": "DataCanvas token for the staged full dataset. Present only when truncated is true AND DataCanvas is enabled (CANVAS_PROVIDER_TYPE=duckdb) \u2014 absent otherwise, in which case the preview is all this response carries. Pass to openmeteo_dataframe_describe to list the staged table and its columns, then to openmeteo_dataframe_query to run SQL against it.",
+    "type": "string"
+   },
+   "current": {
+    "additionalProperties": {
+     "type": [
+      "string",
+      "number",
+      "null"
+     ]
+    },
+    "description": "Conditions at a single instant: one key per requested current variable alongside time and interval. Units are in the current_units map. Absent when current_variables was not requested.",
+    "properties": {
+     "interval": {
+      "description": "Update cadence of the current-conditions data, in seconds (900 = 15 minutes) \u2014 metadata, not a requested variable",
+      "type": "number"
+     },
+     "time": {
+      "description": "Timestamp of these values (ISO 8601, in the resolved timezone)",
+      "type": "string"
+     }
+    },
+    "required": [
+     "time",
+     "interval"
+    ],
+    "type": "object"
+   },
+   "current_units": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "description": "Map of key \u2192 unit string for the current block, covering time and interval as well as each requested variable (e.g., {\"interval\": \"seconds\", \"temperature_2m\": \"\u00b0C\"}). Absent when no current_variables were requested.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "daily": {
+    "description": "Per-day records. Each object has a \"time\" field (YYYY-MM-DD) plus one key per requested variable with its value. Units are in the daily_units map. Absent when only hourly_variables were requested. When truncated, contains only a preview \u2014 query canvas_id for the full dataset when one is present.",
+    "items": {
+     "additionalProperties": {},
+     "propertyNames": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "daily_units": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "description": "Map of variable name \u2192 unit string for daily data. Absent when no daily_variables were requested.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "elevation": {
+    "description": "Terrain elevation at grid point (meters)",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_variable`: An unknown variable name was requested. `variable_wrong_cadence`: A variable sat in the cadence field Open-Meteo does not document it under \u2014 for example cloud_cover in daily_variables, or temperature_2m_max in hourly_variables \u2014 caught before the request is sent. `no_variables_requested`: None of current_variables, hourly_variables, or daily_variables was provided. `invalid_timezone`: timezone was blank, or upstream did not recognize the requested time zone. `request_too_large`: Open-Meteo refused the request as asking for too much data in one call. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_variable",
+         "variable_wrong_cadence",
+         "no_variables_requested",
+         "invalid_timezone",
+         "request_too_large"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "hourly": {
+    "description": "Per-hour records. Each object has a \"time\" field (ISO 8601) plus one key per requested variable with its value. Units are in the hourly_units map. Absent when only daily_variables were requested. When truncated, contains only a preview \u2014 query canvas_id for the full dataset when one is present.",
+    "items": {
+     "additionalProperties": {},
+     "propertyNames": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "hourly_units": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "description": "Map of variable name \u2192 unit string for hourly data (e.g., {\"temperature_2m\": \"\u00b0C\", \"precipitation\": \"mm\"}). Absent when no hourly_variables were requested.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "latitude": {
+    "description": "Snapped latitude (Open-Meteo snaps to nearest grid point)",
+    "type": "number"
+   },
+   "longitude": {
+    "description": "Snapped longitude",
+    "type": "number"
+   },
+   "notice": {
+    "description": "Everything this response needs to say beyond the data, composed into one advisory: columns the endpoint returned with the unit \"undefined\" (a name it parsed but does not serve in the requested cadence); recognized variables whose requested window falls outside the data's coverage, with the timestamps that do carry values; and, when the result spilled, either the canvas and table holding the full row set plus the two dataframe tools that read it, or \u2014 with DataCanvas disabled \u2014 why there is no canvas_id and how to reach the rows the preview omits.",
+    "type": "string"
+   },
+   "record_count": {
+    "description": "Total number of records (hourly + daily rows) \u2014 the full upstream total when truncated is true, not the combined length of the hourly and daily previews.",
+    "type": "number"
+   },
+   "table_name": {
+    "description": "DuckDB table name for the staged data \u2014 use as the FROM target in openmeteo_dataframe_query SQL; openmeteo_dataframe_describe lists its columns. Present only alongside canvas_id.",
+    "type": "string"
+   },
+   "timezone": {
+    "description": "Resolved IANA timezone",
+    "type": "string"
+   },
+   "truncated": {
+    "description": "True when the response was too large to return inline, so hourly and daily carry a bounded preview rather than the full set. With DataCanvas enabled the complete data is staged at canvas_id \u2014 every hourly and daily row, including any column the preview omits. With it disabled there is no canvas_id, and the omitted rows are reached only by narrowing the request.",
+    "type": "boolean"
+   },
+   "utc_offset_seconds": {
+    "description": "UTC offset in seconds for this timezone at query time",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Openmeteo Get Forecast"
+}

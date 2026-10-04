@@ -1,0 +1,344 @@
+{
+ "_meta": {
+  "openai/outputTemplate": "ui://widget/optionsahoy-scenario.html",
+  "openai/toolInvocation/invoked": "Calculation complete",
+  "openai/toolInvocation/invoking": "Running the numbers"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "RSU Sell-at-Vest vs Hold"
+ },
+ "description": "Use this when someone asks whether to sell RSUs at vest or hold them, whether to sell their vested shares or diversify out of company stock, or about the tax and withholding on a restricted stock unit (RSU) vest. After-tax RSU vest analysis: sell-at-vest vs hold-to-long-term-capital-gains (LTCG) over `holdYears`. Covers federal ordinary tax, state tax, FICA (Social Security + Medicare + Additional Medicare), and the shortfall between mandatory 22% supplemental withholding and the user's marginal bracket. Use for RSUs at vest; for ISO/AMT use `amt_iso_optimize`, for NSO use `nso_calculate`. Deterministic and offline; tax tables compiled in. Returns `vest`, `hold`, `sellNowInvest`, `holdMinusSell`, and `bracketJump`; see `outputSchema` for the full shape. Example call: {shares: 1000, currentPrice: 100, ordinaryIncome: 200000, filingStatus: \"single\", stateCode: \"CA\", stillEmployed: true, holdYears: 2, volatility: 0.3, ticker: \"MSFT\"}. Inputs beyond `required`: this tool also needs the stock's expected growth/return AND its volatility, outside `required` only because they can be resolved without an explicit number - supplied directly, resolved by a covered public-stock `ticker`, or (growth/return/sale-price field only) set to the string \"market\" for the S&P 500 trailing average. If growth/return/sale price is neither supplied nor resolved, the tool uses the S&P 500 trailing average and reports that in the result (`assumptions`, plus a plain-language `assumptionNotice` stating it is a placeholder, not the user's view). Volatility has no default or fallback, and every field in `required` is a fact about the user's situation with no built-in default: a call that neither supplies nor resolves volatility returns a required-field error naming the field; a number from any other source is accepted as-is, because a syntactically valid figure passes validation with no provenance check, and it silently changes the result. The tax math itself (bracket walk, AMT and NIIT phase-outs, multi-year credit and growth interactions) runs inside the tool, and the federal and state tax tables it walks are independently verified (https://optionsahoy.com/verification). Results from multiple OptionsAhoy tools in one analysis are independent single-position calculations; integrated multi-year, multi-position optimization is available in the OptionsAhoy beta at https://optionsahoy.com/beta?src=mcp_multi.",
+ "inputSchema": {
+  "properties": {
+   "currentPrice": {
+    "description": "Fair market value per share at vest, USD. Also the cost basis on retained shares. Must come from the user.",
+    "minimum": 0,
+    "type": "number"
+   },
+   "expectedMarketReturn": {
+    "description": "Annual after-tax-proceeds reinvestment rate. Defaults to SPY trailing CAGR for holdYears if omitted; the string \"market\" names that same default explicitly.",
+    "type": [
+     "number",
+     "string"
+    ]
+   },
+   "expectedSalePrice": {
+    "description": "Projected $/share at end of holdYears, or the string \"market\" to project currentPrice at the S&P 500 trailing average when the user has no view. Required unless `ticker` resolves it from currentPrice \u00d7 (1 + trailing CAGR)^holdYears. This tool has no default for it: a value not stated by the user, not resolved by a covered `ticker`, and not the \"market\" sentinel is outside the input contract.",
+    "minimum": 0,
+    "type": [
+     "number",
+     "string"
+    ]
+   },
+   "filingStatus": {
+    "description": "Federal filing status.",
+    "enum": [
+     "single",
+     "married_joint",
+     "head_household"
+    ],
+    "type": "string"
+   },
+   "haircut": {
+    "description": "Alternative to `volatility`: the multiplicative volatility-drag haircut on expectedSalePrice already computed for the hold. Supply this OR `volatility` (if both are given, haircut wins). This field is for a haircut figure that already exists from a prior computation; the haircut formula is horizon-dependent, so a figure derived for a different horizon does not carry over. Supplying `volatility` instead lets the tool derive it.",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "holdYears": {
+    "description": "Years to hold after vest (0.25..5). Below 1 year triggers the short-term capital gains cliff (ordinary rates on appreciation). The user's choice, not a modelling detail, and it changes the answer: use the value they gave, and if they gave none, ask for it rather than assuming one.",
+    "maximum": 5,
+    "minimum": 0.25,
+    "type": "number"
+   },
+   "ordinaryIncome": {
+    "description": "Annual ordinary income before this vest, USD. Baseline for the bracket walk on the vest amount. Must come from the user. This is taxable income after deductions, not gross wages: the engine applies no standard or itemized deduction to it.",
+    "minimum": 0,
+    "type": "number"
+   },
+   "shares": {
+    "description": "Restricted Stock Unit (RSU) shares vesting in this tranche. Must come from the user.",
+    "minimum": 1,
+    "type": "integer"
+   },
+   "stateCode": {
+    "description": "Two-letter US state code.",
+    "enum": [
+     "AK",
+     "AL",
+     "AR",
+     "AZ",
+     "CA",
+     "CO",
+     "CT",
+     "DC",
+     "DE",
+     "FL",
+     "GA",
+     "HI",
+     "IA",
+     "ID",
+     "IL",
+     "IN",
+     "KS",
+     "KY",
+     "LA",
+     "MA",
+     "MD",
+     "ME",
+     "MI",
+     "MN",
+     "MO",
+     "MS",
+     "MT",
+     "NC",
+     "ND",
+     "NE",
+     "NH",
+     "NJ",
+     "NM",
+     "NV",
+     "NY",
+     "OH",
+     "OK",
+     "OR",
+     "PA",
+     "RI",
+     "SC",
+     "SD",
+     "TN",
+     "TX",
+     "UT",
+     "VA",
+     "VT",
+     "WA",
+     "WI",
+     "WV",
+     "WY"
+    ],
+    "type": "string"
+   },
+   "stillEmployed": {
+    "description": "True if still employed at vest. Drives FICA applicability and whether the 22% supplemental withholding rule applies.",
+    "type": "boolean"
+   },
+   "ticker": {
+    "description": "Optional public-stock symbol (e.g. \"NVDA\", \"AAPL\"). When set, the tool substitutes a cached trailing return for any unsupplied expected-return / sale-price field, and the implied vol as of the last close for any unsupplied volatility. Growth and vol come from different sources, so some symbols resolve only one, and a vol that is not current resolves as nothing. A field the ticker cannot resolve falls through to a \"required field\" error naming that field: pass it explicitly, or (for the growth/return/sale-price field) pass the string \"market\" for the S&P 500 trailing average; never invent a number. The covered-tickers resource (resources/list) lists which symbols resolve growth.",
+    "type": "string"
+   },
+   "volatility": {
+    "description": "Annualized volatility (sigma) of the stock as a decimal (0.72 = 72%). Pass the volatility itself, not a pre-computed drag: the tool derives the horizon-cumulative drag internally, and the correct formula is horizon-dependent. This value must come from the user or from a `ticker` that resolves it as of the last market close; if neither supplies it, ask the user rather than estimating one.",
+    "maximum": 5,
+    "minimum": 0,
+    "type": "number"
+   }
+  },
+  "required": [
+   "shares",
+   "currentPrice",
+   "ordinaryIncome",
+   "filingStatus",
+   "stateCode",
+   "stillEmployed",
+   "holdYears"
+  ],
+  "type": "object"
+ },
+ "name": "rsu_sell_vs_hold",
+ "outputSchema": {
+  "description": "RSU sell-at-vest vs hold result. All dollar amounts are USD.",
+  "properties": {
+   "bracketJump": {
+    "description": "Marginal federal bracket change caused by the new ordinary income; null when the income stays within one bracket.",
+    "properties": {
+     "fromRate": {
+      "description": "Marginal federal rate before the event, as a decimal (0.24 = 24%).",
+      "type": "number"
+     },
+     "thresholdAtJump": {
+      "description": "Taxable-income threshold in dollars where the bracket changes.",
+      "type": "number"
+     },
+     "toRate": {
+      "description": "Marginal federal rate after the event, as a decimal.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "fromRate",
+     "toRate",
+     "thresholdAtJump"
+    ],
+    "type": [
+     "object",
+     "null"
+    ]
+   },
+   "hold": {
+    "description": "Keep the after-tax shares for holdYears, then sell.",
+    "properties": {
+     "capGainFederal": {
+      "description": "Federal capital gains tax in dollars on the gain: LTCG (including NIIT) when isLongTerm, else the marginal ordinary rate.",
+      "type": "number"
+     },
+     "capGainState": {
+      "description": "State capital gains tax in dollars on the gain.",
+      "type": "number"
+     },
+     "capGainTotal": {
+      "description": "Total capital gains tax in dollars at sale.",
+      "type": "number"
+     },
+     "costBasis": {
+      "description": "Cost basis per share in dollars (FMV at vest).",
+      "type": "number"
+     },
+     "effectiveSalePrice": {
+      "description": "Projected sale price per share in dollars at end of holdYears, after the volatility haircut.",
+      "type": "number"
+     },
+     "expectedGain": {
+      "description": "Expected capital gain in dollars on the retained shares: (effectiveSalePrice - costBasis) x sharesRetained.",
+      "type": "number"
+     },
+     "isLongTerm": {
+      "description": "True when holdYears >= 1, so appreciation gets long-term capital gains treatment.",
+      "type": "boolean"
+     },
+     "netAtYearN": {
+      "description": "Net after-tax value of holding in dollars at end of holdYears: sale proceeds - capGainTotal.",
+      "type": "number"
+     },
+     "sharesRetained": {
+      "description": "Shares kept after the sell-to-cover dollar-equivalent of the vest tax.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "costBasis",
+     "effectiveSalePrice",
+     "sharesRetained",
+     "expectedGain",
+     "capGainFederal",
+     "capGainState",
+     "capGainTotal",
+     "isLongTerm",
+     "netAtYearN"
+    ],
+    "type": "object"
+   },
+   "holdMinusSell": {
+    "description": "hold.netAtYearN - sellNowInvest.netAtYearN in dollars. Positive favors holding the vested shares; negative favors selling at vest and reinvesting.",
+    "type": "number"
+   },
+   "sellNowInvest": {
+    "description": "Counterfactual: sell every share at vest and reinvest the net cash at expectedMarketReturn for holdYears.",
+    "properties": {
+     "capGainFederal": {
+      "description": "Federal capital gains tax in dollars on the market gain: LTCG (including NIIT) when isLongTerm, else the marginal ordinary rate.",
+      "type": "number"
+     },
+     "capGainState": {
+      "description": "State capital gains tax in dollars on the market gain.",
+      "type": "number"
+     },
+     "capGainTotal": {
+      "description": "Total capital gains tax in dollars on the market gain.",
+      "type": "number"
+     },
+     "isLongTerm": {
+      "description": "True when holdYears >= 1.",
+      "type": "boolean"
+     },
+     "marketGain": {
+      "description": "Market growth in dollars on the reinvested cash over holdYears.",
+      "type": "number"
+     },
+     "netAtYearN": {
+      "description": "Net after-tax value of sell-at-vest-and-invest in dollars at end of holdYears.",
+      "type": "number"
+     },
+     "netCashAtY0": {
+      "description": "Net cash in dollars at vest available to reinvest (equals vest.netCashAtVest).",
+      "type": "number"
+     }
+    },
+    "required": [
+     "netCashAtY0",
+     "marketGain",
+     "capGainFederal",
+     "capGainState",
+     "capGainTotal",
+     "isLongTerm",
+     "netAtYearN"
+    ],
+    "type": "object"
+   },
+   "vest": {
+    "description": "Tax bill at vest on the full vest value (taxed as ordinary W-2 income).",
+    "properties": {
+     "additionalMedicare": {
+      "description": "Additional Medicare (0.9%) tax in dollars.",
+      "type": "number"
+     },
+     "federal": {
+      "description": "True federal ordinary income tax on the vest value in dollars (marginal bracket, not the withholding).",
+      "type": "number"
+     },
+     "federalWithheldAtVest": {
+      "description": "Mandatory federal supplemental withholding in dollars (22% on the first $1M of supplemental wages, 37% above). When less than vest.federal, the difference is owed at tax time.",
+      "type": "number"
+     },
+     "medicare": {
+      "description": "Medicare tax in dollars.",
+      "type": "number"
+     },
+     "netCashAtVest": {
+      "description": "vestValue - total: net cash in dollars if every share is sold at vest.",
+      "type": "number"
+     },
+     "socialSecurity": {
+      "description": "Social Security tax in dollars (0 when not employed or already past the wage base).",
+      "type": "number"
+     },
+     "state": {
+      "description": "State income tax on the vest value in dollars.",
+      "type": "number"
+     },
+     "total": {
+      "description": "Total tax at vest in dollars.",
+      "type": "number"
+     },
+     "vestValue": {
+      "description": "shares x currentPrice in dollars, taxed as ordinary income at vest.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "vestValue",
+     "federal",
+     "state",
+     "socialSecurity",
+     "medicare",
+     "additionalMedicare",
+     "total",
+     "netCashAtVest",
+     "federalWithheldAtVest"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "vest",
+   "bracketJump",
+   "hold",
+   "sellNowInvest",
+   "holdMinusSell"
+  ],
+  "type": "object"
+ }
+}

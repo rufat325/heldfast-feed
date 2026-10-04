@@ -1,0 +1,323 @@
+{
+ "_meta": {
+  "openai/outputTemplate": "ui://widget/optionsahoy-scenario.html",
+  "openai/toolInvocation/invoked": "Calculation complete",
+  "openai/toolInvocation/invoking": "Running the numbers"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "QSBS Qualification Check"
+ },
+ "description": "Use this when someone asks whether stock qualifies for the qualified small business stock (QSBS) / Section 1202 gain exclusion, whether their startup stock can be sold tax-free, about the 5-year QSBS holding period, or how much of the gain would be federal-tax-free. Section 1202 Qualified Small Business Stock (QSBS) qualification check. Use this tool for \u00a71202 / QSBS qualification. For AMT timing on the ISO exercise that produced the QSBS holding, use `amt_iso_optimize` first. Parameter interactions: `entityType=\"other\"` short-circuits the verdict to `disqualified` regardless of other fields; `acquisitionMethod=\"secondary\"` does the same; `assetCategory=\"over-75m\"` likewise fails immediately. Under `acquisitionMethod=\"gift-or-inheritance\"` the holding period tacks from the original holder, so supply that earlier date as `acquisitionDate` if known. `acquisitionDate` drives era classification independent of holding period: before 2009-02-17 caps exclusion at 50%, 2009-02-17 to 2010-09-27 at 75%, 2010-09-28 through 2025-07-04 reaches 100% after a 5-year hold (pre-OBBBA), and 2025-07-05 onward uses the OBBBA tiered schedule (50% at 3y, 75% at 4y, 100% at 5y). The per-issuer exclusion cap is `max($10M, 10 \u00d7 adjustedBasis)` ($15M base for stock acquired after July 4, 2025); when `expectedGain` exceeds it, the overage is fully taxable and the response surfaces `taxableGain` for that delta. `industry` is the dominant industry (>80% revenue) when the corp operates in multiple. Evaluates the six statutory tests: domestic C-corporation entity, original-issuance acquisition method, gross assets at issuance (under $50M / $50-75M / over $75M tiered cap), qualified-trade-or-business industry, active-business posture (80% asset use), and holding period (3 / 4 / 5-year tiers under OBBBA). Pure stateless check: no filing, reporting, or IRS lookup happens; the six tests are evaluated against the bundled OBBBA 2026 rule set and per-state conformity table. Returns a top-level object with keys: `verdict` (qualifies / partial / too-soon / caveats / disqualified), `exclusionPercent` (0..1), `perIssuerCap` and `tenXBasisCap` (the two cap inputs), `applicableCap` (max of the two), `excludableGain`, `taxableGain`, `federalTaxSaved` (LTCG bracket on the excluded gain), `stateConforms` (full / partial / none) and `stateNote` (per-state explanation), `holdingYears`, `yearsUntilFullExclusion`, `era` (pre-2009 / pre-2010 / pre-obbba / obbba), and `tests` (array of {id, label, status, detail} for each of the six statutory tests, identifying any gate that failed). Example call: {acquisitionDate: \"2020-01-15\", saleDate: \"2026-06-01\", entityType: \"us-c-corp\", acquisitionMethod: \"original-issuance\", assetCategory: \"under-50m\", industry: \"tech-software\", activeBusiness: \"yes\", adjustedBasis: 100000, expectedGain: 5000000, stateCode: \"CA\", ordinaryIncome: 250000, filingStatus: \"single\"}. Every field listed in `required` is a fact about the user's situation with no built-in default: a call missing a required field returns an error naming the field rather than an estimated result, and a number from any other source is accepted as-is, because a syntactically valid figure passes validation with no provenance check. The math runs inside the tool with no randomness and no model inference. Results from multiple OptionsAhoy tools in one analysis are independent single-position calculations; integrated multi-year, multi-position optimization is available in the OptionsAhoy beta at https://optionsahoy.com/beta?src=mcp_multi. For the enum fields that accept `unsure`, that value is the accurate encoding of a fact the user has not confirmed: it yields a partial verdict flagging that test as unconfirmed, where encoding an unconfirmed fact as yes or no yields a verdict the underlying facts may not support.",
+ "inputSchema": {
+  "properties": {
+   "acquisitionDate": {
+    "description": "Date the QSBS shares were acquired (YYYY-MM-DD). Drives the holding-period test and the era classification (50% pre-2009 era, 75% pre-2010 era, 100% after a 5-year hold for acquisitions from 2010-09-28 through 2025-07-04, OBBBA tiered after 2025-07-05).",
+    "format": "date",
+    "type": "string"
+   },
+   "acquisitionMethod": {
+    "description": "\u00a71202 Test 2: How the user obtained the shares. 'original-issuance' (direct from the company) qualifies. 'gift-or-inheritance' tacks the original holder's basis and clock. 'secondary' (bought on a secondary market) does NOT qualify. 'unsure' triggers a partial verdict.",
+    "enum": [
+     "original-issuance",
+     "gift-or-inheritance",
+     "secondary",
+     "unsure"
+    ],
+    "type": "string"
+   },
+   "activeBusiness": {
+    "description": "\u00a71202 Test 5: Did the corporation use \u226580% of its assets in the active conduct of a qualified trade throughout the holding period? 'yes' qualifies. 'no' fails. 'unsure' returns a partial verdict (user should confirm with their CFO).",
+    "enum": [
+     "yes",
+     "no",
+     "unsure"
+    ],
+    "type": "string"
+   },
+   "adjustedBasis": {
+    "description": "Adjusted basis of the QSBS shares, USD. Used in the 10\u00d7 basis cap: the per-issuer exclusion cap is max($10M, 10 \u00d7 adjustedBasis). Must come from the user.",
+    "minimum": 0,
+    "type": "number"
+   },
+   "assetCategory": {
+    "description": "\u00a71202 Test 3: Aggregate gross assets of the issuing corporation at the time of issuance. 'under-50m' qualifies pre-OBBBA. '50m-to-75m' qualifies ONLY under OBBBA 2026+ (post-2025-07-05). 'over-75m' never qualifies. 'unsure' returns a partial verdict.",
+    "enum": [
+     "under-50m",
+     "50m-to-75m",
+     "over-75m",
+     "unsure"
+    ],
+    "type": "string"
+   },
+   "entityType": {
+    "description": "\u00a71202 Test 1: Type of issuer at the time of acquisition. Only 'us-c-corp' qualifies. S-corps, LLCs, partnerships, and foreign entities fail.",
+    "enum": [
+     "us-c-corp",
+     "other"
+    ],
+    "type": "string"
+   },
+   "expectedGain": {
+    "description": "Expected total gain on sale, USD. Compared against the per-issuer exclusion cap to compute excludableGain and taxableGain. Must come from the user.",
+    "type": "number"
+   },
+   "filingStatus": {
+    "description": "Federal filing status. Drives the LTCG bracket on any non-excluded gain and the NIIT MAGI threshold.",
+    "enum": [
+     "single",
+     "married_joint",
+     "head_household"
+    ],
+    "type": "string"
+   },
+   "industry": {
+    "description": "\u00a71202 Test 4: Industry classification of the corporation. Four values qualify: tech-software, manufacturing, biotech-research, retail-wholesale. Specified service trades or businesses (law, engineering, architecture, accounting-actuarial, consulting, finance, health-services, performing-arts) do NOT qualify, and farming, extraction and hospitality are separately excluded, so they do not qualify either. other-services and unsure return a caveated verdict rather than a pass or fail.",
+    "enum": [
+     "tech-software",
+     "manufacturing",
+     "biotech-research",
+     "retail-wholesale",
+     "health-services",
+     "law",
+     "engineering",
+     "architecture",
+     "accounting-actuarial",
+     "consulting",
+     "finance",
+     "farming",
+     "extraction",
+     "hospitality",
+     "performing-arts",
+     "other-services",
+     "unsure"
+    ],
+    "type": "string"
+   },
+   "ordinaryIncome": {
+    "description": "Annual ordinary income, USD. Baseline for the federal LTCG bracket on any taxable gain. Must come from the user. This is taxable income after deductions, not gross wages: the engine applies no standard or itemized deduction to it.",
+    "minimum": 0,
+    "type": "number"
+   },
+   "saleDate": {
+    "description": "Planned or actual sale date (YYYY-MM-DD). Together with acquisitionDate determines holdingYears.",
+    "format": "date",
+    "type": "string"
+   },
+   "stateCode": {
+    "description": "Two-letter US state code. Drives the state-conformity verdict: CA/AL/PA/MS do not conform (full state tax owed); HI/MA partial; NJ 2026-01-01 conformity switch; most others fully conform.",
+    "enum": [
+     "AK",
+     "AL",
+     "AR",
+     "AZ",
+     "CA",
+     "CO",
+     "CT",
+     "DC",
+     "DE",
+     "FL",
+     "GA",
+     "HI",
+     "IA",
+     "ID",
+     "IL",
+     "IN",
+     "KS",
+     "KY",
+     "LA",
+     "MA",
+     "MD",
+     "ME",
+     "MI",
+     "MN",
+     "MO",
+     "MS",
+     "MT",
+     "NC",
+     "ND",
+     "NE",
+     "NH",
+     "NJ",
+     "NM",
+     "NV",
+     "NY",
+     "OH",
+     "OK",
+     "OR",
+     "PA",
+     "RI",
+     "SC",
+     "SD",
+     "TN",
+     "TX",
+     "UT",
+     "VA",
+     "VT",
+     "WA",
+     "WI",
+     "WV",
+     "WY"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "acquisitionDate",
+   "saleDate",
+   "entityType",
+   "acquisitionMethod",
+   "assetCategory",
+   "industry",
+   "activeBusiness",
+   "adjustedBasis",
+   "expectedGain",
+   "stateCode",
+   "ordinaryIncome",
+   "filingStatus"
+  ],
+  "type": "object"
+ },
+ "name": "qsbs_check",
+ "outputSchema": {
+  "description": "Section 1202 QSBS qualification result. All dollar amounts are USD.",
+  "properties": {
+   "applicableCap": {
+    "description": "max(perIssuerCap, tenXBasisCap): the exclusion cap actually applied, in dollars.",
+    "type": "number"
+   },
+   "cappedOverageNote": {
+    "description": "Present only when expectedGain exceeds applicableCap and an exclusion is in play: explains that the overage is fully taxable regardless of holding period and that spreading shares across separate taxpayers (e.g. non-grantor trusts) can multiply the per-issuer exclusion. Omitted otherwise.",
+    "type": "string"
+   },
+   "era": {
+    "description": "Acquisition-era classification that sets the exclusion schedule (50% pre-2009 era, 75% pre-2010 era, 100% at 5y pre-OBBBA, tiered 50/75/100% at 3/4/5y under OBBBA).",
+    "enum": [
+     "pre-2009",
+     "pre-2010",
+     "pre-obbba",
+     "obbba"
+    ],
+    "type": "string"
+   },
+   "excludableGain": {
+    "description": "Portion of expectedGain excludable from federal tax in dollars.",
+    "type": "number"
+   },
+   "exclusionPercent": {
+    "description": "Fraction of the capped gain excludable from federal tax, per the era and holding-period tier.",
+    "enum": [
+     0,
+     0.5,
+     0.75,
+     1
+    ],
+    "type": "number"
+   },
+   "federalTaxSaved": {
+    "description": "Federal LTCG tax (including NIIT) avoided on the excluded gain, in dollars.",
+    "type": "number"
+   },
+   "holdingYears": {
+    "description": "Calendar-aware years between acquisitionDate and saleDate.",
+    "type": "number"
+   },
+   "perIssuerCap": {
+    "description": "Statutory per-issuer cap in dollars: $10M pre-OBBBA, $15M for stock acquired after July 4, 2025.",
+    "type": "number"
+   },
+   "stateConforms": {
+    "description": "Whether the user state conforms to the federal 1202 exclusion.",
+    "enum": [
+     "full",
+     "partial",
+     "none"
+    ],
+    "type": "string"
+   },
+   "stateNote": {
+    "description": "Per-state conformity explanation. May be omitted.",
+    "type": "string"
+   },
+   "taxableGain": {
+    "description": "Portion of expectedGain still federally taxable in dollars (overage above the cap plus any non-excluded fraction).",
+    "type": "number"
+   },
+   "tenXBasisCap": {
+    "description": "10 x adjustedBasis cap in dollars.",
+    "type": "number"
+   },
+   "tests": {
+    "description": "The six statutory tests with per-test status, identifying any gate that failed.",
+    "items": {
+     "properties": {
+      "detail": {
+       "description": "One-line explanation of the test outcome.",
+       "type": "string"
+      },
+      "id": {
+       "description": "Stable test identifier.",
+       "type": "string"
+      },
+      "label": {
+       "description": "Human-readable test name.",
+       "type": "string"
+      },
+      "status": {
+       "description": "\"wait\" means the test will pass with more holding time.",
+       "enum": [
+        "pass",
+        "fail",
+        "unsure",
+        "wait"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "id",
+      "label",
+      "status",
+      "detail"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "verdict": {
+    "description": "Overall verdict. \"partial\" = qualifies but at a sub-100% exclusion tier (e.g. an OBBBA 3- or 4-year hold gives 50% or 75%). \"caveats\" = qualifies, but one or more tests returned \"unsure\" (pass conditional on facts the caller marked unknown). \"too-soon\" = the holding period has not reached any exclusion tier yet.",
+    "enum": [
+     "qualifies",
+     "partial",
+     "too-soon",
+     "caveats",
+     "disqualified"
+    ],
+    "type": "string"
+   },
+   "yearsUntilFullExclusion": {
+    "description": "Additional years to hold before reaching the 100% exclusion tier; 0 when already reached.",
+    "type": "number"
+   }
+  },
+  "required": [
+   "verdict",
+   "exclusionPercent",
+   "perIssuerCap",
+   "tenXBasisCap",
+   "applicableCap",
+   "excludableGain",
+   "taxableGain",
+   "federalTaxSaved",
+   "stateConforms",
+   "holdingYears",
+   "yearsUntilFullExclusion",
+   "era",
+   "tests"
+  ],
+  "type": "object"
+ }
+}

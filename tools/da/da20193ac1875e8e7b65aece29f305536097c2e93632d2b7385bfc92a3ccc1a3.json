@@ -1,0 +1,125 @@
+{
+ "_meta": {
+  "ui": {
+   "resourceUri": "ui://filmlab/preview"
+  }
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "readOnlyHint": false,
+  "title": "Generate Images"
+ },
+ "description": "Generate an image on the production pipeline (fal.ai, quota-tracked, persisted to the project's gallery). Waits up to `wait_s` seconds (default 45) for the image and then answers with the finished rows \u2014 image_url set, inline previews attached, so the picture is in the answer like lab_job_status with preview. Pass `wait_s: 0` to return right away with rows in status 'pending' (poll lab_job_status with id + project_id then). If the budget runs out, the rows come back as they are and `fertig: false` says so. Default tool is 'flux_pro'; use 'nano_banana_pro' (Gemini 3 Pro Image) for the Papercut-style look. Pass seed_image_url to run img-to-img guided by an existing image URL. `get_cost: true` preflights credits \u2014 it returns the price without generating anything. FOR A PERSON WHO MUST LOOK THE SAME across several images, do not re-describe them per prompt: get an id from lab_list_characters (or build one with lab_create_character + lab_generate_character_reference) and pass it as `character_refs`.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "anker_id": {
+    "description": "Look anchor id (positive integer string) whose CHOSEN image guides this generation as img-to-img. An anchor is a look imported from Midjourney: a handful of images plus the grammar of the old `--profile` code, stored per project. It resolves to exactly ONE image \u2014 the one the anchor's `gewaehlt` points at \u2014 because the provider payload carries one reference, not a set. So this is MUTUALLY EXCLUSIVE with seed_image_url (two sources for one field), and character_refs still wins over both: identity beats look. List a project's anchors with GET /api/lab/projects/<id>/umzug/anker.",
+    "type": "string"
+   },
+   "apply_lens": {
+    "description": "Defaults to TRUE on the backend: the project's lens_state UrPrompt is appended to the prompt. Pass false only to deliberately opt out for this one call.",
+    "type": "boolean"
+   },
+   "aspect": {
+    "description": "Frame as [width, height], e.g. [9, 16]. Overrides the project's pose_state \u2014 pass it when the Pose-Director's blockout is set but not yet saved. Measured 2026-07-31: without it a 9:16 blockout came back as 16:9, because pose_state was still NULL.",
+    "items": {
+     "type": "number"
+    },
+    "maxItems": 2,
+    "minItems": 2,
+    "type": "array"
+   },
+   "aspect_ratio": {
+    "description": "Aspect ratio as W:H (e.g. 16:9, 9:16). Must be one of the model's aspect_ratios where the model has an enum; models without an enum accept any W:H. Omit to use the project's camera aspect.",
+    "type": "string"
+   },
+   "character_refs": {
+    "description": "Character ids (positive integer strings) whose reference images lock the cast's identity. Routes the call to img-to-img and sends EVERY listed character's reference image, in the order given, up to the model's max_references (lab_list_models). A model that takes a single reference gets only the first character: naming more with that tool explicitly is rejected before any quota is spent; without an explicit tool the image is made with the first one and the answer names the rest in `referenz_warnung` and `referenzen.nicht_gesendet` \u2014 nothing is dropped silently. Each additional reference may cost credits; get_cost with character_refs prices exactly that. This OVERRIDES seed_image_url: the characters fill the reference slots, and identity wins over composition. A character without a generated reference image is rejected before any quota is spent. GET IDS FROM lab_list_characters, or create one with lab_create_character followed by lab_generate_character_reference. Prefer character_refs over seed_image_url whenever a person must stay the same across images: seed_image_url holds identity only for the single call that passes it, character_refs is a register entry that every later call can name. KNOW THE TRADE: routing to i2i means the reference image carries more than the face \u2014 framing and lighting come along with it, so a prompt asking for a very different light (midday sun vs. neon interior) will be pulled back towards the reference. That is the price of identity, not a bug. For a deliberate costume/light/condition change, use a state sheet instead of fighting the prompt: lab_get_character_sheet returns the state descriptors and the snippet built from them.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "character_states": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "description": "Which STATE each character is in for this image, as { characterId: stateKey } \u2014 e.g. { \"12\": \"wet\" }. A state is its own asset with its own full descriptor (clean / soaked / bloodied are three assets, not one with a note), and it is the ONLY way that descriptor reaches a generation: the reference image always carries the BASE state, so without this field you get dry Cal in a scene where he just came out of the Thames \u2014 and the image looks correct. Get the keys from lab_get_character_sheet; create one with the character state endpoint. Every id here must also appear in character_refs (who is not in the frame is not described), and an unknown key is rejected before any quota is spent.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "get_cost": {
+    "description": "Preflight: return the price in credits and your balance WITHOUT generating, reading the same catalog as lab_list_models. Do this before a batch or when the user wants to see the cost. For a card the user confirms, use lab_propose instead.",
+    "type": "boolean"
+   },
+   "location_id": {
+    "description": "Location board id (from lab_list_locations). Anchors the shot: the board's `prompt_prefix_en` is appended to your prompt as 'Location: \u2026' before generation, so every image of the same place stays in the same place. Check the prefix with lab_list_locations first \u2014 a board WITHOUT a prefix anchors nothing and fails silently.",
+    "type": "string"
+   },
+   "metadata": {
+    "additionalProperties": {},
+    "description": "Free-form JSON stored alongside the image (e.g. { parent_id, note }). Not interpreted by the pipeline.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "project_id": {
+    "description": "Project id (from lab_list_projects) \u2014 generation is always project-scoped",
+    "type": "string"
+   },
+   "prompt": {
+    "description": "What to generate (required)",
+    "minLength": 1,
+    "type": "string"
+   },
+   "resolution": {
+    "description": "Resolution tier, exactly as listed for the model in lab_list_models. Omit for the model's default; the aspect ratio still comes from the project's pose_state \u2014 this only sets the area. Some models have no resolution field at all \u2014 then leave it out.",
+    "type": "string"
+   },
+   "scene_ref": {
+    "description": "Scene label (e.g. 'SZ 04'). Stored on the row, so results can be matched back to a shot list and reviewed per scene with lab_review_queue. Omit it and the image is an orphan.",
+    "type": "string"
+   },
+   "seed": {
+    "description": "Seed for a repeatable run. Omit it and the project's stored seed applies (POST /api/lab/projects/{id}/einstellungen), and without that the provider picks one. The seed that actually rendered comes back in lab_job_status as `seed` with `seed_quelle` ('provider' = read from the provider's answer, 'gesetzt' = the one sent, null = the model tells no seed). Models whose endpoint has no seed field do not drop a given seed silently: the run proceeds and the row carries `seed_hinweis: seed_nicht_unterstuetzt` \u2014 some models tell their seed but take none, others take one but tell none.",
+    "maximum": 4294967295,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "seed_image_url": {
+    "description": "Optional: run img-to-img guided by this existing image URL (e.g. a prior generation's url). For a PERSON who must look the same across several images, use character_refs instead \u2014 this URL binds one call, a register entry binds all of them.",
+    "type": "string"
+   },
+   "tool": {
+    "description": "Image model id \u2014 copy it verbatim from lab_list_models (kind: image). Omit to use the default. Every model has its own resolutions, aspect handling and price; the catalog is the only place those live, this text deliberately names none.",
+    "type": "string"
+   },
+   "variants": {
+    "description": "How many variants to generate (default 1, max 5)",
+    "maximum": 5,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "wait_s": {
+    "description": "Seconds to wait for the finished image before answering (default 45, max 80). 0 = answer immediately with pending rows.",
+    "maximum": 80,
+    "minimum": 0,
+    "type": "number"
+   }
+  },
+  "required": [
+   "project_id",
+   "prompt"
+  ],
+  "type": "object"
+ },
+ "name": "lab_generate",
+ "title": "Generate Images"
+}

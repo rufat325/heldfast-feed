@@ -1,0 +1,246 @@
+{
+ "_meta": {
+  "ui": {
+   "resourceUri": "ui://filmlab/preview"
+  }
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "readOnlyHint": false,
+  "title": "Animate Image to Clip"
+ },
+ "description": "Animate a completed image into a clip with a video model. Pick the model from lab_list_models; check the price with get_cost or let the user confirm a card via lab_propose. Costs credits when called without get_cost.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "abdruck_startframe": {
+    "description": "Generate frame one WITH the character's trained Figurenabdruck (LoRA) instead of taking the flat studio portrait from the character sheet \u2014 the clip then starts IN the scene rather than in a photo studio. Opt-in: it costs one extra image (3 credits). Needs EXACTLY ONE character_ref that has a finished Abdruck, and is rejected together with source_image_id (that one PICKS frame one, this one MAKES it). Refused before any quota is spent.",
+    "type": "boolean"
+   },
+   "apply_lens": {
+    "description": "Defaults to TRUE on the backend: the project's lens_state UrPrompt is appended to the prompt. Pass false only to deliberately opt out for this one call.",
+    "type": "boolean"
+   },
+   "audio_url": {
+    "description": "URL of an existing audio track to lay under the clip. Independent of generate_audio, which asks the PROVIDER to synthesise its own.",
+    "type": "string"
+   },
+   "camera_motion": {
+    "description": "Structured camera move sent to the model itself \u2014 only models whose lab_list_models entry lists camera_motions. Prefer this over prose when a keyframe chain must MOVE rather than cross-fade.",
+    "enum": [
+     "dolly_in",
+     "dolly_out",
+     "dolly_left",
+     "dolly_right",
+     "jib_up",
+     "jib_down",
+     "static",
+     "focus_shift"
+    ],
+    "type": "string"
+   },
+   "character_refs": {
+    "description": "Character ids (positive integer strings) whose reference image locks the cast's identity for this clip. On most providers only the FIRST character's image is used, as the start frame \u2014 with two characters in frame the second is unbound. On kling_3_pro each character additionally becomes its own reference element (frontal view plus up to 3 further angles from its sheet), so all of them are bound. The response reports `elements_bound` and `characters_without_reference`.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "character_states": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "description": "Which STATE each character is in for this clip, as { characterId: stateKey } \u2014 e.g. { \"12\": \"wet\" }. A state is its own asset with its own full descriptor (clean / soaked / bloodied are three assets, not one with a note), and it is the ONLY way that descriptor reaches a generation: the reference image always carries the BASE state, so without this field you get dry Cal in a scene where he just came out of the Thames \u2014 and the clip looks correct. Get the keys from lab_get_character_sheet. Every id here must also appear in character_refs (who is not in the frame is not described), and an unknown key is rejected before any quota is spent.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "character_voices": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "description": "Bind a voice per character: character id -> fal voice id. Voice ids come from fal-ai/kling-video/create-voice \u2014 FilmLab keeps no voice registry of its own, the id is passed through unverified. Every character named here must also be in character_refs AND must have a generated reference image (no image \u2192 no element \u2192 nothing to bind the voice to; rejected before quota is spent). Only kling_3_pro.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "duration_seconds": {
+    "description": "Clip length in seconds. Must lie inside the model's duration grid from lab_list_models; inside the grid the provider may snap to its nearest step. IGNORED when `shots` is given \u2014 then the rendered length is the sum of the shot durations.",
+    "maximum": 30,
+    "minimum": 1,
+    "type": "number"
+   },
+   "end_image_id": {
+    "description": "id of a completed image to land the clip on (last frame). REQUIRES a start frame (source_image_id or character_refs) \u2014 an end frame alone is rejected before quota is spent. Only kling_3_pro.",
+    "type": "string"
+   },
+   "familie": {
+    "description": "Pick the MODEL, not the access route: 'seedance-2.0' or 'seedance-2.5'. The server takes the cheapest route that this account may use and that can do the job (OpenRouter only with the user's consent; references, 1080p for 2.5, or audio switched off go to fal) and falls back to fal if a cheaper route fails \u2014 the fallback can cost more than the preflight price. Mutually exclusive with tool and intent.",
+    "enum": [
+     "seedance-2.0",
+     "seedance-2.5"
+    ],
+    "type": "string"
+   },
+   "generate_audio": {
+    "description": "Ask for the model's native audio track. Only meaningful where lab_list_models says audio: schaltbar \u2014 models with audio: immer always have it, audio: nie never.",
+    "type": "boolean"
+   },
+   "get_cost": {
+    "description": "Preflight: return the price in credits and your balance WITHOUT generating, reading the same catalog as lab_list_models. Do this before a batch or when the user wants to see the cost. For a card the user confirms, use lab_propose instead.",
+    "type": "boolean"
+   },
+   "in_sec": {
+    "description": "Cut the reference clip server-side before it reaches the provider: start of the excerpt, in seconds from the clip's beginning. Only together with out_sec, and only with source_video_id.",
+    "type": "number"
+   },
+   "intent": {
+    "description": "Say WHAT the shot is instead of picking a model \u2014 the router chooses by priority and a cost cap. 'draft' and 'ambient' route to the cheapest provider, 'dialog' to the one with the steadiest faces, 'hero' to the most expensive on purpose, 'atmo' for atmosphere. Prefer intent over tool: it also gives you an automatic fallback to the next provider if the first one hard-fails. An explicitly set `tool` always wins over intent.",
+    "type": "string"
+   },
+   "kamerapfad": {
+    "additionalProperties": {},
+    "description": "The camera move as INPUT instead of prose: an object following shared/kamerapfad/schema.json \u2014 poses over time (position, look-at or quaternion, metres, Y up) from the Kadrage terrain flight or drawn by hand, or motion phases as lab_kamerafahrt reads them from a clip (its answer carries a ready `kamerapfad`). The backend validates it, derives phases, and then writes the move into the prompt IN THE FORM THIS MODEL UNDERSTANDS: prose at the camera slot for most families, bracketed director commands inside the prompt string for the MiniMax/Hailuo family, which parses them. NO MODEL RECEIVES THE POSES TODAY \u2014 the answer says which form went out (kamerapfad.angewandt = als_text or als_regiebefehle), names the family rule and the source it rests on (kamerapfad.sprache), and lists what that form could not carry (kamerapfad.nicht_gesendet, kamerapfad.befehle_weggefallen next to kamerapfad.befehle_gesamt). IF YOUR OWN PROMPT ALREADY CARRIES BRACKETED COMMANDS and the model parses them, the path is NOT sent on top of them \u2014 two chains would contradict each other at the same parser; the answer then says angewandt = eigene_regie and names what it found in kamerapfad.eigene_regiebefehle, and your prompt goes out unchanged. A `zusammenfassung` inside the path is display only and is NEVER sent \u2014 the move is always rebuilt from the phases; if nothing can be built (phases without tempo/verlauf), the answer says angewandt = nicht_ableitbar with the reason, and nothing of the path is in the prompt. Mutually exclusive with kamerapfad_url.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "kamerapfad_url": {
+    "description": "Address of a kamerapfad JSON instead of the object \u2014 the url of a file in THIS project (lab_list_assets), e.g. the kamerapfad JSON that Kadrage writes next to its flight video. Fetched by the backend under the same ownership rule as every reference: a file of another project is a named rejection before anything is charged. Mutually exclusive with kamerapfad.",
+    "type": "string"
+   },
+   "location_id": {
+    "description": "Location board id (from lab_list_locations). The board's `prompt_prefix_en` is appended to your prompt as 'Location: \u2026', so a clip stays in the same place as the images shot there. A board WITHOUT a prefix anchors nothing and fails silently \u2014 check with lab_list_locations.",
+    "type": "string"
+   },
+   "metadata": {
+    "additionalProperties": {},
+    "description": "Free-form JSON stored alongside the video. Not interpreted by the pipeline.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "ohne_keyframe": {
+    "description": "Skip the keyframe checkpoint on purpose. By default a paid clip only starts from a start image the user has approved (lab_review_asset verdict: accepted) \u2014 look at the frame first, then spend on the clip. Set true only when the user explicitly asked to skip the frame check.",
+    "type": "boolean"
+   },
+   "out_sec": {
+    "description": "End of the excerpt in the reference clip, in seconds. Must lie behind in_sec; both are set together or neither. Only with source_video_id.",
+    "type": "number"
+   },
+   "project_id": {
+    "description": "Project id (from lab_list_projects)",
+    "type": "string"
+   },
+   "prompt": {
+    "description": "Motion/camera instruction for the animation",
+    "minLength": 1,
+    "type": "string"
+   },
+   "referenzen": {
+    "description": "Typed references for the clip path (source_video_id). The position IS the address: the first image is @Image1, the first extra clip is @Video2 (the reference clip itself is @Video1), the first sound is @Audio1. Write @bild1/@video1/@ton1 in the prompt and they are resolved to exactly these positions HERE, before anything is sent \u2014 no detour through lab_prompt_transform needed (it resolves them too when it rewrites a prompt). Every image reference is MEASURED before it is sent and scaled up to the model's minimum if it is below it; nothing is ever rejected for being small.",
+    "items": {
+     "properties": {
+      "art": {
+       "description": "Which channel this reference goes into: bild an image, video a clip, ton a sound. The channel is not the same as the role \u2014 an image can be a character, a place or a look, and only you know which; say it in `rolle`. How many of each a model takes is in lab_list_models (referenz_grenzen); a channel the model has no slot for is rejected before anything is charged.",
+       "enum": [
+        "bild",
+        "video",
+        "ton"
+       ],
+       "type": "string"
+      },
+      "id": {
+       "description": "The reference as an ID instead of an address, looked up in this project: an image id (lab_generate/lab_job_status), a video id (lab_animate), an audio id (lab_list_audio), or an asset key (lab_list_assets). The URL is never built here \u2014 it comes from the backend's answer, because the bucket is not guessable and a hand-built address renders, bills, and then leads nowhere.",
+       "type": "string"
+      },
+      "rolle": {
+       "description": "WHICH character or place this reference means. Free text, carried through \u2014 not derivable from `art`, and guessing it would be a claim about the cast nobody made.",
+       "type": "string"
+      },
+      "url": {
+       "description": "Address of the reference. Exactly one of url or id \u2014 both together means two sources for one address, and one of them would silently lose.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "art"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "resolution": {
+    "description": "Resolution tier, exactly as listed for the model in lab_list_models. Omit for the model's default. Some models have no resolution field at all \u2014 then leave it out.",
+    "type": "string"
+   },
+   "scene_ref": {
+    "description": "Scene label (e.g. 'SZ 04'). Stored on the row, so clips can be matched back to a shot list and reviewed per scene with lab_review_queue.",
+    "type": "string"
+   },
+   "seed": {
+    "description": "Seed for a repeatable run. Omit it and the project's stored seed applies (POST /api/lab/projects/{id}/einstellungen), and without that the provider picks one. The seed that actually rendered comes back in lab_job_status as `seed` with `seed_quelle` ('provider' = read from the provider's answer, 'gesetzt' = the one sent, null = the model tells no seed). Models whose endpoint has no seed field do not drop a given seed silently: the run proceeds and the row carries `seed_hinweis: seed_nicht_unterstuetzt` \u2014 some models tell their seed but take none, others take one but tell none.",
+    "maximum": 4294967295,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "shot_type": {
+    "description": "How to cut a multi-shot clip. 'customize' (default) renders exactly the shots you gave. 'intelligent' lets the model decide the cutting \u2014 your shot prompts become a suggestion, not a spec. Belongs to `shots`; alone it is rejected.",
+    "enum": [
+     "customize",
+     "intelligent"
+    ],
+    "type": "string"
+   },
+   "shots": {
+    "description": "Multi-shot: a sequence of shots rendered as ONE output, holding character, place and voice across the cuts. This is NOT the same as several clips stitched together \u2014 those you pay for individually and they do not hold the cast. PRICE: the billed length is the SUM of the shot durations, not duration_seconds. Three 5s shots cost the same as one 15s clip (140 credits at the reference resolution), not the same as one 5s clip (47). The sum must fit the provider's 3-15s window \u2014 each shot may be legal on its own and the sum still too long. Only kling_3_pro. Requesting it elsewhere is rejected before quota is spent.",
+    "items": {
+     "properties": {
+      "duration_seconds": {
+       "description": "Length of this shot (default 5)",
+       "maximum": 15,
+       "minimum": 1,
+       "type": "integer"
+      },
+      "prompt": {
+       "description": "What happens in THIS shot",
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "required": [
+      "prompt"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "source_image_id": {
+    "description": "id of a completed image (from lab_generate/lab_job_status) to animate \u2014 positive integer as string. Required unless get_cost is true",
+    "type": "string"
+   },
+   "source_video_id": {
+    "description": "Animate FROM A CLIP instead of a still: the id of a generated video (from lab_animate/lab_job_status) or the asset key of an uploaded one (from lab_list_assets, asset_type 'video'). The run then goes to the reference-motion path \u2014 your clip leads, the model restyles it. Mutually exclusive with source_image_id, and only for models that take a video reference (lab_list_models says v2v); The picture-side fields (end frame, shots, audio, location) do not travel this path and are rejected rather than dropped; character references exist here under a different name (ready image URLs instead of sheet ids) and are rejected too, with that reason. An intent IS resolved before the run and travels as the chosen model.",
+    "type": "string"
+   },
+   "tool": {
+    "description": "Video model id \u2014 copy it verbatim from lab_list_models (kind: video). Omit to let the intent router choose. Every model has its own resolutions, duration grid, audio behaviour and price; the catalog is the only place those live, this text deliberately names none.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "project_id",
+   "prompt"
+  ],
+  "type": "object"
+ },
+ "name": "lab_animate",
+ "title": "Animate Image to Clip"
+}

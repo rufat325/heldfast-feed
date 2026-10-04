@@ -1,0 +1,986 @@
+{
+ "_meta": {
+  "io.mcpmed/concepts": [
+   {
+    "id": "https://schema.org/ScholarlyArticle",
+    "label": "Scholarly article"
+   },
+   {
+    "id": "https://edamontology.org/operation_2422",
+    "label": "Data retrieval"
+   }
+  ]
+ },
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Fetch full-text articles from PubMed Central with structured sections, tables, and references. When PMC misses, transparently falls back to Europe PMC `fullTextXML` (structured JATS for records with a PMC counterpart), then to Unpaywall \u2014 publisher-hosted or institutional open-access copies as HTML-as-Markdown or PDF-as-text. Name articles by `pmcids` (PMC IDs directly), `pmids` (PubMed IDs, auto-resolved), `dois` (DOIs, auto-resolved to PMC via the ID Converter; preprints and EPMC-only OA fall through to the Europe PMC and Unpaywall layers), or any mix of the three \u2014 up to 10 distinct identifiers per call; an article several of them name is fetched and returned once. Two independent character controls: `maxCharacters` caps body text per article, `maxResponseCharacters` caps the whole response and defers articles past the ceiling whole, listing them in `deferred.ids` for a follow-up call.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "dois": {
+    "description": "DOIs to resolve (e.g. [\"10.21203/rs.3.rs-9010375/v1\"]), one per element. Combinable with `pmcids` and `pmids` \u2014 at most 10 distinct identifiers across the three. Resolved to a PMCID via the PMC ID Converter and returned as structured JATS when the article is in PMC; DOIs with no PMC counterpart (preprints, EPMC-only OA) fall through to Europe PMC, then Unpaywall, when those layers are enabled.",
+    "items": {
+     "pattern": "^10\\.[^\\s,]+\\/[^\\s,]+$",
+     "type": "string"
+    },
+    "maxItems": 10,
+    "minItems": 1,
+    "type": "array"
+   },
+   "includeAssets": {
+    "default": true,
+    "description": "Include the article's figures and supplementary material \u2014 `assets[]`, each with its label, caption, enclosing section and deposit pointer. On by default because it is cheaper than tables: a median asset-bearing article grows about 10%, and the body prose already refers to these by label. Set false to omit them, which also removes the `[Figure: \u2026]` / `[Supplementary: \u2026]` markers from the section text, since without the array they point at nothing. Prose-shaped blocks \u2014 lists, definition lists, block quotes, boxed text, preformatted blocks, displayed formulae \u2014 are section text rather than assets and this switch never affects them. Applies to `source=pmc` results only.",
+    "type": "boolean"
+   },
+   "includeReferences": {
+    "default": false,
+    "description": "Include reference list. Applies to `source=pmc` results only.",
+    "type": "boolean"
+   },
+   "includeTables": {
+    "default": true,
+    "description": "Include the article's tables \u2014 cells, captions, labels and footnotes. On by default because a dropped table takes its numbers with it. Table-dense articles pay for it: rendered tables typically add 12\u201317% to an article record and can more than double it. Set false to omit them, or cap the cost with `maxCharacters`, which drops tables it cannot fit whole. Applies to `source=pmc` results only.",
+    "type": "boolean"
+   },
+   "maxCharacters": {
+    "description": "Per-article budget for body text, in characters. Counts `source=pmc` section and subsection text \u2014 which carries the inline blocks the parser renders in place, such as lists, definition lists, block quotes, boxed text, preformatted blocks and displayed formulae \u2014 plus table label, caption, cell and footnote text and asset label, caption and `href` text; or the `source=unpaywall` `content` body. Titles, abstracts, identifiers, and references are never counted or shortened. Shortened text ends at the last word boundary inside its allowance, so it can come back a few characters under it. The counted unit is that text alone \u2014 the Markdown grid `content[]` renders around the cells (pipes, padding, the divider row, headings) is scaffolding this budget does not measure, so a table renders longer than it costs here. Sections are served first, then tables, then assets, each spending what is left, in document order \u2014 admission stops at the first entry that does not fit, and every entry from there on is dropped whole rather than cut mid-row or returned with a shortened caption, counted in `truncation.omittedTables` / `truncation.omittedAssets` and named in `truncation.articles[].omittedTableNames` / `omittedAssetNames`. Applied after `sections`, `maxSections`, `includeReferences`, `includeTables`, and `includeAssets`, so semantic filtering is unaffected. This knob alone bounds only bodies: the response-wide ceiling it implies is this value times the number of articles returned, plus every uncounted field. Use `maxResponseCharacters` for a true whole-response ceiling. Omit for the full body.",
+    "maximum": 1000000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "maxCharactersPerSection": {
+    "description": "Budget for a single top-level body section, in characters, counting the section text plus its subsections. Combine with `maxCharacters` to cap both one section and the article; the tighter of the two wins. Applies to `source=pmc` results only.",
+    "maximum": 1000000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "maxResponseCharacters": {
+    "description": "Opt-in ceiling for the whole response, in characters \u2014 the true response-wide counterpart to the per-article `maxCharacters`. Each article is measured as the JSON record it is returned as, after every filter and the per-article body budget: title, abstract, body sections, references, identifiers, license and source metadata \u2014 every field it carries. One ledger covers all tiers, so PMC-, Europe PMC-, and Unpaywall-served articles spend the same budget. Articles are kept in response order until the next one would cross the ceiling; that article and the rest are deferred whole (never partially populated) and listed in `deferred.ids`. Response envelope fields \u2014 counts, `unavailable`, `truncation`, `deferred` itself \u2014 are not counted. Omit to return every resolved article.",
+    "maximum": 1000000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "maxSections": {
+    "description": "Maximum top-level body sections. Applies to `source=pmc` results only.",
+    "maximum": 50,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "overflowMode": {
+    "default": "truncate",
+    "description": "How to spend `maxCharacters` across an article that exceeds it. truncate: fill sections in document order, so early sections stay whole, the section the budget runs out in is cut, and every section or subsection past that point is dropped (counted in `truncation.omittedSections`). outline: split the budget evenly so every section and subsection keeps its heading, and an excerpt as far as the budget reaches \u2014 a heading the budget left empty is marked as such in the rendered text. Use it to survey what an article contains before requesting specific `sections`. Ignored when no budget is set, and identical for `source=unpaywall` bodies, which have no headings to preserve.",
+    "enum": [
+     "truncate",
+     "outline"
+    ],
+    "type": "string"
+   },
+   "pmcids": {
+    "description": "PMC IDs to fetch (e.g. [\"PMC9575052\"]). Combinable with `pmids` and `dois` \u2014 at most 10 distinct identifiers across the three. PMC IDs with no retrievable full text fall through to Europe PMC, then to Unpaywall on the DOI the chain resolves for them.",
+    "items": {
+     "pattern": "^(?:PMC)?\\d+$",
+     "type": "string"
+    },
+    "maxItems": 10,
+    "minItems": 1,
+    "type": "array"
+   },
+   "pmids": {
+    "description": "PubMed IDs. Combinable with `pmcids` and `dois` \u2014 at most 10 distinct identifiers across the three. Articles in PMC are returned as structured JATS; articles not in PMC fall through to Europe PMC (when EPMC has a `fullTextXML`), then to Unpaywall when `UNPAYWALL_EMAIL` is set and a DOI is available.",
+    "items": {
+     "pattern": "^\\d+$",
+     "type": "string"
+    },
+    "maxItems": 10,
+    "minItems": 1,
+    "type": "array"
+   },
+   "sections": {
+    "description": "Filter to specific sections by title (e.g. [\"Introduction\", \"Methods\", \"Results\", \"Discussion\"]). A term matches a section or subsection title at any nesting depth, case-insensitively, as a substring \u2014 \"resul\" matches \"Results\". A section whose own title matches is returned whole; one kept only because a nested subsection matched keeps its heading as a breadcrumb, with its own text cleared and only the matching branch beneath it. Tables and assets narrow with the filter: one whose section did not survive, or that names no section, is dropped. Empty strings are skipped, so `[\"\"]` applies no filter; an element of only whitespace or invisible characters, such as a zero-width space, is rejected. Applies to `source=pmc` results only.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "name": "pubmed_fetch_fulltext",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "articles",
+     "totalReturned"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "articles": {
+    "description": "Full-text articles",
+    "items": {
+     "description": "Full-text article; shape depends on `source` (pmc = structured JATS, unpaywall = best-effort)",
+     "oneOf": [
+      {
+       "additionalProperties": false,
+       "description": "Structured JATS full-text article. `viaSource` records whether the JATS came from NCBI PMC or Europe PMC.",
+       "properties": {
+        "abstract": {
+         "description": "Abstract",
+         "type": "string"
+        },
+        "affiliations": {
+         "description": "Author affiliations",
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "articleType": {
+         "description": "Article type",
+         "type": "string"
+        },
+        "assets": {
+         "description": "Every `<fig>` and `<supplementary-material>` the article carries, in document order \u2014 from the body and from `<floats-group>`, `<back>` and appendices alike. Each one lifted from the body leaves a `[Figure: <label>]` or `[Supplementary: <label>]` marker at its position in the section text, so reading order survives the lift. Absent when the article deposits none, when `includeAssets` is false, or when a `sections` filter left none standing.",
+         "items": {
+          "additionalProperties": false,
+          "description": "One figure or supplementary-material item, with its caption, pointer, and section",
+          "properties": {
+           "assetType": {
+            "description": "Which captioned element this came from \u2014 `figure` for a `<fig>`, `supplementary-material` for a `<supplementary-material>` deposit",
+            "enum": [
+             "figure",
+             "supplementary-material"
+            ],
+            "type": "string"
+           },
+           "caption": {
+            "description": "Caption text, with the label excluded",
+            "type": "string"
+           },
+           "href": {
+            "description": "The `<graphic>`/`<media>` `@xlink:href` exactly as deposited \u2014 a pointer into the PMC deposit (`MOL2-20-1253-g001.jpg`), not a fetchable URL. No absolute form of it resolves; read the rendered article at `pmcUrl` instead. Absent when the deposit names no file.",
+            "type": "string"
+           },
+           "id": {
+            "description": "JATS `id` attribute \u2014 the target body-text cross-references point at",
+            "type": "string"
+           },
+           "label": {
+            "description": "Display label as printed, e.g. `Fig. 1`",
+            "type": "string"
+           },
+           "sectionTitle": {
+            "description": "Title of the innermost section enclosing the asset, wherever that section sits \u2014 body, `<back>` matter, or an appendix all count. Absent for an asset inside no section at all, such as a `<floats-group>` deposit.",
+            "type": "string"
+           }
+          },
+          "required": [
+           "assetType"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "authors": {
+         "description": "Authors",
+         "items": {
+          "additionalProperties": false,
+          "description": "Author entry",
+          "properties": {
+           "collectiveName": {
+            "description": "Group name",
+            "type": "string"
+           },
+           "givenNames": {
+            "description": "Given names",
+            "type": "string"
+           },
+           "lastName": {
+            "description": "Last name",
+            "type": "string"
+           }
+          },
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "doi": {
+         "description": "DOI, cased as the tier that served this record reports it (NCBI PMC, Europe PMC, or Unpaywall). DOIs are case-insensitive by spec and no case normalization is applied here, so casing can differ between tiers and from other tools \u2014 compare case-insensitively.",
+         "type": "string"
+        },
+        "epmcId": {
+         "description": "Europe PMC record id \u2014 present when `viaSource` is `europepmc`",
+         "type": "string"
+        },
+        "epmcSource": {
+         "description": "Europe PMC source code when `viaSource` is `europepmc`. Common values: `MED` (PubMed-derived), `PMC` (PMC counterpart), `PPR` (preprint), `PAT` (patent), `AGR` (Agricola), plus less common codes (`CTX`, `CBA`, `ETH`, `HIR`). Treat as opaque \u2014 EPMC may introduce new codes.",
+         "type": "string"
+        },
+        "journal": {
+         "additionalProperties": false,
+         "description": "Journal information",
+         "properties": {
+          "elocationId": {
+           "description": "Electronic article locator from JATS `<elocation-id>` \u2014 the publisher-assigned article number (e.g. \"e20542\"). Journals that assign article numbers deposit no `<fpage>`, so this is the only locator on roughly half of PMC records. Never a substitute for `pages`; JATS carries no type attribute, so there is no counterpart to the `elocationIdType` that `pubmed_fetch_articles` reports.",
+           "type": "string"
+          },
+          "issn": {
+           "description": "ISSN",
+           "type": "string"
+          },
+          "issue": {
+           "description": "Issue number",
+           "type": "string"
+          },
+          "pages": {
+           "description": "Page range",
+           "type": "string"
+          },
+          "title": {
+           "description": "Journal title",
+           "type": "string"
+          },
+          "volume": {
+           "description": "Volume number",
+           "type": "string"
+          }
+         },
+         "type": "object"
+        },
+        "keywords": {
+         "description": "Keywords",
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "pmcId": {
+         "description": "PMC ID \u2014 present for NCBI PMC records and Europe PMC entries that have a PMC counterpart. Absent for EPMC-only records like preprints; use `epmcId` in that case.",
+         "type": "string"
+        },
+        "pmcUrl": {
+         "description": "PMC URL \u2014 derived from `pmcId` when present",
+         "type": "string"
+        },
+        "pmid": {
+         "description": "PubMed ID",
+         "type": "string"
+        },
+        "publicationDate": {
+         "additionalProperties": false,
+         "description": "Publication date",
+         "properties": {
+          "day": {
+           "description": "Publication day",
+           "type": "string"
+          },
+          "month": {
+           "description": "Publication month",
+           "type": "string"
+          },
+          "year": {
+           "description": "Publication year",
+           "type": "string"
+          }
+         },
+         "type": "object"
+        },
+        "pubmedUrl": {
+         "description": "PubMed URL",
+         "type": "string"
+        },
+        "references": {
+         "description": "Reference list",
+         "items": {
+          "additionalProperties": false,
+          "description": "Reference entry",
+          "properties": {
+           "citation": {
+            "description": "Citation text",
+            "type": "string"
+           },
+           "id": {
+            "description": "Reference ID",
+            "type": "string"
+           },
+           "label": {
+            "description": "Reference label",
+            "type": "string"
+           }
+          },
+          "required": [
+           "citation"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "sections": {
+         "description": "Article body sections",
+         "items": {
+          "additionalProperties": false,
+          "description": "Article body section",
+          "properties": {
+           "label": {
+            "description": "Section label",
+            "type": "string"
+           },
+           "subsections": {
+            "description": "Nested subsections",
+            "items": {
+             "additionalProperties": false,
+             "description": "Article subsection",
+             "properties": {
+              "label": {
+               "description": "Subsection label",
+               "type": "string"
+              },
+              "text": {
+               "description": "Subsection body text. Sections nested deeper than this level are folded in here in document order, each heading rendered on its own line above its text.",
+               "type": "string"
+              },
+              "title": {
+               "description": "Subsection heading",
+               "type": "string"
+              }
+             },
+             "required": [
+              "text"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "text": {
+            "description": "Section body text",
+            "type": "string"
+           },
+           "title": {
+            "description": "Section heading",
+            "type": "string"
+           }
+          },
+          "required": [
+           "text"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "source": {
+         "const": "pmc",
+         "description": "Structured JATS \u2014 same DTD whether sourced from NCBI PMC or Europe PMC",
+         "type": "string"
+        },
+        "tables": {
+         "description": "Every `<table-wrap>` the article carries, in document order \u2014 from the body and from `<floats-group>`, `<back>` and appendices alike. Absent when the article deposits none, when `includeTables` is false, or when a `sections` filter left none standing.",
+         "items": {
+          "additionalProperties": false,
+          "description": "One table from the article, with its cells, caption, and owning section",
+          "properties": {
+           "caption": {
+            "description": "Caption text, with the label excluded",
+            "type": "string"
+           },
+           "footnotes": {
+            "description": "`<table-wrap-foot>` text, one line per footnote or paragraph, joined by `\\n`. A footnote marker deposited as a `<label>` leads its line, followed by a space (`* No patient \u2026`).",
+            "type": "string"
+           },
+           "headerRowCount": {
+            "description": "How many leading `rows` entries are header rows \u2014 a `<thead>` block, or leading rows made entirely of `<th>`. 0 when the table declares none. Several header rows stack: read one column top to bottom for its full header path.",
+            "type": "number"
+           },
+           "id": {
+            "description": "JATS `id` attribute \u2014 the target body-text cross-references point at",
+            "type": "string"
+           },
+           "label": {
+            "description": "Table label as printed, e.g. `TABLE 1`",
+            "type": "string"
+           },
+           "rows": {
+            "description": "Cell text by row, in document order, one entry per grid column. `colspan` and `rowspan` are expanded, so a cell covering several columns or rows repeats its text across each cell it covers and a well-formed table is rectangular \u2014 align on position from the left, and read a repeated value as one spanning cell rather than several measurements. A line break in a cell \u2014 a `<break/>`, a paragraph, or a list item in the source \u2014 is kept as `\\n`, so `1.08\\n2.44` is two values; superscripts and other inline markup are never spaced (`0.108a`). Empty when `unextractableReason` is set.",
+            "items": {
+             "description": "One row, as cell text by grid column",
+             "items": {
+              "type": "string"
+             },
+             "type": "array"
+            },
+            "type": "array"
+           },
+           "sectionTitle": {
+            "description": "Title of the innermost section enclosing the table, wherever that section sits \u2014 body, `<back>` matter, or an appendix all count, and in back matter the section name is the only positional cue there is. Absent only for a table inside no section at all, such as a `<floats-group>` deposit.",
+            "type": "string"
+           },
+           "unextractableReason": {
+            "description": "Why `rows` is empty \u2014 set only then. graphic-only: the table was deposited as an image with no underlying markup. cals-tgroup: the table uses the CALS `<tgroup>` model, which this server does not extract (0 of 283 tables in an open-access survey used it). no-rows: the markup carried no rows. The label and caption are still returned, so a table that could not be read is visible rather than silently missing.",
+            "enum": [
+             "cals-tgroup",
+             "graphic-only",
+             "no-rows"
+            ],
+            "type": "string"
+           }
+          },
+          "required": [
+           "headerRowCount",
+           "rows"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "title": {
+         "description": "Article title",
+         "type": "string"
+        },
+        "viaSource": {
+         "description": "Which layer produced the JATS: `pmc` for NCBI PMC EFetch (db=pmc), `europepmc` for Europe PMC `fullTextXML`. Both paths return the same JATS shape; the discriminator records origin for observability and license attribution.",
+         "enum": [
+          "pmc",
+          "europepmc"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "source",
+        "viaSource",
+        "sections"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "description": "Best-effort full text from an open-access copy",
+       "properties": {
+        "content": {
+         "description": "Full article text \u2014 Markdown or plain text per `contentFormat`",
+         "type": "string"
+        },
+        "contentFormat": {
+         "description": "How `content` was extracted. html-markdown: Defuddle extracted Markdown from an HTML landing page; light section structure may survive but is not guaranteed. pdf-text: unpdf extracted plain text from a PDF; no section, reference, or heading structure.",
+         "enum": [
+          "html-markdown",
+          "pdf-text"
+         ],
+         "type": "string"
+        },
+        "doi": {
+         "description": "DOI used to locate the open-access copy",
+         "type": "string"
+        },
+        "hostType": {
+         "description": "`publisher` or `repository` \u2014 where the OA copy is hosted",
+         "type": "string"
+        },
+        "journalName": {
+         "description": "Journal or repository name from Unpaywall's record for the DOI (e.g. `medRxiv` for a medRxiv preprint). Absent when Unpaywall has none.",
+         "type": "string"
+        },
+        "license": {
+         "description": "License identifier from Unpaywall (e.g. cc-by, cc0)",
+         "type": "string"
+        },
+        "pmcId": {
+         "description": "PMC ID this article was requested under, in `PMC<digits>` form \u2014 present when a `pmcids` entry named it, absent when it was requested under a PMID or DOI. When several identifiers name one article, it is requested under the first to reach it: `pmcids`, then `pmids`, then `dois`. Ties the article back to the requested identifier, which `unavailable[]` keys on for the ids that found nothing.",
+         "type": "string"
+        },
+        "pmid": {
+         "description": "PubMed ID this article was requested under \u2014 present when it was requested under a `pmids` entry, absent when under a PMC ID or DOI (see `pmcId` for which identifier an article several of them name is requested under)",
+         "type": "string"
+        },
+        "pubmedUrl": {
+         "description": "PubMed URL \u2014 present when `pmid` is set",
+         "type": "string"
+        },
+        "source": {
+         "const": "unpaywall",
+         "description": "Content fetched from an open-access copy indexed by Unpaywall. Best-effort \u2014 structural fidelity depends on `contentFormat`.",
+         "type": "string"
+        },
+        "sourceUrl": {
+         "description": "URL the content was fetched from",
+         "type": "string"
+        },
+        "title": {
+         "description": "Article title, from the first source that carries one: Unpaywall's record for the DOI, then the Europe PMC record when the chain searched Europe PMC for this id, then \u2014 for `html-markdown` content only \u2014 the title detected on the page. Absent when none of them has a title.",
+         "type": "string"
+        },
+        "totalPages": {
+         "description": "Page count reported by the PDF extractor; absent for HTML",
+         "type": "number"
+        },
+        "version": {
+         "description": "OA version: submittedVersion | acceptedVersion | publishedVersion",
+         "type": "string"
+        },
+        "viaSource": {
+         "const": "unpaywall",
+         "description": "Layer that produced this article. Constant `unpaywall` for this branch.",
+         "type": "string"
+        },
+        "wordCount": {
+         "description": "Approximate word count reported by the HTML extractor; absent for PDFs",
+         "type": "number"
+        },
+        "year": {
+         "description": "Publication year from Unpaywall's record for the DOI. Absent when Unpaywall has none.",
+         "type": "number"
+        }
+       },
+       "required": [
+        "source",
+        "viaSource",
+        "contentFormat",
+        "doi",
+        "sourceUrl",
+        "content"
+       ],
+       "type": "object"
+      }
+     ]
+    },
+    "type": "array"
+   },
+   "deferred": {
+    "additionalProperties": false,
+    "description": "Continuation state for articles the whole-response budget withheld. Present only when `maxResponseCharacters` deferred at least one article.",
+    "properties": {
+     "deferredCount": {
+      "description": "Articles the chain resolved but withheld to stay under the ceiling",
+      "type": "number"
+     },
+     "dois": {
+      "description": "The deferred ids sent as DOIs, in response order \u2014 re-submit them as `dois`. Present only when the deferred ids came from more than one field (so `idType` is absent) and one of them was a DOI.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "idType": {
+      "description": "The input field every deferred id was sent in \u2014 re-submit them as `pmids`, `pmcids`, or `dois` respectively. Matches the `idType` on `unavailable` entries. Absent when the deferred ids came from more than one field; `pmcids` / `pmids` / `dois` then group them.",
+      "enum": [
+       "pmid",
+       "pmcid",
+       "doi"
+      ],
+      "type": "string"
+     },
+     "ids": {
+      "description": "Identifiers of the deferred articles, in response order, keyed as they were requested (PMC IDs in `PMC<digits>` form). Re-call `pubmed_fetch_fulltext` with these under the `idType` field \u2014 or, when `idType` is absent, with the `pmcids` / `pmids` / `dois` lists below \u2014 and the same other inputs. Never contains an id from `unavailable`.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "maxResponseCharacters": {
+      "description": "The `maxResponseCharacters` ceiling this response was budgeted against",
+      "type": "number"
+     },
+     "nextDeferredCharacters": {
+      "description": "Serialized size of the next deferred article \u2014 the first entry in `ids`, where the response stopped. Raise `maxResponseCharacters` to at least this to make progress; a smaller article further down `ids` cannot be reached until this one fits.",
+      "type": "number"
+     },
+     "pmcids": {
+      "description": "The deferred ids sent as PMC IDs, in response order \u2014 re-submit them as `pmcids`. Present only when the deferred ids came from more than one field (so `idType` is absent) and one of them was a PMC ID.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "pmids": {
+      "description": "The deferred ids sent as PMIDs, in response order \u2014 re-submit them as `pmids`. Present only when the deferred ids came from more than one field (so `idType` is absent) and one of them was a PMID.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "returnedCharacters": {
+      "description": "Serialized characters the returned article records account for",
+      "type": "number"
+     }
+    },
+    "required": [
+     "maxResponseCharacters",
+     "returnedCharacters",
+     "deferredCount",
+     "ids",
+     "nextDeferredCharacters"
+    ],
+    "type": "object"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `queue_full`: The local NCBI request queue shed the call \u2014 the queue is full, or the call cannot start before its total deadline (for example behind the cooldown that follows an NCBI 429). `ncbi_unreachable`: NCBI E-utilities failed on every attempt the retry budget allowed \u2014 retries ran out, or the next backoff would overrun the total deadline. `ncbi_rate_limited`: NCBI answered HTTP 429 (too many requests) and the call stopped on it \u2014 retries ran out, the next backoff would overrun the total deadline, or the Retry-After NCBI named outlasts the time left or the 30-second backoff cap. `ncbi_deadline_exceeded`: The total NCBI request deadline expired before NCBI answered successfully \u2014 mid-request, while queued, or during a retry backoff. `ncbi_invalid_response`: NCBI returned a body that could not be parsed (invalid XML/JSON). `ncbi_resource_not_found`: NCBI returned a structured \"not found\" error for the requested ID(s). `blank_filter`: A `sections` element holds no visible character \u2014 only whitespace, or invisible characters such as a zero-width space \u2014 so it names no heading. An exactly-empty element is not blank here; it is skipped. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "queue_full",
+         "ncbi_unreachable",
+         "ncbi_rate_limited",
+         "ncbi_deadline_exceeded",
+         "ncbi_invalid_response",
+         "ncbi_resource_not_found",
+         "blank_filter"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Optional guidance for a partial or empty body. A `sections`-filter miss names the requested terms and affected article id(s) and suggests retrying without `sections` or using broader headings. A metadata-only record names the id(s) the chain could retrieve as front matter only and points at `pubmed_fetch_articles` for the abstract. A table returned with no cell values names the affected table(s), the article each came from, and why the cells cannot be recovered. A budgeted response names the characters returned versus carried and points at `truncation`. A response-wide budget that deferred articles names the ids to re-request. Absent when none of those applies.",
+    "type": "string"
+   },
+   "totalReturned": {
+    "description": "Number of articles in this response. Under a `maxResponseCharacters` budget this counts the kept articles only; `deferred.deferredCount` covers the rest.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when a character budget shortened at least one returned body, or withheld a whole article. Absent when every resolved article is present with its full post-filter body. The per-article body accounting is in `truncation`; the withheld ids are in `deferred`.",
+    "type": "boolean"
+   },
+   "truncation": {
+    "additionalProperties": false,
+    "description": "Character accounting for full text the budget shortened. Present only when a budget actually removed characters \u2014 its absence means every returned article carries its full post-filter body.",
+    "properties": {
+     "articles": {
+      "description": "Per-article accounting, covering only the articles the budget shortened",
+      "items": {
+       "additionalProperties": false,
+       "description": "Character accounting for one article the budget shortened",
+       "properties": {
+        "id": {
+         "description": "Identifier for the article \u2014 PMCID, PMID, DOI, or Europe PMC id, whichever the article carries first",
+         "type": "string"
+        },
+        "omittedAssetNames": {
+         "description": "The dropped assets by name, in document order \u2014 each asset's label, else its `id`, else `asset <n>` for its position in the article. Contiguous for the same reason `omittedTableNames` is: admission stops at the first asset that did not fit rather than skipping ahead to a smaller one. Absent when none were dropped.",
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "omittedAssets": {
+         "description": "Figures and supplementary items this article dropped whole because the budget left no room once sections and tables were served. An asset is never returned with a truncated caption, so it is either returned complete or counted here. Absent when none were dropped.",
+         "type": "number"
+        },
+        "omittedTableNames": {
+         "description": "The dropped tables by name, in document order \u2014 each table's label, else its `id`, else `table <n>` for its position in the article. Names the tables a bare count only hints at, the way `deferred.ids` names deferred articles. Every table from the first that did not fit onward is here: admission stops at that table rather than skipping ahead to a smaller one, so these are contiguous. Absent when none were dropped.",
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "omittedTables": {
+         "description": "Tables this article dropped whole because the budget left no room for them. A table is never cut mid-row, so it is either returned complete or counted here. Absent when none were dropped.",
+         "type": "number"
+        },
+        "originalCharacters": {
+         "description": "Body characters this article carried before the budget pass",
+         "type": "number"
+        },
+        "returnedCharacters": {
+         "description": "Body characters this article carries in the response",
+         "type": "number"
+        },
+        "sections": {
+         "description": "Per-section accounting for `source: pmc` articles, in document order, including sections dropped for budget; a shortened section lists its subsections. Absent for `source: unpaywall`, whose body has no section structure.",
+         "items": {
+          "additionalProperties": false,
+          "description": "Character accounting for one body section of a budgeted article",
+          "properties": {
+           "label": {
+            "description": "Section label as printed (e.g. `2`), when the section carries one",
+            "type": "string"
+           },
+           "originalCharacters": {
+            "description": "Body characters this section carried before the budget pass",
+            "type": "number"
+           },
+           "returnedCharacters": {
+            "description": "Body characters this section carries in the response. Zero means the section was dropped in `truncate` mode, or kept as a heading-only entry in `outline` mode, marked as such in the rendered text.",
+            "type": "number"
+           },
+           "subsections": {
+            "description": "Per-subsection accounting for a shortened section, in document order, including subsections dropped for budget \u2014 where inside the section the cut landed. Absent when the section was returned whole or carries no subsections.",
+            "items": {
+             "additionalProperties": false,
+             "description": "Character accounting for one subsection of a shortened section",
+             "properties": {
+              "label": {
+               "description": "Subsection label as printed (e.g. `2.1`), when the subsection carries one",
+               "type": "string"
+              },
+              "originalCharacters": {
+               "description": "Body characters this subsection carried before the budget pass",
+               "type": "number"
+              },
+              "returnedCharacters": {
+               "description": "Body characters this subsection carries in the response. Zero means it was dropped in `truncate` mode and counted in `omittedSections`, or kept as a heading-only entry in `outline` mode, marked as such in the rendered text.",
+               "type": "number"
+              },
+              "title": {
+               "description": "Subsection heading, when the subsection carries one",
+               "type": "string"
+              },
+              "truncated": {
+               "description": "True when the subsection returned fewer characters than it originally carried",
+               "type": "boolean"
+              }
+             },
+             "required": [
+              "originalCharacters",
+              "returnedCharacters",
+              "truncated"
+             ],
+             "type": "object"
+            },
+            "type": "array"
+           },
+           "title": {
+            "description": "Section heading, when the section carries one",
+            "type": "string"
+           },
+           "truncated": {
+            "description": "True when the section returned fewer characters than it originally carried",
+            "type": "boolean"
+           }
+          },
+          "required": [
+           "originalCharacters",
+           "returnedCharacters",
+           "truncated"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "source": {
+         "description": "Which output shape was budgeted: `pmc` budgets body sections and subsections, `unpaywall` budgets the single `content` body",
+         "enum": [
+          "pmc",
+          "unpaywall"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "source",
+        "originalCharacters",
+        "returnedCharacters"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "maxCharacters": {
+      "description": "The `maxCharacters` budget applied, when set",
+      "type": "number"
+     },
+     "maxCharactersPerSection": {
+      "description": "The `maxCharactersPerSection` budget applied, when set",
+      "type": "number"
+     },
+     "mode": {
+      "description": "The `overflowMode` that produced these results",
+      "enum": [
+       "truncate",
+       "outline"
+      ],
+      "type": "string"
+     },
+     "omittedAssets": {
+      "description": "Figures and supplementary items dropped whole across every budgeted article, because the budget left no room once body sections and tables were served. Absent when none were dropped. Re-request the affected articles with a higher `maxCharacters`, or with `sections` narrowed, to receive them.",
+      "type": "number"
+     },
+     "omittedSections": {
+      "description": "Body sections and subsections dropped entirely because an article budget was exhausted before reaching them. A dropped section counts once, together with its subsections. Always 0 in `outline` mode, which keeps every heading.",
+      "type": "number"
+     },
+     "omittedTables": {
+      "description": "Tables dropped whole across every budgeted article, because the budget left no room once body sections were served. Absent when none were dropped. Re-request the affected articles with a higher `maxCharacters`, or with `sections` narrowed, to receive them.",
+      "type": "number"
+     },
+     "originalCharacters": {
+      "description": "Body characters the shortened articles carried before the budget pass",
+      "type": "number"
+     },
+     "returnedCharacters": {
+      "description": "Body characters the shortened articles carry in this response",
+      "type": "number"
+     }
+    },
+    "required": [
+     "mode",
+     "originalCharacters",
+     "returnedCharacters",
+     "omittedSections",
+     "articles"
+    ],
+    "type": "object"
+   },
+   "unavailable": {
+    "description": "Per-identifier explanations for any requested PMIDs, PMCIDs, or DOIs with no returnable full text. `idType` names the field each id was sent in. Distinct from `deferred`: nothing here is retrievable by re-calling, and an id never appears in both.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One identifier that could not be returned, with the full chain it traversed",
+     "properties": {
+      "id": {
+       "description": "Identifier the chain could not resolve \u2014 PMID, PMCID, or DOI per `idType`",
+       "type": "string"
+      },
+      "idType": {
+       "description": "Which input field the id was sent in \u2014 `pmids`, `pmcids`, or `dois` respectively",
+       "enum": [
+        "pmid",
+        "pmcid",
+        "doi"
+       ],
+       "type": "string"
+      },
+      "reason": {
+       "description": "Why no full text was returned \u2014 the most specific signal any tier that answered reported. not-found: upstream returned no record for this ID. no-pmc-fallback-disabled: every tier was skipped (`triedTiers` is all `not-attempted`) \u2014 typically because EPMC (`EUROPEPMC_ENABLED`) and Unpaywall (`UNPAYWALL_EMAIL`) are not configured. no-epmc-fulltext: EPMC indexed the record but publishes no fullTextXML. no-body: the record was retrieved but carries front matter and abstract only, with no body sections \u2014 use `pubmed_fetch_articles` for the metadata. no-doi: the DOI lookup ran and this record has none, so Unpaywall could not be queried. doi-lookup-failed: the DOI lookup itself errored, so whether a DOI exists is unknown and Unpaywall was never reached \u2014 retry the request; unlike no-doi this is a transient failure, not a settled answer. no-oa: Unpaywall has no OA copy. fetch-failed: download failed. parse-failed: extraction empty. service-error: upstream server failure (threw, timed out, or returned malformed data). A reason never means the chain ran to completion \u2014 read `unqueriedTiers` for that.",
+       "enum": [
+        "not-found",
+        "no-pmc-fallback-disabled",
+        "no-epmc-fulltext",
+        "no-body",
+        "no-doi",
+        "doi-lookup-failed",
+        "no-oa",
+        "fetch-failed",
+        "parse-failed",
+        "service-error"
+       ],
+       "type": "string"
+      },
+      "triedTiers": {
+       "description": "Per-tier outcomes the chain produced for this id, in execution order. Covers `pmc`, `europepmc`, and `unpaywall` \u2014 the same tiers the tool description references. Tiers that the chain skipped appear as `outcome: not-attempted` with a `detail` explaining why.",
+       "items": {
+        "additionalProperties": false,
+        "description": "One tier the resolution chain attempted, with its outcome",
+        "properties": {
+         "detail": {
+          "description": "Tier-specific context when available",
+          "type": "string"
+         },
+         "outcome": {
+          "description": "Per-tier outcome. not-attempted: tier was skipped. miss: tier returned no record. no-fulltext: EPMC indexed the record but publishes no fullTextXML. no-body: the tier returned a record with front matter and abstract but no body sections, so the chain continued. no-doi: the DOI lookup ran and this record has none, so Unpaywall could not be queried. doi-lookup-failed: the DOI lookup itself errored, so whether a DOI exists is unknown and Unpaywall was never reached \u2014 retry the request. no-oa: Unpaywall reports no open-access copy. fetch-failed: OA copy download failed. parse-failed: extraction produced empty content. service-error: tier service threw.",
+          "enum": [
+           "not-attempted",
+           "miss",
+           "no-fulltext",
+           "no-body",
+           "no-doi",
+           "doi-lookup-failed",
+           "no-oa",
+           "fetch-failed",
+           "parse-failed",
+           "service-error"
+          ],
+          "type": "string"
+         },
+         "tier": {
+          "description": "Which tier in the resolution chain",
+          "enum": [
+           "pmc",
+           "europepmc",
+           "unpaywall"
+          ],
+          "type": "string"
+         }
+        },
+        "required": [
+         "tier",
+         "outcome"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "unqueriedTiers": {
+       "description": "Tiers the chain skipped because this deployment has not configured them, and that could have served this id \u2014 the search was incomplete, and a deployment with these tiers configured may still resolve the id. `triedTiers` carries which environment variable each one is waiting on. Absent when every tier that could have served the id was actually queried; a tier skipped because it was inapplicable to this id (no DOI for Unpaywall) is never listed.",
+       "items": {
+        "description": "A fallback tier this deployment has not configured",
+        "enum": [
+         "europepmc",
+         "unpaywall"
+        ],
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "required": [
+      "id",
+      "idType",
+      "reason",
+      "triedTiers"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Pubmed Fetch Fulltext"
+}

@@ -1,0 +1,476 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Match a workload to the cheapest GPU"
+ },
+ "description": "Describe a job (an open-weight model to serve or fine-tune, a model size, or a GPU need) and get up to eight ranked GPU configurations that can run it at the lowest live price, each with the GPU count, the effective USD per hour for the whole configuration, and a one-line reason; the result also states the VRAM the job needs and, when a hyperscaler can run the same job, which one and what percent cheaper the top match is. Use it when the user asks where to run a workload or which GPU they need, rather than the price of a named GPU. It sizes open-weight models only: an API-only model such as GPT-4 returns no matches and a note. Results mirror FastGPU's website and apply a small, disclosed tie-break toward providers that pay FastGPU a referral, only between otherwise equal offers (each match reports partner true/false). Optional hard limits (budget_usd_hr, max_total_usd with duration_hours, max_quote_age_minutes) leave out every configuration that breaks them, and limits reports what was applied and how many were left out. page_url links to the GPU's live price page. It does not rent, reserve or launch GPUs. No key required.",
+ "inputSchema": {
+  "properties": {
+   "budget_usd_hr": {
+    "description": "Hard limit on the hourly price of the whole configuration, in USD. Configurations above it are not returned.",
+    "type": "number"
+   },
+   "duration_hours": {
+    "description": "How long the job will run, in hours (fractions are fine). When sent, each match carries billed_hours and estimated_total_usd.",
+    "type": "number"
+   },
+   "gpu_count": {
+    "description": "Exact positive GPU count. Overrides a count in query text. Returns no matches if no supported configuration fits; omit for automatic sizing.",
+    "type": "integer"
+   },
+   "max_quote_age_minutes": {
+    "description": "Hard limit on how old a price quote may be, in minutes. Configurations whose price was fetched from the provider longer ago are not returned.",
+    "type": "number"
+   },
+   "max_total_usd": {
+    "description": "Hard limit on estimated_total_usd, the GPU rental cost of the whole job, in USD. Needs duration_hours. Configurations above it are not returned.",
+    "type": "number"
+   },
+   "min_gpu_memory_gb": {
+    "description": "Memory each GPU card must have, in GB (e.g. 80 for 80GB-class cards such as the H100 or A100 80GB). Smaller cards are never returned. On its own it lists every card that size, cheapest first.",
+    "type": "integer"
+   },
+   "model": {
+    "description": "Open model name to size against, e.g. \"Llama 3 70B\", \"Qwen 72B\", \"Mixtral\".",
+    "type": "string"
+   },
+   "params_b": {
+    "description": "Model size in billions of parameters when no exact model is named.",
+    "type": "number"
+   },
+   "precision": {
+    "description": "Numeric precision to size the model at.",
+    "enum": [
+     "fp16",
+     "int8",
+     "int4"
+    ],
+    "type": "string"
+   },
+   "query": {
+    "description": "Plain-language job, e.g. \"cheapest to serve Llama 3 70B\", \"2x H100 for fine-tuning\" or \"a GPU with 80GB of memory\". Provide this OR a structured spec below.",
+    "type": "string"
+   },
+   "region": {
+    "description": "Restrict to a data-residency region.",
+    "enum": [
+     "US",
+     "EU",
+     "ASIA"
+    ],
+    "type": "string"
+   },
+   "reserved": {
+    "description": "Set true to include reserved / committed-term capacity for a lower rate.",
+    "enum": [
+     "true",
+     "false"
+    ],
+    "type": "string"
+   },
+   "spot": {
+    "description": "Set true to include interruptible spot capacity for a cheaper rate.",
+    "enum": [
+     "true",
+     "false"
+    ],
+    "type": "string"
+   },
+   "task": {
+    "description": "What the job does.",
+    "enum": [
+     "inference",
+     "finetune-lora",
+     "finetune-full",
+     "generate",
+     "transcribe",
+     "embed"
+    ],
+    "type": "string"
+   },
+   "vram_gb": {
+    "description": "Rough VRAM the job needs, in GB, if you already know it.",
+    "type": "integer"
+   }
+  },
+  "type": "object"
+ },
+ "name": "match_workload",
+ "outputSchema": {
+  "properties": {
+   "as_of": {
+    "description": "When this answer was computed (ISO 8601). Quote ages are measured against it.",
+    "type": "string"
+   },
+   "count": {
+    "type": "integer"
+   },
+   "error": {
+    "description": "Present when the request was not valid; says what to send instead.",
+    "type": "string"
+   },
+   "hero": {
+    "properties": {
+     "hyperscaler_ceiling": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "same_model": {
+      "type": [
+       "boolean",
+       "null"
+      ]
+     },
+     "savings_pct": {
+      "type": [
+       "number",
+       "null"
+      ]
+     }
+    },
+    "type": [
+     "object",
+     "null"
+    ]
+   },
+   "limits": {
+    "description": "The hard limits this answer applied (null when one was not sent) and how many configurations each one left out.",
+    "properties": {
+     "budget_usd_hr": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "duration_hours": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "excluded": {
+      "properties": {
+       "older_than_max_quote_age_minutes": {
+        "type": "integer"
+       },
+       "over_budget_usd_hr": {
+        "type": "integer"
+       },
+       "over_max_total_usd": {
+        "type": "integer"
+       }
+      },
+      "type": "object"
+     },
+     "max_quote_age_minutes": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "max_total_usd": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "nearest_excluded": {
+      "description": "When the limits leave no match: the cheapest configuration that can still run the job, and the limits it breaks.",
+      "properties": {
+       "billed_hours": {
+        "description": "Hours the provider bills for duration_hours: rounded up to whole hours on a per-hour meter and to whole minutes on a per-minute meter. Null when duration_hours was not sent.",
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "billing_increment": {
+        "description": "How this provider's meter ticks for on-demand rental; varies means FastGPU has no verified figure.",
+        "enum": [
+         "per-second",
+         "per-minute",
+         "per-hour",
+         "varies"
+        ],
+        "type": "string"
+       },
+       "breaks": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "effective_usd_hr": {
+        "type": "number"
+       },
+       "estimated_total_usd": {
+        "description": "effective_usd_hr times billed_hours, rounded up to the cent. GPU rental only: storage, data transfer, CPU and memory billed separately, and provider minimums are not included. Null when duration_hours was not sent.",
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "fetched_at": {
+        "description": "When this price was fetched from the provider (ISO 8601).",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "fits_single_card": {
+        "type": "boolean"
+       },
+       "gpu": {
+        "type": "string"
+       },
+       "gpu_count": {
+        "type": "integer"
+       },
+       "monthly_usd": {
+        "type": "number"
+       },
+       "offer_type": {
+        "type": "string"
+       },
+       "over_budget": {
+        "type": "boolean"
+       },
+       "page_url": {
+        "description": "Absolute URL of this GPU's live price page, with every live offer.",
+        "type": "string"
+       },
+       "partner": {
+        "type": "boolean"
+       },
+       "provider": {
+        "type": "string"
+       },
+       "provider_label": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "quote_age_seconds": {
+        "description": "Seconds between fetched_at and as_of. Null when the fetch time is unknown.",
+        "type": [
+         "integer",
+         "null"
+        ]
+       },
+       "reason": {
+        "type": "string"
+       },
+       "reliability": {
+        "type": "string"
+       },
+       "score": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "tokens_per_sec": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "url": {
+        "description": "Site-relative path of this GPU's live price page, e.g. /gpus/h100-sxm.",
+        "type": "string"
+       },
+       "usd_per_million_tokens": {
+        "type": [
+         "number",
+         "null"
+        ]
+       }
+      },
+      "type": [
+       "object",
+       "null"
+      ]
+     }
+    },
+    "type": "object"
+   },
+   "matches": {
+    "items": {
+     "properties": {
+      "billed_hours": {
+       "description": "Hours the provider bills for duration_hours: rounded up to whole hours on a per-hour meter and to whole minutes on a per-minute meter. Null when duration_hours was not sent.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "billing_increment": {
+       "description": "How this provider's meter ticks for on-demand rental; varies means FastGPU has no verified figure.",
+       "enum": [
+        "per-second",
+        "per-minute",
+        "per-hour",
+        "varies"
+       ],
+       "type": "string"
+      },
+      "effective_usd_hr": {
+       "type": "number"
+      },
+      "estimated_total_usd": {
+       "description": "effective_usd_hr times billed_hours, rounded up to the cent. GPU rental only: storage, data transfer, CPU and memory billed separately, and provider minimums are not included. Null when duration_hours was not sent.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "fetched_at": {
+       "description": "When this price was fetched from the provider (ISO 8601).",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "fits_single_card": {
+       "type": "boolean"
+      },
+      "gpu": {
+       "type": "string"
+      },
+      "gpu_count": {
+       "type": "integer"
+      },
+      "monthly_usd": {
+       "type": "number"
+      },
+      "offer_type": {
+       "type": "string"
+      },
+      "over_budget": {
+       "type": "boolean"
+      },
+      "page_url": {
+       "description": "Absolute URL of this GPU's live price page, with every live offer.",
+       "type": "string"
+      },
+      "partner": {
+       "type": "boolean"
+      },
+      "provider": {
+       "type": "string"
+      },
+      "provider_label": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "quote_age_seconds": {
+       "description": "Seconds between fetched_at and as_of. Null when the fetch time is unknown.",
+       "type": [
+        "integer",
+        "null"
+       ]
+      },
+      "reason": {
+       "type": "string"
+      },
+      "reliability": {
+       "type": "string"
+      },
+      "score": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "tokens_per_sec": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "url": {
+       "description": "Site-relative path of this GPU's live price page, e.g. /gpus/h100-sxm.",
+       "type": "string"
+      },
+      "usd_per_million_tokens": {
+       "type": [
+        "number",
+        "null"
+       ]
+      }
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "note": {
+    "description": "Why there are no matches, when there are none.",
+    "type": "string"
+   },
+   "stale": {
+    "type": "boolean"
+   },
+   "updated_at": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "workload": {
+    "properties": {
+     "gpu_count": {
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "gpu_vendors": {
+      "items": {
+       "type": "string"
+      },
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "identified": {
+      "type": "boolean"
+     },
+     "interpretation": {
+      "type": "string"
+     },
+     "min_gpu_memory_gb": {
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "precision": {
+      "type": "string"
+     },
+     "task": {
+      "type": "string"
+     },
+     "vram_required_gb": {
+      "type": "number"
+     }
+    },
+    "type": "object"
+   }
+  },
+  "required": [
+   "count",
+   "matches"
+  ],
+  "type": "object"
+ },
+ "title": "Match a workload to the cheapest GPU"
+}
