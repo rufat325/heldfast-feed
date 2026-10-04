@@ -1,0 +1,390 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "List a player's Steam wishlist by SteamID64. No API key required, but the wishlist/profile must be public \u2014 otherwise it returns found:false, which is ALSO what an empty but public wishlist returns; read `reason` to tell those apart. By default returns a light list of appids (sorted by priority, no names), capped at the first 100 (check `returned` vs `total`). Set include_details for full store cards in ONE call (name, price/discount, review %, Deck/SteamOS/Machine/Frame compat, vr_support, tags, release) \u2014 no need to follow up with get_items. Narrow it in the SAME call with tags (e.g. ['Metroidvania']), platform (NATIVE windows/mac/linux build), steam_deck/steam_os/steam_machine/steam_frame (Proton compatibility \u2014 see each field), min_review, min_discount / on_sale_only, or country / language. Any of these filters switches to the detailed card view, since the light appid list has no price/tags/compat to filter on. Filters apply before the output cap (the detailed card list returns at most 50 items), so a deeply-discounted niche match past the display cap is never hidden by it (e.g. 'top metroidvanias on my wishlist with a good discount and reviews' \u2192 tags:['Metroidvania'] + min_discount + min_review). Results ranked by discount when a discount filter is set, else by wishlist priority; `matched` reports the pre-cap count. Steam itself only attaches store data to roughly the first 100 wishlist entries per call \u2014 on a bigger wishlist, `enriched` reports how many of `total` got checked, and `note` explains when some were skipped (their filter/price data isn't available at all, not that they don't match). Convert a vanity name with resolve_vanity_url first (that conversion itself needs STEAM_API_KEY, even though this tool doesn't).",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "country": {
+    "description": "Country (cc) for prices; overrides STEAM_COUNTRY. Implies include_details. Must be a real Steam store region \u2014 the two-letter shape is all that's checked here, and Steam answers an unrecognized code with US prices rather than an error, so a typo returns plausible numbers for the wrong country.",
+    "pattern": "^[A-Za-z]{2}$",
+    "type": "string"
+   },
+   "include_details": {
+    "description": "Return full store cards (name, price, discount, reviews, compatibility, tags) per item in one call, instead of just appids. Implied by any filter below.",
+    "type": "boolean"
+   },
+   "language": {
+    "description": "Store language; overrides STEAM_LANGUAGE. Implies include_details. Use Steam's own language NAME \u2014 english, russian, schinese/tchinese \u2014 not an ISO code like en/ru/zh. An unrecognized value is never an error: text comes back in English and any `tags` list comes back EMPTY, which reads as 'this game has no tags' rather than as a bad language. (Filtering BY tags is the one loud case \u2014 it fails outright.)",
+    "minLength": 2,
+    "type": "string"
+   },
+   "min_discount": {
+    "description": "Keep only items discounted at least this %, ranked by discount. Implies include_details.",
+    "exclusiveMinimum": 0,
+    "maximum": 100,
+    "type": "integer"
+   },
+   "min_review": {
+    "description": "Keep only items with at least this positive-review %. Implies include_details.",
+    "maximum": 100,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "on_sale_only": {
+    "description": "Only wishlist items currently discounted, ranked by discount %. Implies include_details.",
+    "type": "boolean"
+   },
+   "platform": {
+    "description": "NATIVE-build filter: keep only games shipping a native build for this OS (windows/mac/linux). 'linux' = a native Linux/SteamOS port. This is NOT Proton \u2014 for games that run via Proton compatibility use steam_os / steam_deck instead. Each result's `platforms` field lists its native builds, while steam_os/steam_deck report Proton compatibility, so native vs Proton stay distinct.",
+    "enum": [
+     "windows",
+     "mac",
+     "linux"
+    ],
+    "type": "string"
+   },
+   "steam_deck": {
+    "description": "Steam Deck compatibility (runs via Proton): 'verified' = Deck-Verified only; 'playable' = Playable or Verified. Not a native Linux build \u2014 see `platform` for that.",
+    "enum": [
+     "playable",
+     "verified"
+    ],
+    "type": "string"
+   },
+   "steam_frame": {
+    "description": "Steam Frame (VR headset) compatibility: 'verified' = Frame-Verified only; 'playable' = Playable or Verified.",
+    "enum": [
+     "playable",
+     "verified"
+    ],
+    "type": "string"
+   },
+   "steam_machine": {
+    "description": "Steam Machine (Valve's console) compatibility (via Proton): 'verified' = Steam-Machine-Verified only; 'playable' = Playable or Verified. Its own rating, distinct from the general steam_os one.",
+    "enum": [
+     "playable",
+     "verified"
+    ],
+    "type": "string"
+   },
+   "steam_os": {
+    "description": "SteamOS compatibility \u2014 how well it runs on SteamOS in general (via Proton): 'verified' = SteamOS-Verified only; 'playable' = Playable or Verified. For a NATIVE Linux build instead, use platform:'linux'; for the Steam Machine console specifically, use steam_machine.",
+    "enum": [
+     "playable",
+     "verified"
+    ],
+    "type": "string"
+   },
+   "steamid": {
+    "description": "17-digit SteamID64. Omit to use the STEAM_ID configured on the server. Convert a vanity/custom URL name with resolve_vanity_url first.",
+    "pattern": "^\\d{17}$",
+    "type": "string"
+   },
+   "tags": {
+    "description": "Keep only wishlist items carrying ALL of these user tags (case-insensitive), e.g. ['Metroidvania']. Use exact Steam tag names \u2014 a misspelled/unrecognized one isn't an error, it just matches nothing. Implies include_details.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "name": "get_wishlist",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+   {
+    "additionalProperties": false,
+    "properties": {
+     "found": {
+      "const": false,
+      "type": "boolean"
+     },
+     "items": {
+      "items": {
+       "not": {}
+      },
+      "type": "array"
+     },
+     "reason": {
+      "type": "string"
+     },
+     "total": {
+      "const": 0,
+      "type": "number"
+     }
+    },
+    "required": [
+     "found",
+     "reason",
+     "total",
+     "items"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "found": {
+      "const": true,
+      "type": "boolean"
+     },
+     "items": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "added": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "appid": {
+         "type": "number"
+        },
+        "priority": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "store_url": {
+         "type": [
+          "string",
+          "null"
+         ]
+        }
+       },
+       "required": [
+        "store_url",
+        "priority",
+        "added"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "returned": {
+      "type": "number"
+     },
+     "total": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "found",
+     "total",
+     "returned",
+     "items"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "enriched": {
+      "description": "How many of `total` Steam actually attached store data to (it caps around the first 100) \u2014 every filter below only runs over these, never the full `total`.",
+      "type": "number"
+     },
+     "found": {
+      "const": true,
+      "type": "boolean"
+     },
+     "items": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "added": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "appid": {
+         "type": "number"
+        },
+        "discount_end": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "discount_pct": {
+         "type": "number"
+        },
+        "name": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "original": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "platforms": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "price": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "priority": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "release_date": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "review_count": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "review_label": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "review_percent": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "steam_deck": {
+         "enum": [
+          "unknown",
+          "unsupported",
+          "playable",
+          "verified"
+         ],
+         "type": "string"
+        },
+        "steam_frame": {
+         "enum": [
+          "unknown",
+          "unsupported",
+          "playable",
+          "verified"
+         ],
+         "type": "string"
+        },
+        "steam_machine": {
+         "enum": [
+          "unknown",
+          "unsupported",
+          "playable",
+          "verified"
+         ],
+         "type": "string"
+        },
+        "steam_os": {
+         "enum": [
+          "unknown",
+          "unsupported",
+          "playable",
+          "verified"
+         ],
+         "type": "string"
+        },
+        "store_url": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "tags": {
+         "description": "The game's most-weighted user tags, most-relevant first \u2014 a display sample capped well below the full set, not the complete list. Tag FILTERS (discover_games' and get_wishlist's `tags`) match against the game's COMPLETE tag list, so a filtered result can legitimately not show the tag you filtered on in this array. Absence here is not evidence the game lacks that tag.",
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "vr_support": {
+         "enum": [
+          "none",
+          "supported",
+          "required"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "appid",
+        "name",
+        "store_url",
+        "review_percent",
+        "review_count",
+        "review_label",
+        "platforms",
+        "steam_deck",
+        "steam_os",
+        "steam_machine",
+        "steam_frame",
+        "vr_support",
+        "tags",
+        "release_date",
+        "discount_pct",
+        "discount_end",
+        "original",
+        "price",
+        "priority",
+        "added"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "matched": {
+      "description": "How many of the enriched items satisfied the filters, BEFORE the display cap \u2014 a big gap between this and `returned` means results were capped, not that fewer items matched.",
+      "type": "number"
+     },
+     "note": {
+      "type": "string"
+     },
+     "returned": {
+      "description": "How many items are actually in `items` below, after the display cap.",
+      "type": "number"
+     },
+     "total": {
+      "description": "The player's full wishlist size, including entries Steam never sent store data for (see `enriched`).",
+      "type": "number"
+     }
+    },
+    "required": [
+     "found",
+     "total",
+     "enriched",
+     "matched",
+     "returned",
+     "items"
+    ],
+    "type": "object"
+   }
+  ],
+  "type": "object"
+ },
+ "title": "Get a player's wishlist"
+}

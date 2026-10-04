@@ -1,0 +1,539 @@
+{
+ "_meta": {
+  "ui": {
+   "resourceUri": "ui://pcc/dashboard/render-ir"
+  }
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Compose a live PCC dashboard rendered through the closed, PCC-owned IR (read-only). Pass a DashboardManifest; it renders as an interactive MCP App via the audited closed-IR render path.",
+ "inputSchema": {
+  "$id": "https://capability.network/ui-kit/v1/manifest.schema.json",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "definitions": {
+   "Action": {
+    "additionalProperties": false,
+    "description": "A write the surface can perform. Fires ONLY on a human click; nothing on load. confirm has NO 'none'. Money verbs use confirm:'approval'.",
+    "properties": {
+     "arguments": {
+      "description": "Bounded arguments for the typed operation (host mode only).",
+      "type": "object"
+     },
+     "body": {
+      "description": "Static body merged into the request.",
+      "type": "object"
+     },
+     "bodyFrom": {
+      "description": "Form id whose collected values become the request body.",
+      "type": "string"
+     },
+     "confirm": {
+      "description": "'inline' = button confirm; 'approval' = the kit's Approval window. NO 'none'.",
+      "enum": [
+       "inline",
+       "approval"
+      ]
+     },
+     "id": {
+      "minLength": 1,
+      "type": "string"
+     },
+     "idempotencyFrom": {
+      "description": "Field id supplying an idempotencyKey (required on offer-posting actions).",
+      "type": "string"
+     },
+     "intentText": {
+      "description": "Snapshot-mode chip text handed to the LLM (e.g. 'pcc: approve offer \u2026').",
+      "minLength": 1,
+      "type": "string"
+     },
+     "kind": {
+      "enum": [
+       "post",
+       "patch"
+      ]
+     },
+     "label": {
+      "minLength": 1,
+      "type": "string"
+     },
+     "operation_id": {
+      "description": "R4 PR2 \u2014 typed host-mediated operation id. In an MCP-App host view the click routes to the registered pcc.op.<operation_id> tool via tools/call (server-authorized); the raw kind/path is inert in host mode. Standalone rendering ignores this.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "path": {
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "id",
+     "label",
+     "kind",
+     "path",
+     "confirm",
+     "intentText"
+    ],
+    "type": "object"
+   },
+   "Binding": {
+    "additionalProperties": false,
+    "description": "A live-data binding: which route a window reads, how often, what to pluck.",
+    "properties": {
+     "path": {
+      "description": "'/api/\u2026' route the window reads.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "pollMs": {
+      "description": "Poll cadence in ms (default ~30000; Zod floors at MIN_POLL_MS=2000 so a shared dashboard can't fast-poll authenticated endpoints).",
+      "minimum": 2000,
+      "type": "integer"
+     },
+     "query": {
+      "description": "Query params merged onto the request.",
+      "type": "object"
+     },
+     "select": {
+      "description": "Dot-path into the response (e.g. 'data.jobs.0.status'). NOT JSONPath.",
+      "type": "string"
+     },
+     "sse": {
+      "description": "SSE stream '/sse/stream/\u2026' (fetch-SSE with Bearer).",
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "path"
+    ],
+    "type": "object"
+   },
+   "ComposeRequest": {
+    "additionalProperties": false,
+    "description": "A re-plannable value-chain request (mirrors @pcc/spec ComposeRequestSchema). Pinned in a chain window, never a compositionId (30-min TTL).",
+    "properties": {
+     "budgetUSD": {
+      "exclusiveMinimum": 0,
+      "maximum": 1000000000,
+      "type": "number"
+     },
+     "description": {
+      "maxLength": 4000,
+      "minLength": 1,
+      "type": "string"
+     },
+     "location": {
+      "additionalProperties": false,
+      "properties": {
+       "lat": {
+        "maximum": 90,
+        "minimum": -90,
+        "type": "number"
+       },
+       "lng": {
+        "maximum": 180,
+        "minimum": -180,
+        "type": "number"
+       },
+       "radiusKm": {
+        "exclusiveMinimum": 0,
+        "maximum": 20000,
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lng"
+      ],
+      "type": "object"
+     },
+     "minAssuranceTier": {
+      "enum": [
+       0,
+       1,
+       2,
+       3
+      ]
+     },
+     "optimizeFor": {
+      "enum": [
+       "price",
+       "speed",
+       "quality"
+      ]
+     },
+     "outcomeChain": {
+      "items": {
+       "maxLength": 120,
+       "minLength": 1,
+       "type": "string"
+      },
+      "maxItems": 20,
+      "minItems": 1,
+      "type": "array"
+     },
+     "outcomeType": {
+      "maxLength": 120,
+      "minLength": 1,
+      "type": "string"
+     },
+     "requester": {
+      "additionalProperties": false,
+      "properties": {
+       "agentId": {
+        "minLength": 1,
+        "type": "string"
+       },
+       "did": {
+        "minLength": 1,
+        "type": "string"
+       }
+      },
+      "required": [
+       "agentId"
+      ],
+      "type": "object"
+     },
+     "steps": {
+      "items": {
+       "maxLength": 120,
+       "minLength": 1,
+       "type": "string"
+      },
+      "maxItems": 20,
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "outcomeType",
+     "budgetUSD",
+     "minAssuranceTier"
+    ],
+    "type": "object"
+   },
+   "ListItem": {
+    "additionalProperties": false,
+    "properties": {
+     "meta": {
+      "default": [],
+      "description": "Dot-path fields for the row's meta line (capped at 12 \u2014 meta selectors loop per rendered row).",
+      "items": {
+       "type": "string"
+      },
+      "maxItems": 12,
+      "type": "array"
+     },
+     "statusFrom": {
+      "description": "Dot-path field for the row's status pill.",
+      "type": "string"
+     },
+     "title": {
+      "description": "Dot-path field for each row's title.",
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "title"
+    ],
+    "type": "object"
+   },
+   "Section": {
+    "additionalProperties": false,
+    "properties": {
+     "heading": {
+      "type": "string"
+     },
+     "windows": {
+      "items": {
+       "$ref": "#/definitions/Window"
+      },
+      "maxItems": 24,
+      "type": "array"
+     }
+    },
+    "required": [
+     "windows"
+    ],
+    "type": "object"
+   },
+   "Window": {
+    "oneOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "kind": {
+        "const": "note"
+       },
+       "text": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "kind",
+       "text"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "binding": {
+        "$ref": "#/definitions/Binding"
+       },
+       "format": {
+        "enum": [
+         "usd",
+         "int",
+         "pct",
+         "ts"
+        ]
+       },
+       "kind": {
+        "const": "metric"
+       },
+       "label": {
+        "minLength": 1,
+        "type": "string"
+       },
+       "select": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "kind",
+       "label",
+       "binding"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "binding": {
+        "$ref": "#/definitions/Binding"
+       },
+       "kind": {
+        "const": "capability"
+       }
+      },
+      "required": [
+       "kind",
+       "binding"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "binding": {
+        "$ref": "#/definitions/Binding"
+       },
+       "item": {
+        "$ref": "#/definitions/ListItem"
+       },
+       "kind": {
+        "const": "list"
+       },
+       "limit": {
+        "exclusiveMinimum": 0,
+        "maximum": 200,
+        "type": "integer"
+       }
+      },
+      "required": [
+       "kind",
+       "binding",
+       "item"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "kind": {
+        "const": "form"
+       },
+       "schema": {
+        "description": "A JSON Schema whose properties become form fields.",
+        "type": "object"
+       },
+       "submit": {
+        "$ref": "#/definitions/Action"
+       }
+      },
+      "required": [
+       "kind",
+       "schema",
+       "submit"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "binding": {
+        "$ref": "#/definitions/Binding"
+       },
+       "kind": {
+        "const": "run"
+       },
+       "latestFrom": {
+        "type": "string"
+       },
+       "statusFrom": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "kind",
+       "binding",
+       "statusFrom",
+       "latestFrom"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "approve": {
+        "$ref": "#/definitions/Action"
+       },
+       "binding": {
+        "$ref": "#/definitions/Binding"
+       },
+       "deny": {
+        "$ref": "#/definitions/Action"
+       },
+       "kind": {
+        "const": "approval"
+       }
+      },
+      "required": [
+       "kind",
+       "binding",
+       "approve"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "binding": {
+        "$ref": "#/definitions/Binding"
+       },
+       "kind": {
+        "const": "receipt"
+       }
+      },
+      "required": [
+       "kind",
+       "binding"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "composeRef": {
+        "$ref": "#/definitions/ComposeRequest"
+       },
+       "execute": {
+        "$ref": "#/definitions/Action"
+       },
+       "kind": {
+        "const": "chain"
+       }
+      },
+      "required": [
+       "kind",
+       "composeRef"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "actions": {
+        "items": {
+         "$ref": "#/definitions/Action"
+        },
+        "maxItems": 24,
+        "minItems": 1,
+        "type": "array"
+       },
+       "kind": {
+        "const": "actions"
+       }
+      },
+      "required": [
+       "kind",
+       "actions"
+      ],
+      "type": "object"
+     }
+    ]
+   }
+  },
+  "description": "JSON-Schema mirror of @pcc/spec DashboardManifestSchema (packages/spec/src/types/ui-artifact.ts). The small declarative dashboard a person's LLM emits; the pcc-ui kit renders it. Windows are a closed set rendered textContent-only. Actions never carry confirm:\"none\" (a human click is the confirm step). A manifest must NOT contain an API key (pcc_live_/pcc_test_) anywhere \u2014 a shared artifact travels with its contents. This mirror now carries the Zod RESOURCE CAPS (sections/windows/actions maxItems 24, list.limit max 200, meta maxItems 12, pollMs minimum 2000) so a generator validating only against this schema does not emit manifests the gateway then rejects. TWO Zod guards are not expressible as JSON-Schema validation and are enforced only by the gateway's Zod (the authoritative gate): the 256KB byte cap (MAX_MANIFEST_BYTES) and the recursive no-credential refine (containsApiKey \u2014 rejects a baked pcc key / Bearer / JWT, raw, percent-encoded, or base64). Validate against the Zod DashboardManifestSchema for the full gate.",
+  "properties": {
+   "api_base": {
+    "description": "Gateway base URL. Default https://capability.network.",
+    "type": "string"
+   },
+   "csd": {
+    "const": "pcc://artifacts/dashboard/v1",
+    "description": "The builtin CSD URI this manifest conforms to."
+   },
+   "description": {
+    "type": "string"
+   },
+   "sections": {
+    "items": {
+     "$ref": "#/definitions/Section"
+    },
+    "maxItems": 24,
+    "type": "array"
+   },
+   "theme": {
+    "enum": [
+     "auto",
+     "dark",
+     "light"
+    ]
+   },
+   "title": {
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "csd",
+   "title",
+   "sections"
+  ],
+  "title": "PCC Dashboard Manifest",
+  "type": "object"
+ },
+ "name": "render_pcc_dashboard_ir",
+ "outputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "manifest": {
+    "type": "object"
+   }
+  },
+  "required": [
+   "manifest"
+  ],
+  "type": "object"
+ }
+}

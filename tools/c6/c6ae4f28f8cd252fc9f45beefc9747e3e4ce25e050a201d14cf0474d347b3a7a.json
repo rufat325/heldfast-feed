@@ -1,0 +1,442 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Process document (text or OCR + typed extraction)"
+ },
+ "description": "Single-call pipeline: provided text/Markdown or Mistral OCR \u2192 classify (if kind=auto) \u2192 typed extraction \u2192 validation.\nsource.type=text skips OCR and Files uploads. Text with kind=generic makes no API calls; classification and typed extraction use Mistral chat.\nResults expose extraction_source. Provided text has null ocr_confidence and page_count; ocr_text contains the supplied text unchanged.\nReplaces the manual chain of mistral_ocr + mistral_chat + JSON parsing.\n\nKinds: contract | invoice | id_document | generic. Use kind=auto to let the server classify.\nReturns a discriminated union \u2014 switch on `kind` to access typed fields.\nValidation checks schema and, for OCR sources, OCR confidence; not factual or accounting accuracy.\nTyped extraction rejects text longer than 60000 characters rather than truncating it.\n\nCache keys include source, kind, page limit, endpoint, models and pipeline version.\nOverride location with MISTRAL_MCP_CACHE_DIR. Override mode with options.cache.\nDefault cache mode is 'read_write' EXCEPT for kind=id_document (auto-bypass to avoid\npersisting PII). Set options.cache='read_write' explicitly to opt in for id documents.\n\noptions.maxPages and options.minOcrConfidence apply only to OCR sources. The confidence floor defaults to 0.3. Below the floor the\ntool returns isError. Missing or partial confidence scores also return isError;\nuse mistral_ocr directly if you need raw OCR without a confidence guarantee.\n0.3 is a conservative starting point, not a measured one: calibrate it for your\ncorpus with `npm run eval:docs`.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "kind": {
+    "default": "auto",
+    "description": "Extraction task. auto classifies the document; generic returns text without typed extraction. Text source with generic makes no API calls.",
+    "enum": [
+     "auto",
+     "contract",
+     "invoice",
+     "id_document",
+     "generic"
+    ],
+    "type": "string"
+   },
+   "options": {
+    "default": {},
+    "description": "Page selection, OCR confidence floor and local cache policy.",
+    "properties": {
+     "cache": {
+      "description": "Default depends on kind: 'bypass' for id_document (PII), 'read_write' otherwise. Override explicitly to opt in to caching for sensitive kinds.",
+      "enum": [
+       "read_write",
+       "read_only",
+       "bypass"
+      ],
+      "type": "string"
+     },
+     "languageHints": {
+      "description": "Optional two-letter language hints for typed extraction; they do not select an OCR model.",
+      "items": {
+       "pattern": "^[a-z]{2}$",
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "maxPages": {
+      "default": 50,
+      "description": "OCR sources only: maximum pages to process from the start. The result covers only this selection. Not applied to provided text.",
+      "exclusiveMinimum": 0,
+      "maximum": 200,
+      "type": "integer"
+     },
+     "minOcrConfidence": {
+      "default": 0.3,
+      "description": "OCR sources only; not applied to provided text. Conservative floor: below it the tool returns isError rather than risk extracting from text OCR is not confident about. 0.3 is a starting point, not a measured value \u2014 run `npm run eval:docs` against your own documents and set the number that run justifies.",
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+     }
+    },
+    "type": "object"
+   },
+   "source": {
+    "description": "Already extracted text/Markdown, or an OCR source: remote URL, uploaded file ID, or inline image.",
+    "oneOf": [
+     {
+      "properties": {
+       "text": {
+        "description": "Document text or Markdown, preserved as supplied. Maximum 60000 UTF-16 code units. Typed extraction sends this text to the configured Mistral chat endpoint.",
+        "maxLength": 60000,
+        "pattern": "\\S",
+        "type": "string"
+       },
+       "type": {
+        "const": "text",
+        "description": "Use already extracted plain text or Markdown without calling OCR or the Files API.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "text"
+      ],
+      "type": "object"
+     },
+     {
+      "properties": {
+       "type": {
+        "const": "url",
+        "description": "Fetch a document from a provider-accessible URL.",
+        "type": "string"
+       },
+       "url": {
+        "description": "HTTPS URL to a PDF or image.",
+        "format": "uri",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "url"
+      ],
+      "type": "object"
+     },
+     {
+      "properties": {
+       "data": {
+        "description": "Base64-encoded image bytes (no data: prefix). For PDFs, upload via the Files API and use type:file_id instead.",
+        "type": "string"
+       },
+       "mime": {
+        "description": "e.g. image/png, image/jpeg.",
+        "pattern": "^image\\/(png|jpeg|jpg|gif|webp)$",
+        "type": "string"
+       },
+       "type": {
+        "const": "image_base64",
+        "description": "Send inline image bytes; PDFs must use file_id or url.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "data",
+       "mime"
+      ],
+      "type": "object"
+     },
+     {
+      "properties": {
+       "fileId": {
+        "description": "ID of a file previously uploaded via files_upload.",
+        "type": "string"
+       },
+       "type": {
+        "const": "file_id",
+        "description": "Use an existing Mistral Files API upload.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "fileId"
+      ],
+      "type": "object"
+     }
+    ]
+   }
+  },
+  "required": [
+   "source"
+  ],
+  "type": "object"
+ },
+ "name": "process_document",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "anomalies": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "cache_hit": {
+    "type": "boolean"
+   },
+   "clauses": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "heading": {
+       "type": "string"
+      },
+      "risk": {
+       "anyOf": [
+        {
+         "enum": [
+          "low",
+          "medium",
+          "high"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "text": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "heading",
+      "text"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "country": {
+    "anyOf": [
+     {
+      "maxLength": 2,
+      "minLength": 2,
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "currency": {
+    "anyOf": [
+     {
+      "maxLength": 3,
+      "minLength": 3,
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "dob": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "document_type": {
+    "enum": [
+     "passport",
+     "id_card",
+     "driver_license",
+     "other"
+    ],
+    "type": "string"
+   },
+   "due_date": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "expiry": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "extraction_source": {
+    "description": "How the input text was obtained. provided_text is supplied by the caller, not verified by OCR.",
+    "enum": [
+     "provided_text",
+     "mistral_ocr"
+    ],
+    "type": "string"
+   },
+   "key_dates": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "iso": {
+       "type": "string"
+      },
+      "label": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "label",
+      "iso"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "kind": {
+    "enum": [
+     "contract",
+     "invoice",
+     "id_document",
+     "generic"
+    ],
+    "type": "string"
+   },
+   "line_items": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "amount": {
+       "type": "number"
+      },
+      "desc": {
+       "type": "string"
+      },
+      "qty": {
+       "type": "number"
+      },
+      "unit_price": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "desc",
+      "qty",
+      "unit_price",
+      "amount"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "name": {
+    "type": "string"
+   },
+   "ocr_confidence": {
+    "anyOf": [
+     {
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Mean Mistral OCR page confidence. Null for provided text; never an extraction accuracy score."
+   },
+   "ocr_text": {
+    "description": "Text used for extraction: provided text unchanged, or Markdown returned by Mistral OCR.",
+    "type": "string"
+   },
+   "page_count": {
+    "anyOf": [
+     {
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Pages processed by Mistral OCR. Null for provided text, whose pagination is unknown."
+   },
+   "parties": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "role": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "name"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "pipeline_version": {
+    "type": "string"
+   },
+   "risk_score": {
+    "anyOf": [
+     {
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "source_id": {
+    "type": "string"
+   },
+   "structured_text": {
+    "type": "string"
+   },
+   "summary": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "total": {
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "total_duration_ms": {
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "vendor": {
+    "additionalProperties": false,
+    "properties": {
+     "name": {
+      "type": "string"
+     },
+     "tax_id": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "source_id",
+   "kind",
+   "extraction_source",
+   "ocr_text",
+   "ocr_confidence",
+   "page_count",
+   "total_duration_ms",
+   "cache_hit",
+   "pipeline_version"
+  ],
+  "type": "object"
+ },
+ "title": "Process a business document end-to-end"
+}

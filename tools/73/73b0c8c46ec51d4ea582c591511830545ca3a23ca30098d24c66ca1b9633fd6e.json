@@ -1,0 +1,525 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Trace the GLEIF Level 2 corporate-ownership graph for an LEI: direct and ultimate parents and/or children, traversed breadth-first to a bounded depth, with relationship type for each edge. Direction both walks up to the parents and down to the children from the root, never sideways into siblings or co-parents. An ultimate-parent edge is a shortcut to the top of the group, not a hop: a node only it reaches within the depth is returned as a leaf flagged reachedVia: ultimate. Set screenNodes to also cross-reference every entity in the graph against all loaded watchlists \u2014 resolving \"is anyone in this ownership chain sanctioned.\" Each node is cross-referenced as sanctions_get_entity does it: its legal name and every other and transliterated name screened strict (exact, then all tokens present \u2014 never fuzzy), and its LEI and registration number looked up as exact non-document identifiers, the registration number matching only an identifier published for the country of its legal jurisdiction; hits merge to one per designation, an OFAC party both OFAC lists publish to one hit whose sources names both, matchedOn naming every input that produced each. A node with no Level 1 record (missingEntityLeis) has no names, so it is looked up by its LEI alone. Each per-node screen is a screening AID: hits are candidates to verify, and an empty result for a node is not a clearance of that node. Each node whose parents were walked carries parentStatus for its direct and ultimate parent: a published relationship, a reporting exception with the reasons the entity gave (such as NATURAL_PERSONS or NON_CONSOLIDATING), none, or unknown when reporting exceptions are not loaded. The response says what it could not do: complete/truncated/missingEntityLeis report whether the loaded relationship graph within the depth is fully shown, screeningStatus reports whether the cross-reference actually ran, and each screened node reports whether its own hit list was capped. Requires a valid 20-character LEI (use sanctions_resolve_entity to obtain one).",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "depth": {
+    "default": 3,
+    "description": "Maximum traversal depth from the root entity (1\u20135), on each side of a both walk. Ultimate-parent edges do not count as hops.",
+    "maximum": 5,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "direction": {
+    "default": "both",
+    "description": "Walk parents (who owns it), children (what it owns), or both (default): a parents walk plus a children walk from the root, each to depth, never into siblings or co-parents.",
+    "enum": [
+     "parents",
+     "children",
+     "both"
+    ],
+    "type": "string"
+   },
+   "lei": {
+    "description": "The 20-character GLEIF LEI at the root of the ownership graph.",
+    "pattern": "^[A-Z0-9]{18}[0-9]{2}$",
+    "type": "string"
+   },
+   "screenNodes": {
+    "default": false,
+    "description": "When true, cross-reference every node against all watchlists \u2014 the ownership-chain cross-reference: the node's legal, other, and transliterated names screened strict, and its LEI and country-matched registration number looked up as identifiers. A node with no Level 1 record has no names: its LEI lookup alone.",
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "lei"
+  ],
+  "type": "object"
+ },
+ "name": "sanctions_trace_ownership",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "rootLei",
+     "nodes",
+     "edges",
+     "complete",
+     "truncated",
+     "reportingExceptionsLoaded",
+     "missingEntityLeis",
+     "screeningStatus",
+     "screenedNodeCount",
+     "flaggedNodeCount",
+     "caveat"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "caveat": {
+    "description": "Decision-support caveat \u2014 node screening is an aid, not a determination.",
+    "type": "string"
+   },
+   "complete": {
+    "description": "True when truncated is false (no loaded relationship on the walked side is left out) AND every node resolved to a GLEIF Level 1 record. It does not say every parent is known \u2014 most entities publish no parent relationship; read each node's parentStatus for what GLEIF publishes instead. False means the graph below is a partial view \u2014 read truncated and missingEntityLeis for which.",
+    "type": "boolean"
+   },
+   "edges": {
+    "description": "Directed ownership edges between the nodes \u2014 every edge joins two nodes of this graph.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One directed ownership edge (child is consolidated by parent).",
+     "properties": {
+      "childLei": {
+       "description": "LEI of the owned (child) entity.",
+       "type": "string"
+      },
+      "parentLei": {
+       "description": "LEI of the owning (parent) entity.",
+       "type": "string"
+      },
+      "relationshipStatus": {
+       "description": "Relationship status, when published.",
+       "type": "string"
+      },
+      "relationshipType": {
+       "description": "GLEIF relationship type (e.g. IS_DIRECTLY_CONSOLIDATED_BY).",
+       "type": "string"
+      }
+     },
+     "required": [
+      "childLei",
+      "parentLei",
+      "relationshipType"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `lei_not_found`: No GLEIF entity in the mirror carries the root LEI, and its check digits are valid. `invalid_lei_checksum`: No GLEIF entity in the mirror carries the root LEI, and its ISO 17442 check digits fail. `mirror_not_ready`: The GLEIF (LEI) mirror has never completed an initial sync. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "lei_not_found",
+         "invalid_lei_checksum",
+         "mirror_not_ready"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "flaggedNodeCount": {
+    "description": "How many screened nodes had at least one potential watchlist match.",
+    "type": "number"
+   },
+   "missingEntityLeis": {
+    "description": "LEIs published in the relationship corpus but absent from the GLEIF Level 1 entity mirror. Their nodes carry the LEI in place of a legal name and no jurisdiction/status \u2014 never read that LEI as a legal name. A per-node screen for them is the LEI looked up as an identifier, nothing else: with no record there is no legal name, other name, or registration number to screen, so their screenedInputs is empty and each hit is matchedOn their lei.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "nodes": {
+    "description": "All entities reached in the traversal, including the root.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One entity in the ownership graph.",
+     "properties": {
+      "depth": {
+       "description": "Breadth-first depth from the root (root = 0), counted over every relationship type except IS_ULTIMATELY_CONSOLIDATED_BY. On a node flagged reachedVia: ultimate it counts that one ultimate hop instead, so it can be shallower than the direct chain to the node.",
+       "type": "number"
+      },
+      "jurisdiction": {
+       "description": "Jurisdiction (ISO code), when known.",
+       "type": "string"
+      },
+      "legalName": {
+       "description": "The node's legal name (the LEI itself if not hydrated).",
+       "type": "string"
+      },
+      "lei": {
+       "description": "The node's LEI.",
+       "type": "string"
+      },
+      "parentStatus": {
+       "additionalProperties": false,
+       "description": "What GLEIF publishes about this node's direct and ultimate accounting-consolidation parents. Present only on nodes whose parents the traversal read \u2014 every node short of the depth limit when direction is parents or both; absent on a children walk.",
+       "properties": {
+        "direct": {
+         "additionalProperties": false,
+         "description": "What GLEIF publishes about the direct parent.",
+         "properties": {
+          "exceptionReasons": {
+           "description": "Every reason given in the reporting exception (e.g. NATURAL_PERSONS, NON_CONSOLIDATING, NO_KNOWN_PERSON). Present only when status is exception.",
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "status": {
+           "description": "relationship = a Level 2 relationship at this level is published \u2014 it is in edges when that parent is also a node of this graph (a flagged leaf's parents and a children-side node's other parents are read for this status, never walked); exception = the entity filed a GLEIF reporting exception instead of naming this parent; none = GLEIF publishes neither; unknown = no relationship is published and reporting exceptions are not loaded in the mirror, so whether one was filed is unknown.",
+           "enum": [
+            "relationship",
+            "exception",
+            "none",
+            "unknown"
+           ],
+           "type": "string"
+          }
+         },
+         "required": [
+          "status"
+         ],
+         "type": "object"
+        },
+        "ultimate": {
+         "additionalProperties": false,
+         "description": "What GLEIF publishes about the ultimate parent.",
+         "properties": {
+          "exceptionReasons": {
+           "description": "Every reason given in the reporting exception (e.g. NATURAL_PERSONS, NON_CONSOLIDATING, NO_KNOWN_PERSON). Present only when status is exception.",
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "status": {
+           "description": "relationship = a Level 2 relationship at this level is published \u2014 it is in edges when that parent is also a node of this graph (a flagged leaf's parents and a children-side node's other parents are read for this status, never walked); exception = the entity filed a GLEIF reporting exception instead of naming this parent; none = GLEIF publishes neither; unknown = no relationship is published and reporting exceptions are not loaded in the mirror, so whether one was filed is unknown.",
+           "enum": [
+            "relationship",
+            "exception",
+            "none",
+            "unknown"
+           ],
+           "type": "string"
+          }
+         },
+         "required": [
+          "status"
+         ],
+         "type": "object"
+        }
+       },
+       "required": [
+        "direct",
+        "ultimate"
+       ],
+       "type": "object"
+      },
+      "reachedVia": {
+       "description": "Present (ultimate) when only an IS_ULTIMATELY_CONSOLIDATED_BY edge reaches this node within the depth. That edge is a shortcut to the top of the group, not a hop, so the node is a leaf: its own parents (on the parents side) or children (on the children side) are never walked, and truncated is true when any of them is not in this graph. A higher depth places it by direct links only when a direct chain from the root reaches it; where that chain is broken (a parent reported by exception, or not at all), no depth does.",
+       "enum": [
+        "ultimate"
+       ],
+       "type": "string"
+      },
+      "role": {
+       "description": "root = the traced entity; parent = an ancestor, reached by walking parents; child = a descendant, reached by walking children. On a both walk, the side that reached the node \u2014 siblings and co-parents are never walked.",
+       "enum": [
+        "root",
+        "parent",
+        "child"
+       ],
+       "type": "string"
+      },
+      "sanctionsHits": {
+       "description": "Per-node cross-reference results, one hit per designation (an OFAC party both OFAC lists publish once) \u2014 exact name and identifier matches first, then strong name matches. Present only when screenNodes is true.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A potential watchlist match on this node \u2014 verify, do not assume.",
+        "properties": {
+         "matchType": {
+          "description": "Match classification of matchedName: exact or strong, never approximate (the cross-reference screens strict, never fuzzy). Absent when only an identifier produced the hit.",
+          "enum": [
+           "exact",
+           "strong",
+           "approximate"
+          ],
+          "type": "string"
+         },
+         "matchedIdentifiers": {
+          "description": "Every identifier the designation publishes that equals this node's LEI or its country-matched registration number, as published. Present only when an identifier produced the hit.",
+          "items": {
+           "additionalProperties": false,
+           "description": "An identifier the designation publishes that equals the entity's LEI, or its registration number published for the country of its legal jurisdiction.",
+           "properties": {
+            "country": {
+             "description": "Issuing country as published, when published.",
+             "type": "string"
+            },
+            "type": {
+             "description": "Identifier label as the list publishes it (e.g. Legal Entity Number, Registration Number).",
+             "type": "string"
+            },
+            "value": {
+             "description": "The identifier value, as published.",
+             "type": "string"
+            }
+           },
+           "required": [
+            "type",
+            "value"
+           ],
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "matchedName": {
+          "description": "The designation's name or alias that matched one of this node's screened names \u2014 the strongest match. Absent when only an identifier produced the hit.",
+          "type": "string"
+         },
+         "matchedOn": {
+          "description": "Every input of this node that produced the hit \u2014 its legal name, an other or transliterated name, its LEI, or its registration number \u2014 in screening order. Only its LEI on a node in missingEntityLeis.",
+          "items": {
+           "additionalProperties": false,
+           "description": "One value of the entity the cross-reference screened.",
+           "properties": {
+            "input": {
+             "description": "Which value: legal_name, or other_name (an other or transliterated name), each screened as a name, strict; lei, or registration_number (the ID at the registration authority), each looked up as a non-document identifier.",
+             "enum": [
+              "legal_name",
+              "other_name",
+              "lei",
+              "registration_number"
+             ],
+             "type": "string"
+            },
+            "nameType": {
+             "description": "GLEIF's type for an other_name (e.g. TRADING_OR_OPERATING_NAME, AUTO_ASCII_TRANSLITERATED_LEGAL_NAME), or UNKNOWN for a name the mirror stored without one. Present on other_name only.",
+             "type": "string"
+            },
+            "value": {
+             "description": "The value as GLEIF publishes it.",
+             "type": "string"
+            }
+           },
+           "required": [
+            "input",
+            "value"
+           ],
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "primaryName": {
+          "description": "Primary published name of the designation.",
+          "type": "string"
+         },
+         "score": {
+          "description": "Never set by this cross-reference: only an approximate (fuzzy) match carries a raw Jaro-Winkler score, and the cross-reference screens strict.",
+          "type": "number"
+         },
+         "source": {
+          "description": "Watchlist whose record this hit is attributed to: primaryName comes from it. For an OFAC party both OFAC lists publish, ofac_sdn unless the Consolidated record matched alone or better, and matchedName, matchedIdentifiers, and matchedOn cover what either record matched; sources names every list.",
+          "enum": [
+           "ofac_sdn",
+           "ofac_consolidated",
+           "eu",
+           "uk",
+           "un"
+          ],
+          "type": "string"
+         },
+         "sourceEntryId": {
+          "description": "Source entry ID \u2014 pass to sanctions_get_designation.",
+          "type": "string"
+         },
+         "sourceLabel": {
+          "description": "Human-readable source list name.",
+          "type": "string"
+         },
+         "sources": {
+          "description": "Every screened list this candidate is on, in list order: one list, or ofac_sdn and ofac_consolidated together for an OFAC party both OFAC lists publish under one entry ID \u2014 one hit, not two. Read this, not source, for every list; the entry ID resolves in sanctions_get_designation under each.",
+          "items": {
+           "enum": [
+            "ofac_sdn",
+            "ofac_consolidated",
+            "eu",
+            "uk",
+            "un"
+           ],
+           "type": "string"
+          },
+          "type": "array"
+         }
+        },
+        "required": [
+         "source",
+         "sourceLabel",
+         "sourceEntryId",
+         "sources",
+         "primaryName",
+         "matchedOn"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "sanctionsScreen": {
+       "additionalProperties": false,
+       "description": "Disclosure for this node's cross-reference: how many potential matches existed before the per-node cap, whether sanctionsHits is the complete set, and what was screened. Present only when the node was screened.",
+       "properties": {
+        "hasMore": {
+         "description": "True when this node's potential matches were capped \u2014 re-screen its names with sanctions_screen_name and look up its LEI and registration number with sanctions_screen_identifier to see the rest. A node in missingEntityLeis has no names: look up its LEI.",
+         "type": "boolean"
+        },
+        "screenedInputs": {
+         "description": "What the cross-reference screened beyond the legal name and the LEI, which it screens on every node with a Level 1 record: every other and transliterated name, then the registration number when the node publishes one (a not-available placeholder such as N/A is none) and a legal jurisdiction to match it by. Empty when there is nothing beyond those two, and always on a node in missingEntityLeis, which has no name and is looked up by its LEI alone.",
+         "items": {
+          "additionalProperties": false,
+          "description": "One value of the entity the cross-reference screened.",
+          "properties": {
+           "input": {
+            "description": "Which value: legal_name, or other_name (an other or transliterated name), each screened as a name, strict; lei, or registration_number (the ID at the registration authority), each looked up as a non-document identifier.",
+            "enum": [
+             "legal_name",
+             "other_name",
+             "lei",
+             "registration_number"
+            ],
+            "type": "string"
+           },
+           "nameType": {
+            "description": "GLEIF's type for an other_name (e.g. TRADING_OR_OPERATING_NAME, AUTO_ASCII_TRANSLITERATED_LEGAL_NAME), or UNKNOWN for a name the mirror stored without one. Present on other_name only.",
+            "type": "string"
+           },
+           "value": {
+            "description": "The value as GLEIF publishes it.",
+            "type": "string"
+           }
+          },
+          "required": [
+           "input",
+           "value"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "totalAvailable": {
+         "description": "Distinct designations this node's cross-reference found across every screened name and identifier, an OFAC party both OFAC lists publish counted once, before the per-node cap was applied.",
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "totalAvailableBasis": {
+         "description": "How to read totalAvailable. Always exact here: every name is screened strict, never fuzzy, and a strict screen counts every designation it reaches, so totalAvailable is the whole set across this node's screened names and identifiers.",
+         "enum": [
+          "exact",
+          "lower_bound"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "totalAvailable",
+        "totalAvailableBasis",
+        "hasMore",
+        "screenedInputs"
+       ],
+       "type": "object"
+      },
+      "status": {
+       "description": "GLEIF registration status, when known.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "lei",
+      "legalName",
+      "depth",
+      "role"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "reportingExceptionsLoaded": {
+    "description": "Whether GLEIF reporting exceptions are loaded in the mirror. When false, a node's parent level with no published relationship reads unknown rather than exception or none.",
+    "type": "boolean"
+   },
+   "rootLei": {
+    "description": "The LEI the traversal started from.",
+    "type": "string"
+   },
+   "screenedNodeCount": {
+    "description": "How many nodes were screened (0 when screenNodes is false).",
+    "type": "number"
+   },
+   "screeningStatus": {
+    "description": "Whether the per-node cross-reference ran: screened = every node was screened; not_requested = screenNodes was false; not_ready = screening was requested but the sanctions mirror has never synced, so NO node was screened and the absence of hits says nothing about any node.",
+    "enum": [
+     "screened",
+     "not_requested",
+     "not_ready"
+    ],
+    "type": "string"
+   },
+   "truncated": {
+    "description": "True when the loaded relationships hold ownership links on the walked side that this graph does not show: past the requested depth (re-run with a higher depth to see them), or the parents (or, on the children side, children) of a node flagged reachedVia: ultimate, which is never walked. An ultimate-parent edge counts only when it leads to an entity this graph does not return. False means neither: every chain the walk followed ends within the depth. Siblings and co-parents are never walked and never count.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "sanctions-screening-mcp-server: trace ownership"
+}

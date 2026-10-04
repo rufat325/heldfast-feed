@@ -1,0 +1,294 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Find games across the whole Steam catalog (keyless), filtered by ANY combination of: discount (min_discount \u2014 for 'what's on sale'), release recency (released_after / released_within_days \u2014 for 'new games'), hardware compatibility (steam_deck/steam_os/steam_machine/steam_frame \u2014 see each field's own description), native OS build (platform \u2014 windows/mac/linux), review quality (min_review / min_reviews), and user tags (tags \u2014 e.g. ['Roguelike', 'Deckbuilding'] for 'games like X'). Each result returns price/discount, review %, all four compat statuses, a vr_support flag (none/supported/required), popular tags, a clickable store_url, discount_end (when a deal expires) and release date in one call. Examples: '>80% off with 90%+ reviews' \u2192 set min_discount + min_review; 'recent well-reviewed games that run on Steam Deck' \u2192 set released_within_days + steam_deck + min_review; 'roguelike deckbuilders on sale' \u2192 tags:['Roguelike','Deckbuilding'] + min_discount. Base games only: DLC, soundtracks, demos and tools are filtered out, so a 'find DLC on sale' question returns nothing here \u2014 price a known DLC appid with get_items instead. No appids needed \u2014 unlike get_items, which prices a list you already have. For 'games like X' from a SINGLE named title, get its tags via get_items and pass them here; for taste inferred from the player's WHOLE library instead, use get_recommended_games (key-gated). Note: min_discount is filtered server-side and re-checked client-side (so it holds at any value); setting released_after/released_within_days excludes not-yet-released games server-side, but the exact date cutoff \u2014 plus compat, platform, review and tag filtering \u2014 has no server-side support in the Steam catalog API, so those are scanned popularity-first and applied afterward over that same window \u2014 great for popular titles; a niche match may fall outside the top `count` (raise count for stricter filters). At most 50 results come back per call, best discount first: compare `returned` against `matched` to see whether the list was capped, and narrow the filters or page with `start` for the rest.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "count": {
+    "default": 50,
+    "description": "How many catalog entries to SCAN (1-200). Default 50. Not a result count \u2014 the filters below are applied over this window, so a strict combination can return far fewer than this; raise it for stricter filters. (Tools that cap what they RETURN call that `limit`.)",
+    "exclusiveMinimum": 0,
+    "maximum": 200,
+    "type": "integer"
+   },
+   "country": {
+    "description": "Country (cc) for prices/currency and regional availability; overrides STEAM_COUNTRY for this call. Must be a real Steam store region \u2014 the two-letter shape is all that's checked here, and Steam answers an unrecognized code with US prices rather than an error, so a typo returns plausible numbers for the wrong country.",
+    "pattern": "^[A-Za-z]{2}$",
+    "type": "string"
+   },
+   "language": {
+    "description": "Store language for the text fields. Use Steam's own language NAME \u2014 english, russian, schinese/tchinese \u2014 not an ISO code like en/ru/zh. An unrecognized value is never an error: text comes back in English and any `tags` list comes back EMPTY, which reads as 'this game has no tags' rather than as a bad language. (Filtering BY tags is the one loud case \u2014 it fails outright.) Overrides STEAM_LANGUAGE for this call. This is the content language only \u2014 prices and regional availability follow `country`.",
+    "minLength": 2,
+    "type": "string"
+   },
+   "min_discount": {
+    "description": "Minimum discount %, e.g. 80 for '80%+ off' \u2014 this is the 'deals' filter. Omit to include full-price games.",
+    "exclusiveMinimum": 0,
+    "maximum": 100,
+    "type": "integer"
+   },
+   "min_review": {
+    "description": "Minimum positive-review %, e.g. 85. Like every filter here except min_discount, it is applied over the scanned `count` window, not server-side \u2014 raise `count` if a strict value returns too few.",
+    "maximum": 100,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "min_reviews": {
+    "description": "Minimum review count, e.g. 500 \u2014 filters out games too obscure to trust a % on. Applied over the scanned `count` window, like min_review.",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "platform": {
+    "description": "NATIVE-build filter: keep only games shipping a native build for this OS (windows/mac/linux). 'linux' = a native Linux/SteamOS port. This is NOT Proton \u2014 for games that run via Proton compatibility use steam_os / steam_deck instead. Each result's `platforms` field lists its native builds, while steam_os/steam_deck report Proton compatibility, so native vs Proton stay distinct.",
+    "enum": [
+     "windows",
+     "mac",
+     "linux"
+    ],
+    "type": "string"
+   },
+   "released_after": {
+    "description": "Keep only games released on/after this date (YYYY-MM-DD).",
+    "format": "date",
+    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))$",
+    "type": "string"
+   },
+   "released_within_days": {
+    "description": "Alternative to released_after: released within the last N days, as a rolling window from now. The two are alternatives, not a combination \u2014 pass both and released_after wins and this is ignored, so pick whichever one the question actually asks for.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "start": {
+    "default": 0,
+    "description": "Pagination offset into the catalog (default 0).",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "steam_deck": {
+    "description": "Steam Deck compatibility (runs via Proton): 'verified' = Deck-Verified only; 'playable' = Playable or Verified. Not a native Linux build \u2014 see `platform` for that.",
+    "enum": [
+     "playable",
+     "verified"
+    ],
+    "type": "string"
+   },
+   "steam_frame": {
+    "description": "Steam Frame (VR headset) compatibility: 'verified' = Frame-Verified only; 'playable' = Playable or Verified.",
+    "enum": [
+     "playable",
+     "verified"
+    ],
+    "type": "string"
+   },
+   "steam_machine": {
+    "description": "Steam Machine (Valve's console) compatibility (via Proton): 'verified' = Steam-Machine-Verified only; 'playable' = Playable or Verified. Its own rating, distinct from the general steam_os one.",
+    "enum": [
+     "playable",
+     "verified"
+    ],
+    "type": "string"
+   },
+   "steam_os": {
+    "description": "SteamOS compatibility \u2014 how well it runs on SteamOS in general (via Proton): 'verified' = SteamOS-Verified only; 'playable' = Playable or Verified. For a NATIVE Linux build instead, use platform:'linux'; for the Steam Machine console specifically, use steam_machine.",
+    "enum": [
+     "playable",
+     "verified"
+    ],
+    "type": "string"
+   },
+   "tags": {
+    "description": "Keep only games carrying ALL of these user tags (case-insensitive), e.g. ['Roguelike','Deckbuilding']. Use exact Steam tag names \u2014 a misspelled/unrecognized one isn't an error, it just matches nothing. Applied over the scanned popularity window, so raise `count` when combining niche tags.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "name": "discover_games",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "deals": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "appid": {
+       "type": "number"
+      },
+      "discount_end": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "discount_pct": {
+       "type": "number"
+      },
+      "name": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "original": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "platforms": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "price": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "release_date": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "review_count": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "review_label": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "review_percent": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "steam_deck": {
+       "enum": [
+        "unknown",
+        "unsupported",
+        "playable",
+        "verified"
+       ],
+       "type": "string"
+      },
+      "steam_frame": {
+       "enum": [
+        "unknown",
+        "unsupported",
+        "playable",
+        "verified"
+       ],
+       "type": "string"
+      },
+      "steam_machine": {
+       "enum": [
+        "unknown",
+        "unsupported",
+        "playable",
+        "verified"
+       ],
+       "type": "string"
+      },
+      "steam_os": {
+       "enum": [
+        "unknown",
+        "unsupported",
+        "playable",
+        "verified"
+       ],
+       "type": "string"
+      },
+      "store_url": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "tags": {
+       "description": "The game's most-weighted user tags, most-relevant first \u2014 a display sample capped well below the full set, not the complete list. Tag FILTERS (discover_games' and get_wishlist's `tags`) match against the game's COMPLETE tag list, so a filtered result can legitimately not show the tag you filtered on in this array. Absence here is not evidence the game lacks that tag.",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "vr_support": {
+       "enum": [
+        "none",
+        "supported",
+        "required"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "appid",
+      "name",
+      "store_url",
+      "review_percent",
+      "review_count",
+      "review_label",
+      "platforms",
+      "steam_deck",
+      "steam_os",
+      "steam_machine",
+      "steam_frame",
+      "vr_support",
+      "tags",
+      "release_date",
+      "discount_pct",
+      "discount_end",
+      "original",
+      "price"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "matched": {
+    "description": "How many results survived every filter, out of the scanned window (see `count`).",
+    "type": "number"
+   },
+   "returned": {
+    "description": "How many of `matched` are in `deals` below. Lower than `matched` when the result was capped for response size \u2014 narrow the filters (or page with `start`) to see the rest.",
+    "type": "number"
+   },
+   "total_matching": {
+    "description": "Count from whichever filters Steam actually applies server-side \u2014 min_discount, and (if released_after/released_within_days was set) excluding not-yet-released games \u2014 or the whole catalog's size if neither was given. NOT the number of games matching tags/platform/compat/review/the exact release-date cutoff, which have no server-side filter and this tool applies only over the scanned `count`-sized window below. Don't read this as 'N games match all my filters' \u2014 use `returned` for that instead.",
+    "type": [
+     "number",
+     "null"
+    ]
+   }
+  },
+  "required": [
+   "total_matching",
+   "matched",
+   "returned",
+   "deals"
+  ],
+  "type": "object"
+ },
+ "title": "Discover games"
+}

@@ -1,0 +1,556 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Mistral OCR"
+ },
+ "description": "Run Mistral OCR on a PDF or image, returning structured markdown per page.\n\nInput `document` is one of:\n  - { type: \"document_url\", documentUrl: \"https://...pdf\" }\n  - { type: \"image_url\", imageUrl: \"https://...\" | \"data:image/...\" }\n  - { type: \"file\", fileId: \"<id-from-files-api>\" }\n\nOptions:\n  - `pages`: array of 0-indexed page numbers or string like \"0-5,7\".\n  - `tableFormat`: 'markdown' (default) or 'html'.\n  - `extractHeader` / `extractFooter`: include page header/footer when present.\n  - `includeImageBase64`: embed extracted image bytes as base64 in the response.\n  - `document_annotation_format`: JSON schema for whole-document structured extraction.\n  - `bbox_annotation_format`: JSON schema for extracted image / bbox annotations.\n  - `confidence_scores_granularity`: 'page', 'word', or 'block'. 'block' adds\n    per-block content/type confidence under `pages[].blocks[].confidence_scores`\n    and requires OCR 4.1 or newer.\n  - `includeBlocks`: return paragraph-level blocks (bounding box + type) in reading\n    order \u2014 titles, lists, tables, images, equations, captions, code, references,\n    aside text, header, footer, signature. Requires OCR 4 (mistral-ocr-4-0) or newer;\n    older models accept the flag but return an empty `blocks` array.\n\nReturns `pages[].markdown` plus optional `pages[].hyperlinks`, `header`, `footer`,\n`images` bounding boxes, `blocks`, annotations, confidence scores, and `dimensions`.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "bbox_annotation_format": {
+    "description": "JSON Schema for structured annotations of each extracted bounding box or image.",
+    "properties": {
+     "json_schema": {
+      "description": "Named JSON Schema and optional strictness for the extracted annotation.",
+      "properties": {
+       "description": {
+        "description": "Description of the annotation to extract.",
+        "type": "string"
+       },
+       "name": {
+        "description": "Name identifying the annotation schema.",
+        "minLength": 1,
+        "type": "string"
+       },
+       "schema": {
+        "additionalProperties": {},
+        "description": "JSON Schema object defining the fields to extract into the annotation.",
+        "propertyNames": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       "strict": {
+        "description": "Whether the annotation must strictly follow the supplied JSON Schema.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "name",
+       "schema"
+      ],
+      "type": "object"
+     },
+     "type": {
+      "const": "json_schema",
+      "description": "Only json_schema is accepted by OCR annotation formats.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "type",
+     "json_schema"
+    ],
+    "type": "object"
+   },
+   "confidence_scores_granularity": {
+    "description": "Confidence granularity. 'block' also fills pages[].blocks[].confidence_scores and requires OCR 4.1 (mistral-ocr-4-1) or newer.",
+    "enum": [
+     "page",
+     "word",
+     "block"
+    ],
+    "type": "string"
+   },
+   "document": {
+    "anyOf": [
+     {
+      "properties": {
+       "documentName": {
+        "description": "Filename of the referenced document.",
+        "type": "string"
+       },
+       "documentUrl": {
+        "description": "HTTPS URL to a PDF or image.",
+        "type": "string"
+       },
+       "type": {
+        "const": "document_url",
+        "description": "Read the document from documentUrl.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "documentUrl"
+      ],
+      "type": "object"
+     },
+     {
+      "properties": {
+       "imageUrl": {
+        "description": "HTTPS URL or data:image/...;base64,... payload.",
+        "type": "string"
+       },
+       "type": {
+        "const": "image_url",
+        "description": "Read the image from the URL or data URI in imageUrl.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "imageUrl"
+      ],
+      "type": "object"
+     },
+     {
+      "properties": {
+       "fileId": {
+        "description": "ID of a file previously uploaded via the Files API.",
+        "type": "string"
+       },
+       "type": {
+        "const": "file",
+        "description": "Read a previously uploaded file identified by fileId.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "fileId"
+      ],
+      "type": "object"
+     }
+    ],
+    "description": "Document to process, supplied as a document URL, an image URL or data URI, or an uploaded file ID."
+   },
+   "document_annotation_format": {
+    "description": "JSON Schema for a structured annotation extracted from the entire document.",
+    "properties": {
+     "json_schema": {
+      "description": "Named JSON Schema and optional strictness for the extracted annotation.",
+      "properties": {
+       "description": {
+        "description": "Description of the annotation to extract.",
+        "type": "string"
+       },
+       "name": {
+        "description": "Name identifying the annotation schema.",
+        "minLength": 1,
+        "type": "string"
+       },
+       "schema": {
+        "additionalProperties": {},
+        "description": "JSON Schema object defining the fields to extract into the annotation.",
+        "propertyNames": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       "strict": {
+        "description": "Whether the annotation must strictly follow the supplied JSON Schema.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "name",
+       "schema"
+      ],
+      "type": "object"
+     },
+     "type": {
+      "const": "json_schema",
+      "description": "Only json_schema is accepted by OCR annotation formats.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "type",
+     "json_schema"
+    ],
+    "type": "object"
+   },
+   "document_annotation_prompt": {
+    "description": "Instructions for whole-document structured extraction. Requires document_annotation_format.",
+    "type": "string"
+   },
+   "extractFooter": {
+    "description": "Extract each page footer into its footer field and remove it from the page markdown.",
+    "type": "boolean"
+   },
+   "extractHeader": {
+    "description": "Extract each page header into its header field and remove it from the page markdown.",
+    "type": "boolean"
+   },
+   "imageLimit": {
+    "description": "Maximum number of images to extract from the document.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "imageMinSize": {
+    "description": "Minimum height and width of an image to extract.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "includeBlocks": {
+    "description": "Return paragraph-level blocks (bounding box + type) per page. Requires OCR 4 (mistral-ocr-4-0) or newer.",
+    "type": "boolean"
+   },
+   "includeImageBase64": {
+    "description": "Include base64-encoded data for extracted images in the response.",
+    "type": "boolean"
+   },
+   "model": {
+    "description": "OCR model. Default: mistral-ocr-latest.",
+    "maxLength": 200,
+    "minLength": 1,
+    "type": "string"
+   },
+   "pages": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "items": {
+       "maximum": 9007199254740991,
+       "minimum": 0,
+       "type": "integer"
+      },
+      "type": "array"
+     }
+    ],
+    "description": "Zero-based page numbers to process, as an array or comma-separated numbers and ranges such as \"0-5,7\"."
+   },
+   "tableFormat": {
+    "description": "Format for extracted tables: Markdown or HTML.",
+    "enum": [
+     "markdown",
+     "html"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "document"
+  ],
+  "type": "object"
+ },
+ "name": "mistral_ocr",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "annotations": {
+    "additionalProperties": false,
+    "properties": {
+     "document_annotation": {
+      "type": "string"
+     },
+     "image_annotations": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "annotation": {
+         "type": "string"
+        },
+        "bbox": {
+         "additionalProperties": false,
+         "properties": {
+          "bottom_right_x": {
+           "type": "number"
+          },
+          "bottom_right_y": {
+           "type": "number"
+          },
+          "top_left_x": {
+           "type": "number"
+          },
+          "top_left_y": {
+           "type": "number"
+          }
+         },
+         "type": "object"
+        },
+        "image_id": {
+         "type": "string"
+        },
+        "page_index": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        }
+       },
+       "required": [
+        "page_index",
+        "annotation"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "type": "object"
+   },
+   "document_annotation": {
+    "type": "string"
+   },
+   "model": {
+    "type": "string"
+   },
+   "pages": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "blocks": {
+       "description": "Paragraph-level blocks in reading order. Populated when `includeBlocks: true` and the model is OCR 4 or newer.",
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "bottom_right_x": {
+          "type": "number"
+         },
+         "bottom_right_y": {
+          "type": "number"
+         },
+         "confidence_scores": {
+          "additionalProperties": false,
+          "description": "Populated only when `confidence_scores_granularity: 'block'`. Fields are null when the signal is absent (an image-only block has no content to score).",
+          "properties": {
+           "average_content_confidence_score": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "block_type_confidence_score": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "minimum_content_confidence_score": {
+            "type": [
+             "number",
+             "null"
+            ]
+           }
+          },
+          "type": "object"
+         },
+         "content": {
+          "type": "string"
+         },
+         "image_id": {
+          "description": "Set on type:image \u2014 references the matching entry in `images[]`.",
+          "type": "string"
+         },
+         "table_id": {
+          "description": "Set on type:table \u2014 references the matching entry in `tables[]`.",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "top_left_x": {
+          "type": "number"
+         },
+         "top_left_y": {
+          "type": "number"
+         },
+         "type": {
+          "enum": [
+           "text",
+           "title",
+           "list",
+           "table",
+           "image",
+           "equation",
+           "caption",
+           "code",
+           "references",
+           "aside_text",
+           "header",
+           "footer",
+           "signature"
+          ],
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "top_left_x",
+         "top_left_y",
+         "bottom_right_x",
+         "bottom_right_y",
+         "content"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "confidence_scores": {
+       "additionalProperties": false,
+       "properties": {
+        "average_page_confidence_score": {
+         "type": "number"
+        },
+        "minimum_page_confidence_score": {
+         "type": "number"
+        },
+        "word_confidence_scores": {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "confidence": {
+            "type": "number"
+           },
+           "start_index": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "text": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "text",
+           "confidence",
+           "start_index"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "average_page_confidence_score",
+        "minimum_page_confidence_score"
+       ],
+       "type": "object"
+      },
+      "dimensions": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "dpi": {
+           "type": "number"
+          },
+          "height": {
+           "type": "number"
+          },
+          "width": {
+           "type": "number"
+          }
+         },
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "footer": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "header": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "hyperlinks": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "images": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "bottom_right_x": {
+          "type": "number"
+         },
+         "bottom_right_y": {
+          "type": "number"
+         },
+         "id": {
+          "type": "string"
+         },
+         "image_annotation": {
+          "type": "string"
+         },
+         "image_base64": {
+          "type": "string"
+         },
+         "top_left_x": {
+          "type": "number"
+         },
+         "top_left_y": {
+          "type": "number"
+         }
+        },
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "index": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "markdown": {
+       "type": "string"
+      },
+      "tables": {
+       "items": {},
+       "type": "array"
+      }
+     },
+     "required": [
+      "index",
+      "markdown"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "pages_count": {
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "usage": {
+    "additionalProperties": false,
+    "properties": {
+     "doc_size_bytes": {
+      "type": "number"
+     },
+     "pages_processed": {
+      "type": "number"
+     }
+    },
+    "type": "object"
+   }
+  },
+  "required": [
+   "pages",
+   "model",
+   "pages_count"
+  ],
+  "type": "object"
+ },
+ "title": "Mistral OCR (document to markdown)"
+}

@@ -1,0 +1,190 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Search CVE database with filters: product/vendor, severity, published date range, EPSS score, CWE, CVSS range, CISA KEV status. Default response is SLIM per-result (cve_id, summary, severity, cvss_v3, cwe_id, epss, kev, total_products, published, modified, sources) \u2014 pass include='full' for description, cvss_breakdown, affected_products, references, first_seen_*. Verdict (sources_queried, falsifiable_fields, completeness, data_age) is at the response root \u2014 applies to the whole batch, not per-row. Product/vendor filters are EXACT NVD-canonical-token matches (not the common name \u2014 e.g. nginx is 'nginx_open_source'/'nginx_plus', vendor 'f5'); a low/zero count for a well-known product means the token differs, so for dependency/package lists use check_dependencies and for a domain's whole stack tech_stack_cve_audit (both auto-normalize tokens). Use for vulnerability discovery by criteria; pass cwe_id (e.g. CWE-79) to enumerate every CVE in our database mapped to a weakness \u2014 pair with cwe_lookup for the category description and mitigations. Use cve_lookup for single CVE by ID, kev_detail when kev=true filtering and the agent needs federal patch deadlines per result. Response carries a global hint pointing at cve_lookup \u2014 drill into any returned cve_id for full detail and chained pivots (exploit_lookup, kev_detail, cwe_lookup). Free: 30/hr, Pro: 500/hr. Returns {count, total, truncated, offset, summary, results, query_echo, next_offset, verdict, hint}.",
+ "inputSchema": {
+  "properties": {
+   "cvss_max": {
+    "default": 10.0,
+    "description": "Maximum CVSS v3 base score (0.0-10.0). Default 10.0 = no filter (sentinel, not applied). Set < 10.0 to filter \u2014 CVEs with null CVSS are excluded when active. Combine with cvss_min for a range.",
+    "maximum": 10.0,
+    "minimum": 0.0,
+    "title": "Cvss Max",
+    "type": "number"
+   },
+   "cvss_min": {
+    "default": 0.0,
+    "description": "Minimum CVSS v3 base score (0.0-10.0). Default 0.0 = no filter (sentinel, not applied). Set > 0 to filter \u2014 CVEs with null CVSS are excluded when active. Use 7.0 for high+critical, 9.0 for critical only.",
+    "maximum": 10.0,
+    "minimum": 0.0,
+    "title": "Cvss Min",
+    "type": "number"
+   },
+   "cwe_id": {
+    "default": "",
+    "description": "Filter by CWE weakness ID. Exact match, case-insensitive. Common values: CWE-79 (XSS), CWE-89 (SQL injection), CWE-120 (buffer overflow), CWE-78 (command injection). Format: CWE-<number>. Omit to not filter by CWE.",
+    "title": "Cwe Id",
+    "type": "string"
+   },
+   "epss_min": {
+    "default": 0.0,
+    "description": "Minimum EPSS score filter (0.0-1.0). EPSS predicts exploitation probability. 0.5 = top ~5% most likely to be exploited. 0.0 = no filter.",
+    "maximum": 1.0,
+    "minimum": 0.0,
+    "title": "Epss Min",
+    "type": "number"
+   },
+   "include": {
+    "default": "",
+    "description": "Per-result detail level. Default (omit) returns slim list items (cve_id, summary, severity, cvss_v3, cwe_id, epss, kev, total_products, published, modified, sources). Pass 'full' to also return description, cvss_breakdown, affected_products, references, first_seen_source, first_seen_at \u2014 only do this when the user explicitly wants drill-down on every result. Even with 'full', per-result affected_products and references may be truncated (the per-result total_products/total_references report the honest counts); use cve_lookup for the guaranteed-complete per-CVE lists. For single-CVE detail prefer cve_lookup; slim default keeps token cost ~70% lower on Log4j-class queries. Note: verdict is at the response root, not per-row (was deduplicated to save ~40% payload).",
+    "enum": [
+     "",
+     "full"
+    ],
+    "title": "Include",
+    "type": "string"
+   },
+   "kev": {
+    "default": false,
+    "description": "If true, return only CVEs in the CISA Known Exploited Vulnerabilities (KEV) catalog \u2014 these are actively exploited in the wild.",
+    "title": "Kev",
+    "type": "boolean"
+   },
+   "limit": {
+    "default": 50,
+    "description": "Maximum results to return. Range: 1-200.",
+    "maximum": 200,
+    "minimum": 1,
+    "title": "Limit",
+    "type": "integer"
+   },
+   "offset": {
+    "default": 0,
+    "description": "Skip N results for pagination. Use with limit to page through results.",
+    "maximum": 5000,
+    "minimum": 0,
+    "title": "Offset",
+    "type": "integer"
+   },
+   "product": {
+    "default": "",
+    "description": "Product or vendor token to filter by. EXACT match (case-insensitive) against the NVD-canonical CPE product/vendor token \u2014 NOT substring/fuzzy, and NOT necessarily the common project name. Common names, vendor renames, and build-tool artifact ids often differ from the canonical token (e.g. modern nginx CVEs are under 'nginx_open_source'/'nginx_plus', vendor 'f5', not 'nginx'; Maven 'log4j-core' maps to 'log4j'). A low or zero count for a well-known product usually means the token differs \u2014 do NOT assume coverage is complete. For dependency/package lists prefer check_dependencies, and for a domain's whole tech stack tech_stack_cve_audit (both auto-normalize tokens). A product match means CVEs exist for that product, not that a specific running version is affected \u2014 verify the running version is within each CVE's affected range. Omit to search all products.",
+    "title": "Product",
+    "type": "string"
+   },
+   "published_after": {
+    "default": "",
+    "description": "Inclusive lower bound on publish date as YYYY-MM-DD (UTC). Pick this when the user names a starting point, e.g. 'since 2015' \u2192 '2015-01-01', 'after March 2024' \u2192 '2024-03-01'. Omit to not bound the lower edge. Combine with published_before for ranges.",
+    "title": "Published After",
+    "type": "string"
+   },
+   "published_before": {
+    "default": "",
+    "description": "Inclusive upper bound on publish date as YYYY-MM-DD (UTC). Pick this when the user names an ending point, e.g. 'before 2020' \u2192 '2019-12-31', 'up to 2023' \u2192 '2023-12-31'. Omit to not bound the upper edge. Combine with published_after for ranges.",
+    "title": "Published Before",
+    "type": "string"
+   },
+   "severity": {
+    "default": "",
+    "description": "CVSS severity level. Must be one of: CRITICAL, HIGH, MEDIUM, LOW. Omit for all severities.",
+    "enum": [
+     "",
+     "CRITICAL",
+     "HIGH",
+     "MEDIUM",
+     "LOW"
+    ],
+    "title": "Severity",
+    "type": "string"
+   },
+   "sort": {
+    "default": "",
+    "description": "Sort order for results. Must be one of: published_desc (newest first), epss_desc (most exploitable first), cvss_desc (most severe first). Omit for newest first (default=published_desc).",
+    "enum": [
+     "",
+     "published_desc",
+     "epss_desc",
+     "cvss_desc"
+    ],
+    "title": "Sort",
+    "type": "string"
+   },
+   "vendor": {
+    "default": "",
+    "description": "Filter by vendor name (case-insensitive). When combined with product, both must match the same CPE row \u2014 prevents cross-row false matches. Example: vendor=apache, product=struts.",
+    "title": "Vendor",
+    "type": "string"
+   }
+  },
+  "title": "cve_searchArguments",
+  "type": "object"
+ },
+ "name": "cve_search",
+ "outputSchema": {
+  "properties": {
+   "result": {
+    "properties": {
+     "count": {
+      "type": "integer"
+     },
+     "hint": {
+      "type": [
+       "object",
+       "null"
+      ]
+     },
+     "next_calls": {
+      "type": [
+       "array",
+       "null"
+      ]
+     },
+     "next_offset": {
+      "type": [
+       "integer",
+       "null"
+      ]
+     },
+     "offset": {
+      "type": "integer"
+     },
+     "query_echo": {
+      "type": [
+       "object",
+       "null"
+      ]
+     },
+     "results": {
+      "type": "array"
+     },
+     "summary": {
+      "type": "string"
+     },
+     "total": {
+      "type": "integer"
+     },
+     "truncated": {
+      "type": "boolean"
+     },
+     "verdict": {
+      "type": [
+       "object",
+       "null"
+      ]
+     }
+    },
+    "required": [],
+    "type": "object"
+   }
+  },
+  "required": [
+   "result"
+  ],
+  "type": "object"
+ },
+ "title": "CVE Search"
+}
