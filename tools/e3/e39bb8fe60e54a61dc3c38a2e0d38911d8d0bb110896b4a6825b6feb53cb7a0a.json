@@ -1,0 +1,444 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Consignment Calculator"
+ },
+ "description": "Calculate per-line and grand totals for a multi-item mixed consignment: CBM, loading metres (LDM), volumetric weight, and the mode-specific chargeable figure (air chargeable weight, sea revenue tonnes, road LDM), plus objective advisory flags.\n\nProvide mode (sea | air | road, default road) and either lines[] (canonical \u2014 per line: quantity, dims {l,w,h,unit}, weight {value,unit}, optional description / hs_code / un_number / stackable) or the legacy flat items[] (dimensions in cm, weight in kg). Air uses an IATA volumetric divisor (default 6000, settable via options.air_volumetric_divisor); options.container_number / options.awb_number add a check-digit sanity flag.\n\nBehavior: deterministic; flags are advisory only \u2014 implausible density, mode/option mismatch, dangerous-goods presence by UN number against ADR 2025, and container/AWB check-digit validity \u2014 and never state that a shipment is permitted or compliant. Invalid lines error naming the offending field. Canonical schema: https://www.freightutils.com/schema/consignment.v1.json. Rate-limited: a limit error carries reset_at, the UTC time the allowance resets.\n\nReturns: schema_version, mode, per_line[] (cbm, gross_weight_kg, density, volumetric_weight_kg, ldm, revenue_tonnes, chargeable_weight_kg), totals (incl. billing_basis) and flags[] under result, plus confidence, _source and citation (the FreightUtils v1 response envelope).\n\nLimitations: best-effort deterministic calculation and reference data \u2014 not regulatory, customs or dangerous-goods compliance advice; classification, documentation and carrier acceptance remain your responsibility.\n\nRelated: cbm_calculator / chargeable_weight_calculator / ldm_calculator (single-figure versions), shipment_summary (adds vehicle/container suggestion and duty estimates), adr_lookup (what a flagged UN number is).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "items": {
+    "description": "Deprecated flat alias \u2014 dimensions in cm, weight in kg. Prefer \"lines\". Provide lines OR items.",
+    "items": {
+     "properties": {
+      "description": {
+       "description": "Item description",
+       "type": "string"
+      },
+      "gross_weight": {
+       "description": "Gross weight per piece in kg",
+       "exclusiveMinimum": 0,
+       "type": "number"
+      },
+      "height": {
+       "description": "Height in cm",
+       "exclusiveMinimum": 0,
+       "type": "number"
+      },
+      "hs_code": {
+       "description": "Optional HS commodity code",
+       "type": "string"
+      },
+      "length": {
+       "description": "Length in cm",
+       "exclusiveMinimum": 0,
+       "type": "number"
+      },
+      "pallet_type": {
+       "description": "Pallet type (informational)",
+       "enum": [
+        "none",
+        "euro",
+        "uk",
+        "us",
+        "custom"
+       ],
+       "type": "string"
+      },
+      "quantity": {
+       "description": "Number of pieces (default 1)",
+       "exclusiveMinimum": 0,
+       "maximum": 9007199254740991,
+       "type": "integer"
+      },
+      "stackable": {
+       "description": "Can the item be stacked?",
+       "type": "boolean"
+      },
+      "un_number": {
+       "description": "Optional UN number for dangerous-goods reference",
+       "type": "string"
+      },
+      "width": {
+       "description": "Width in cm",
+       "exclusiveMinimum": 0,
+       "type": "number"
+      }
+     },
+     "required": [
+      "length",
+      "width",
+      "height",
+      "gross_weight"
+     ],
+     "type": "object"
+    },
+    "maxItems": 50,
+    "minItems": 1,
+    "type": "array"
+   },
+   "lines": {
+    "description": "Canonical consignment lines (preferred). Each: { quantity, dims:{l,w,h,unit}, weight:{value,unit}, optional description / hs_code / un_number / stackable }.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "description": {
+       "description": "Optional item label",
+       "maxLength": 200,
+       "type": "string"
+      },
+      "dims": {
+       "additionalProperties": false,
+       "properties": {
+        "h": {
+         "description": "Height in the given unit",
+         "exclusiveMinimum": 0,
+         "type": "number"
+        },
+        "l": {
+         "description": "Length in the given unit",
+         "exclusiveMinimum": 0,
+         "type": "number"
+        },
+        "unit": {
+         "description": "Dimension unit: mm | cm | m | in",
+         "enum": [
+          "mm",
+          "cm",
+          "m",
+          "in"
+         ],
+         "type": "string"
+        },
+        "w": {
+         "description": "Width in the given unit",
+         "exclusiveMinimum": 0,
+         "type": "number"
+        }
+       },
+       "required": [
+        "l",
+        "w",
+        "h",
+        "unit"
+       ],
+       "type": "object"
+      },
+      "hs_code": {
+       "description": "Optional HS commodity code",
+       "pattern": "^\\d{6,10}$",
+       "type": "string"
+      },
+      "quantity": {
+       "description": "Number of identical pieces",
+       "exclusiveMinimum": 0,
+       "maximum": 100000,
+       "type": "integer"
+      },
+      "stackable": {
+       "description": "Whether the line may be stacked two-high (halves its loading-metre footprint)",
+       "type": "boolean"
+      },
+      "un_number": {
+       "description": "Optional UN number for dangerous-goods reference",
+       "pattern": "^(UN)?\\d{4}$",
+       "type": "string"
+      },
+      "weight": {
+       "additionalProperties": false,
+       "properties": {
+        "unit": {
+         "description": "Weight unit: kg | g | t | lb",
+         "enum": [
+          "kg",
+          "g",
+          "t",
+          "lb"
+         ],
+         "type": "string"
+        },
+        "value": {
+         "description": "Gross weight per piece in the given unit",
+         "exclusiveMinimum": 0,
+         "type": "number"
+        }
+       },
+       "required": [
+        "value",
+        "unit"
+       ],
+       "type": "object"
+      }
+     },
+     "required": [
+      "quantity",
+      "dims",
+      "weight"
+     ],
+     "type": "object"
+    },
+    "maxItems": 50,
+    "minItems": 1,
+    "type": "array"
+   },
+   "mode": {
+    "description": "Transport mode: sea | air | road (default road). Selects the chargeable-weight basis.",
+    "enum": [
+     "sea",
+     "air",
+     "road"
+    ],
+    "type": "string"
+   },
+   "options": {
+    "additionalProperties": false,
+    "description": "Optional: { air_volumetric_divisor, container_number, awb_number }.",
+    "properties": {
+     "air_volumetric_divisor": {
+      "description": "IATA volumetric divisor in cm\u00b3/kg (default 6000). Only affects air.",
+      "exclusiveMinimum": 0,
+      "maximum": 10000,
+      "type": "number"
+     },
+     "awb_number": {
+      "description": "IATA 11-digit air waybill number \u2014 check-digit validated, advisory only",
+      "maxLength": 20,
+      "type": "string"
+     },
+     "container_number": {
+      "description": "ISO 6346 container number \u2014 check-digit validated, advisory only",
+      "maxLength": 20,
+      "type": "string"
+     }
+    },
+    "type": "object"
+   }
+  },
+  "type": "object"
+ },
+ "name": "consignment_calculator",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "_source": {
+    "additionalProperties": false,
+    "properties": {
+     "authority_current_edition": {
+      "type": "string"
+     },
+     "checked": {
+      "type": "string"
+     },
+     "checked_at": {
+      "type": "string"
+     },
+     "dataset_edition": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "provenance_status": {
+      "enum": [
+       "verified",
+       "pending-verification",
+       "computed",
+       "live"
+      ],
+      "type": "string"
+     },
+     "source_url": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "checked",
+     "provenance_status"
+    ],
+    "type": "object"
+   },
+   "blocking_errors": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "code": {
+       "type": "string"
+      },
+      "message": {
+       "type": "string"
+      },
+      "recovery": {
+       "additionalProperties": false,
+       "properties": {
+        "action": {
+         "type": "string"
+        },
+        "params": {
+         "additionalProperties": {},
+         "propertyNames": {
+          "type": "string"
+         },
+         "type": "object"
+        },
+        "tool": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "action"
+       ],
+       "type": "object"
+      }
+     },
+     "required": [
+      "code",
+      "message",
+      "recovery"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "citation": {
+    "additionalProperties": false,
+    "properties": {
+     "qualifier": {
+      "type": "string"
+     },
+     "text": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "text"
+    ],
+    "type": "object"
+   },
+   "confidence": {
+    "additionalProperties": false,
+    "properties": {
+     "basis": {
+      "enum": [
+       "deterministic",
+       "provenance",
+       "match_quality",
+       "freshness"
+      ],
+      "type": "string"
+     },
+     "level": {
+      "enum": [
+       "high",
+       "medium",
+       "low"
+      ],
+      "type": "string"
+     },
+     "score": {
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+     }
+    },
+    "required": [
+     "level",
+     "basis"
+    ],
+    "type": "object"
+   },
+   "envelope_version": {
+    "enum": [
+     "1",
+     "1.1"
+    ],
+    "type": "string"
+   },
+   "normalized_input": {
+    "additionalProperties": {},
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "ok": {
+    "type": "boolean"
+   },
+   "result": {
+    "additionalProperties": {},
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "validity": {
+    "additionalProperties": false,
+    "properties": {
+     "as_of": {
+      "type": "string"
+     },
+     "effective_from": {
+      "type": "string"
+     },
+     "effective_to": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "as_of"
+    ],
+    "type": "object"
+   },
+   "warnings": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "code": {
+       "type": "string"
+      },
+      "details": {
+       "additionalProperties": {},
+       "propertyNames": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "message": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "code",
+      "message"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "envelope_version",
+   "ok",
+   "result",
+   "confidence",
+   "_source",
+   "citation"
+  ],
+  "type": "object"
+ },
+ "title": "Consignment Calculator"
+}
