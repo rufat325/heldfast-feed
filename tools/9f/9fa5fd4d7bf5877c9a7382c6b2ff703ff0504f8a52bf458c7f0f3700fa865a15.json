@@ -1,0 +1,1990 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false
+ },
+ "description": "Advance a temporary anonymous demo simulation by one time step and return updated metrics \u2014 CPU, latency, throughput, error rate, cost (max 20 persisted steps per demo). Concurrent simulation.step calls on one simulation either serialize as distinct consecutive steps (in the browser Workspace queue) or receive HTTP 409 simulation_step_in_progress without advancing or consuming a demo credit. Wait for the running call to finish, then retry only rejected calls; distinct simulations can run concurrently. After a timeout, inspect simulation.metrics before retrying an uncertain result. Use it to observe how the architecture behaves over time, typically right after simulation.create or simulation.inject_traffic. Do not use it to read current state without advancing time \u2014 that is simulation.metrics. Pass the simulationId returned by simulation.create when your connector opens a fresh MCP session; preserve Mcp-Session-Id to use the omitted-ID current-simulation default. The likely next tool is simulation.step again (to keep observing) or simulation.inject_traffic (to change load first). Responses are compact by default: principal metrics plus per-resource status (id, name, status, cpuPercent, routedRps, availabilityState, isRoutable, and recoveryBlockedReason when provided) and this step's events. Seeded characteristics.eksSpotInterruption telemetry retains its additive migrationEvaluation beside the interruption lifecycle: use its recorded/derived/unavailable field provenance, frozen deadline verdict/counts/reasons, and simulation-clock milestones rather than final service health. The distinct eksSpotMigration contract remains separately reported when configured. Compact responses also include errorBreakdown when the engine provides it. A critical resource with isRoutable: true is degraded but still serving; availabilityState: unavailable and isRoutable: false identify a failed or parked node. Pass responseMode: 'full' to get the complete simulation state instead. During recovery, each resource may include recoveryProgress with state parked, cooling_down, or healthy, plus parkWindow and cooldown counters. Poll simulation.step until the targeted resource's recoveryProgress.state is healthy, then use simulation.metrics to inspect the resulting state and metrics. GPU / inference workflow: when the simulation includes a kubernetes resource with characteristics.inferenceMode: true, each step response also includes gpuUtilization (%), tokensPerSecond, costPerMillionTokens (USD/M tokens), idleGpuCostPerHour (USD/hr of standby GPU spend), and idleGpuFraction (0-1 idle HA overhead share) so you can track inference economics step by step. Authenticate with an API key for unlimited steps and GPU right-sizing hints.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "responseMode": {
+    "default": "compact",
+    "description": "Response detail level. 'compact' (default) returns only principal metrics, errorBreakdown when available, per-resource status (id, name, status, cpuPercent, routedRps, availabilityState, isRoutable, recoveryBlockedReason, and failureLifecycle/routingState when provided), and this step's events \u2014 keeps observations small for agent loops. 'full' returns the complete backend step response including the entire simulation object with all resource characteristics and connections.",
+    "enum": [
+     "compact",
+     "full"
+    ],
+    "type": "string"
+   },
+   "simulationId": {
+    "description": "Simulation ID returned by simulation.create. Preserve Mcp-Session-Id to omit this field and use the session's current simulation; if your connector starts a fresh MCP session for each call (for example Grok Bot or Cursor), pass this explicit ID after every fresh initialization. A fresh session has no current-simulation pointer and returns NO_ACTIVE_SIMULATION when the ID is omitted. Anonymous capabilities are short-lived (30 minutes by default), unguessable, and revoked when the demo expires or is deleted; proxy IP changes do not invalidate them. Do not treat the ID as a durable share link.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "simulation.step",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": true,
+  "description": "Compact step summary by default (principal metrics + per-resource status), the complete backend step response with responseMode 'full', or a structured limit response (status: limit_reached) when the step cap is reached",
+  "properties": {
+   "appWeight": {
+    "enum": [
+     "lean",
+     "typical",
+     "heavy"
+    ],
+    "type": "string"
+   },
+   "appWeightDefaulted": {
+    "type": "boolean"
+   },
+   "auroraFailovers": {
+    "description": "Compact per-writer Aurora failover state; promoting has no serving writer, serving means the explicitly related standby took over.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "failedResourceId": {
+       "type": "string"
+      },
+      "phase": {
+       "enum": [
+        "promoting",
+        "serving",
+        "unavailable"
+       ],
+       "type": "string"
+      },
+      "standbyResourceId": {
+       "type": "string"
+      },
+      "succeeded": {
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "failedResourceId",
+      "standbyResourceId",
+      "succeeded",
+      "phase"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "calibrationEvidence": {
+    "additionalProperties": false,
+    "description": "Owned-versus-modeled evidence and latency boundary.",
+    "properties": {
+     "calibrationId": {
+      "description": "Versioned owned calibration identifier; present only when that calibration applies.",
+      "type": "string"
+     },
+     "kind": {
+      "description": "owned for the exact AWS CRUD fit; modeled when the gate fails or another generic model applies.",
+      "enum": [
+       "owned",
+       "modeled"
+      ],
+      "type": "string"
+     },
+     "latencyBasis": {
+      "description": "General modeled latency path, such as in-VPC ALB rather than end-to-end; see latencyP99Basis for percentile-specific P99 provenance.",
+      "type": "string"
+     },
+     "latencyP99Basis": {
+      "description": "Percentile-specific P99 basis: owned in-VPC internal-ALB fit, scaled from that fit (not directly measured), or uncalibrated generic model.",
+      "type": "string"
+     },
+     "note": {
+      "description": "Names the fit scope and limitations. For canonical workload inference, states it is a modeling assumption. For modeled fallback, names all actual failed checks in stable order with resource IDs and safe expected/actual values; never only a generic 'not applied'.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "kind",
+     "latencyBasis",
+     "note"
+    ],
+    "type": "object"
+   },
+   "costPerHour": {
+    "description": "Estimated cost in USD/hr",
+    "type": "number"
+   },
+   "costPerMillionTokens": {
+    "description": "Self-hosted inference cost in USD per million tokens (null when no tokens are being processed) \u2014 present only on GPU inference simulations",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "currentStep": {
+    "description": "New simulation time step index",
+    "type": "number"
+   },
+   "effectiveConfigHash": {
+    "description": "Versioned prediction hash over replay startup inputs, engine version, and calibration identity; see replayIdentity.effectiveConfigHash for the original replay-only hash.",
+    "maxLength": 64,
+    "minLength": 64,
+    "type": "string"
+   },
+   "eksSpotInterruptions": {
+    "description": "Seeded EKS interruption telemetry, including the authoritative additive migrationEvaluation when recorded.",
+    "items": {
+     "additionalProperties": true,
+     "properties": {
+      "checkpointEvidence": {
+       "additionalProperties": false,
+       "description": "Persisted seeded-EKS checkpoint captured with its interruption JSONB record. engineInputStepIndex is an engine input-step index, simulationSeconds is derived from that index and the recorded tick, and traffic provenance points to outer metric fields rather than duplicating float values.",
+       "properties": {
+        "engineInputStepIndex": {
+         "minimum": 0,
+         "type": "integer"
+        },
+        "fieldProvenance": {
+         "additionalProperties": false,
+         "properties": {
+          "engineInputStepIndex": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "intervalAttribution": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "pointRateSemantics": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "simulationSeconds": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "tickDurationSeconds": {
+           "$ref": "#/properties/goodputProvenance"
+          }
+         },
+         "required": [
+          "engineInputStepIndex",
+          "simulationSeconds",
+          "tickDurationSeconds",
+          "pointRateSemantics",
+          "intervalAttribution"
+         ],
+         "type": "object"
+        },
+        "intervalAttribution": {
+         "anyOf": [
+          {
+           "anyOf": [
+            {
+             "additionalProperties": false,
+             "properties": {
+              "provenance": {
+               "additionalProperties": false,
+               "properties": {
+                "kind": {
+                 "const": "recorded",
+                 "type": "string"
+                },
+                "source": {
+                 "maxLength": 256,
+                 "minLength": 1,
+                 "type": "string"
+                }
+               },
+               "required": [
+                "kind",
+                "source"
+               ],
+               "type": "object"
+              },
+              "status": {
+               "const": "recorded",
+               "type": "string"
+              },
+              "window": {
+               "$ref": "#/properties/goodputWindow/anyOf/1/properties/window"
+              }
+             },
+             "required": [
+              "status",
+              "window",
+              "provenance"
+             ],
+             "type": "object"
+            },
+            {
+             "additionalProperties": false,
+             "properties": {
+              "provenance": {
+               "additionalProperties": false,
+               "properties": {
+                "kind": {
+                 "const": "unavailable",
+                 "type": "string"
+                },
+                "reason": {
+                 "maxLength": 256,
+                 "minLength": 1,
+                 "type": "string"
+                }
+               },
+               "required": [
+                "kind",
+                "reason"
+               ],
+               "type": "object"
+              },
+              "status": {
+               "const": "unavailable",
+               "type": "string"
+              }
+             },
+             "required": [
+              "status",
+              "provenance"
+             ],
+             "type": "object"
+            }
+           ]
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "pointRateSemantics": {
+         "const": "post_step_point_rate",
+         "type": "string"
+        },
+        "simulationSeconds": {
+         "minimum": 0,
+         "type": "number"
+        },
+        "tickDurationSeconds": {
+         "exclusiveMinimum": 0,
+         "type": "number"
+        },
+        "trafficFieldProvenance": {
+         "additionalProperties": false,
+         "properties": {
+          "errorRatePercent": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "latencyP50Ms": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "offeredRps": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "throughputRps": {
+           "$ref": "#/properties/goodputProvenance"
+          }
+         },
+         "required": [
+          "throughputRps",
+          "offeredRps",
+          "errorRatePercent",
+          "latencyP50Ms"
+         ],
+         "type": "object"
+        }
+       },
+       "required": [
+        "engineInputStepIndex",
+        "simulationSeconds",
+        "tickDurationSeconds",
+        "pointRateSemantics",
+        "intervalAttribution",
+        "fieldProvenance",
+        "trafficFieldProvenance"
+       ],
+       "type": "object"
+      },
+      "migrationEvaluation": {
+       "additionalProperties": false,
+       "description": "Authoritative additive seeded EKS interruption evaluation. Field values carry recorded/derived/unavailable provenance; deadline verdict/counts/reasons are frozen once status is completed and do not describe later service health.",
+       "properties": {
+        "affectedWorkloadCount": {
+         "anyOf": [
+          {
+           "minimum": 0,
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "allAffectedWorkloadsReadyAtSimulationSeconds": {
+         "anyOf": [
+          {
+           "minimum": 0,
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "deadlineAtSimulationSeconds": {
+         "anyOf": [
+          {
+           "minimum": 0,
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "deadlineMet": {
+         "type": [
+          "boolean",
+          "null"
+         ]
+        },
+        "deadlineSeconds": {
+         "const": 120,
+         "type": "number"
+        },
+        "evaluatedAtSimulationSeconds": {
+         "anyOf": [
+          {
+           "minimum": 0,
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "fieldProvenance": {
+         "additionalProperties": false,
+         "properties": {
+          "affectedWorkloadCount": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "allAffectedWorkloadsReadyAtSimulationSeconds": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "deadlineAtSimulationSeconds": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "deadlineMet": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "deadlineSeconds": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "evaluatedAtSimulationSeconds": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "interruptionNoticeAtSimulationSeconds": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "limitingReasons": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "migrationDurationSeconds": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "migrationStartedAtSimulationSeconds": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "missedDeadlineWorkloadCount": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "readyWorkloadCountAtDeadline": {
+           "$ref": "#/properties/goodputProvenance"
+          },
+          "status": {
+           "$ref": "#/properties/goodputProvenance"
+          }
+         },
+         "required": [
+          "status",
+          "interruptionNoticeAtSimulationSeconds",
+          "deadlineAtSimulationSeconds",
+          "migrationStartedAtSimulationSeconds",
+          "allAffectedWorkloadsReadyAtSimulationSeconds",
+          "migrationDurationSeconds",
+          "deadlineSeconds",
+          "deadlineMet",
+          "affectedWorkloadCount",
+          "readyWorkloadCountAtDeadline",
+          "missedDeadlineWorkloadCount",
+          "evaluatedAtSimulationSeconds",
+          "limitingReasons"
+         ],
+         "type": "object"
+        },
+        "interruptionNoticeAtSimulationSeconds": {
+         "anyOf": [
+          {
+           "minimum": 0,
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "limitingReasons": {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "code": {
+            "enum": [
+             "no_reschedule",
+             "scheduling_capacity_exhausted",
+             "image_pull_incomplete",
+             "startup_incomplete",
+             "unclassified_runtime_work_remaining"
+            ],
+            "type": "string"
+           },
+           "interruptionHandling": {
+            "enum": [
+             "reschedule",
+             "drain-only",
+             "fail-fast"
+            ],
+            "type": "string"
+           },
+           "pendingWorkloadCount": {
+            "minimum": 0,
+            "type": "integer"
+           },
+           "provenance": {
+            "const": "recorded",
+            "type": "string"
+           },
+           "pullingWorkloadCount": {
+            "minimum": 0,
+            "type": "integer"
+           },
+           "residualPullSeconds": {
+            "minimum": 0,
+            "type": "number"
+           },
+           "residualStartupSeconds": {
+            "minimum": 0,
+            "type": "number"
+           },
+           "schedulingCapacity": {
+            "minimum": 0,
+            "type": "integer"
+           },
+           "startingWorkloadCount": {
+            "minimum": 0,
+            "type": "integer"
+           },
+           "workloadCount": {
+            "minimum": 0,
+            "type": "integer"
+           }
+          },
+          "required": [
+           "code",
+           "workloadCount",
+           "pendingWorkloadCount",
+           "pullingWorkloadCount",
+           "startingWorkloadCount",
+           "residualPullSeconds",
+           "residualStartupSeconds",
+           "schedulingCapacity",
+           "interruptionHandling",
+           "provenance"
+          ],
+          "type": "object"
+         },
+         "maxItems": 5,
+         "type": "array"
+        },
+        "migrationDurationSeconds": {
+         "anyOf": [
+          {
+           "minimum": 0,
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "migrationStartedAtSimulationSeconds": {
+         "anyOf": [
+          {
+           "minimum": 0,
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "missedDeadlineWorkloadCount": {
+         "anyOf": [
+          {
+           "minimum": 0,
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "readyWorkloadCountAtDeadline": {
+         "anyOf": [
+          {
+           "minimum": 0,
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "status": {
+         "enum": [
+          "not_started",
+          "in_progress",
+          "completed"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "status",
+        "interruptionNoticeAtSimulationSeconds",
+        "deadlineAtSimulationSeconds",
+        "migrationStartedAtSimulationSeconds",
+        "allAffectedWorkloadsReadyAtSimulationSeconds",
+        "migrationDurationSeconds",
+        "deadlineSeconds",
+        "deadlineMet",
+        "affectedWorkloadCount",
+        "readyWorkloadCountAtDeadline",
+        "missedDeadlineWorkloadCount",
+        "evaluatedAtSimulationSeconds",
+        "limitingReasons",
+        "fieldProvenance"
+       ],
+       "type": "object"
+      },
+      "name": {
+       "type": "string"
+      },
+      "resourceId": {
+       "type": "string"
+      }
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "engineVersion": {
+    "description": "Simulation engine version used for this prediction.",
+    "type": "string"
+   },
+   "errorBreakdown": {
+    "$ref": "#/properties/metrics/properties/errorBreakdown",
+    "description": "Validated additive error contributors in percentage-point units; separates database connection pressure below the usable pool limit from pool saturation after exhaustion, plus DB, compute, capacity, CPU, storage, runtime-memory, and queue absorption effects"
+   },
+   "errorRate": {
+    "description": "Client-level error rate (%) against original offered RPS. Resilience dependency targets in autoscaled compute fleets use aggregate routable-fleet capacity and health; non-autoscaled targets use their resolved resource capacity, including any declared fixed-instance count.",
+    "type": "number"
+   },
+   "events": {
+    "description": "Events generated during this step",
+    "items": {
+     "additionalProperties": {},
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "goodputProvenance": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "kind": {
+        "const": "recorded",
+        "type": "string"
+       }
+      },
+      "required": [
+       "kind"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "kind": {
+        "const": "derived",
+        "type": "string"
+       },
+       "sourceFields": {
+        "items": {
+         "minLength": 1,
+         "type": "string"
+        },
+        "minItems": 1,
+        "type": "array"
+       }
+      },
+      "required": [
+       "kind",
+       "sourceFields"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "kind": {
+        "const": "unavailable",
+        "type": "string"
+       },
+       "reason": {
+        "minLength": 1,
+        "type": "string"
+       }
+      },
+      "required": [
+       "kind",
+       "reason"
+      ],
+      "type": "object"
+     }
+    ],
+    "description": "Provenance for the modeled goodput field"
+   },
+   "goodputRps": {
+    "description": "Modeled client-level successful requests per second; a post-step point rate sourced from metrics.throughput. Resilience dependency targets in autoscaled compute fleets use aggregate routable-fleet capacity and health; non-autoscaled targets use their resolved resource capacity, including any declared fixed-instance count.",
+    "type": "number"
+   },
+   "goodputSemantics": {
+    "const": "post_step_point_rate",
+    "description": "Goodput is a point rate, not an interval total",
+    "type": "string"
+   },
+   "goodputWindow": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "provenance": {
+        "additionalProperties": false,
+        "properties": {
+         "kind": {
+          "const": "unavailable",
+          "type": "string"
+         },
+         "reason": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+         }
+        },
+        "required": [
+         "kind",
+         "reason"
+        ],
+        "type": "object"
+       },
+       "status": {
+        "const": "unavailable",
+        "type": "string"
+       }
+      },
+      "required": [
+       "status",
+       "provenance"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "aggregate": {
+        "additionalProperties": false,
+        "properties": {
+         "coveredDurationSeconds": {
+          "minimum": 0,
+          "type": "number"
+         },
+         "goodputRequestTotal": {
+          "minimum": 0,
+          "type": "number"
+         },
+         "goodputRps": {
+          "minimum": 0,
+          "type": "number"
+         },
+         "provenance": {
+          "anyOf": [
+           {
+            "additionalProperties": false,
+            "properties": {
+             "kind": {
+              "const": "recorded",
+              "type": "string"
+             },
+             "source": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+             }
+            },
+            "required": [
+             "kind",
+             "source"
+            ],
+            "type": "object"
+           },
+           {
+            "additionalProperties": false,
+            "properties": {
+             "kind": {
+              "const": "derived",
+              "type": "string"
+             },
+             "sourceFields": {
+              "items": {
+               "maxLength": 256,
+               "minLength": 1,
+               "type": "string"
+              },
+              "maxItems": 256,
+              "minItems": 1,
+              "type": "array"
+             }
+            },
+            "required": [
+             "kind",
+             "sourceFields"
+            ],
+            "type": "object"
+           },
+           {
+            "additionalProperties": false,
+            "properties": {
+             "kind": {
+              "const": "unavailable",
+              "type": "string"
+             },
+             "reason": {
+              "maxLength": 256,
+              "minLength": 1,
+              "type": "string"
+             }
+            },
+            "required": [
+             "kind",
+             "reason"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "sampleIds": {
+          "items": {
+           "minLength": 1,
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "window": {
+          "$ref": "#/properties/goodputWindow/anyOf/1/properties/window"
+         }
+        },
+        "required": [
+         "window",
+         "coveredDurationSeconds",
+         "goodputRps",
+         "goodputRequestTotal",
+         "sampleIds",
+         "provenance"
+        ],
+        "type": "object"
+       },
+       "provenance": {
+        "additionalProperties": false,
+        "properties": {
+         "kind": {
+          "const": "recorded",
+          "type": "string"
+         },
+         "source": {
+          "maxLength": 256,
+          "minLength": 1,
+          "type": "string"
+         }
+        },
+        "required": [
+         "kind",
+         "source"
+        ],
+        "type": "object"
+       },
+       "status": {
+        "const": "recorded",
+        "type": "string"
+       },
+       "window": {
+        "additionalProperties": false,
+        "properties": {
+         "inclusion": {
+          "const": "[start,end)",
+          "type": "string"
+         },
+         "windowEndSeconds": {
+          "minimum": 0,
+          "type": "number"
+         },
+         "windowStartSeconds": {
+          "minimum": 0,
+          "type": "number"
+         }
+        },
+        "required": [
+         "windowStartSeconds",
+         "windowEndSeconds",
+         "inclusion"
+        ],
+        "type": "object"
+       }
+      },
+      "required": [
+       "status",
+       "window",
+       "aggregate",
+       "provenance"
+      ],
+      "type": "object"
+     }
+    ],
+    "description": "Interval goodput aggregate when every point has persisted simulation-clock bounds; otherwise status=unavailable. Never derive this from retrieval time or currentStep."
+   },
+   "gpuUtilization": {
+    "description": "GPU utilization (%) \u2014 present only on simulations with a GPU inference kubernetes resource",
+    "type": "number"
+   },
+   "idleGpuCostPerHour": {
+    "description": "USD/hr of GPU spend funding idle/standby capacity (HA overhead) \u2014 present only on GPU inference simulations",
+    "type": "number"
+   },
+   "idleGpuFraction": {
+    "description": "Share (0-1) of the GPU bill that is idle/standby capacity \u2014 present only on GPU inference simulations; values above 0.5 mean over half the GPU spend is HA overhead",
+    "type": "number"
+   },
+   "latencyAvailability": {
+    "$ref": "#/properties/predictionEvidence/anyOf/0/properties/latencyAvailability"
+   },
+   "latencyBasis": {
+    "description": "General modeled latency path/boundary; see latencyP99Basis for P99-specific provenance.",
+    "type": "string"
+   },
+   "latencyP50": {
+    "description": "50th-percentile latency in ms; null when workload-specific latency evidence is unavailable.",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "latencyP95": {
+    "description": "95th-percentile latency in ms; null when workload-specific latency evidence is unavailable.",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "latencyP99": {
+    "description": "Modeled 99th-percentile latency in ms; null when workload-specific latency evidence is unavailable. Interpret with latencyP99Basis and predictionEvidence.latencyP99.",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "latencyP99Basis": {
+    "description": "Percentile-specific P99 basis: owned fit, scaled-from-fit (not directly measured), or uncalibrated generic model.",
+    "type": "string"
+   },
+   "loadBalancers": {
+    "description": "Per-load-balancer routed traffic, including CDN-origin-matched ALB RPS for comparison with cdnFlow.originRps",
+    "items": {
+     "additionalProperties": true,
+     "properties": {
+      "resourceId": {
+       "description": "ID of the load balancer",
+       "type": "string"
+      },
+      "routedRps": {
+       "description": "Requests per second routed through this load balancer this step",
+       "type": "number"
+      }
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "metricId": {
+    "description": "Storage-assigned persisted metric ID when available",
+    "type": "string"
+   },
+   "metrics": {
+    "additionalProperties": true,
+    "description": "Full-mode backend metric record; migrationEvaluation is exact-typed when a seeded interruption is present.",
+    "properties": {
+     "eksSpotInterruptions": {
+      "items": {
+       "$ref": "#/properties/eksSpotInterruptions/items"
+      },
+      "type": "array"
+     },
+     "errorBreakdown": {
+      "additionalProperties": false,
+      "description": "Full-mode error contributors, including cause-attributed pool-saturation details.",
+      "properties": {
+       "benchmarkReferenceFit": {
+        "type": "number"
+       },
+       "capacityOverload": {
+        "type": "number"
+       },
+       "computeFailure": {
+        "type": "number"
+       },
+       "cpuOverload": {
+        "type": "number"
+       },
+       "databasePressure": {
+        "type": "number"
+       },
+       "databasePressureDetails": {
+        "description": "Per-database causes contributing to pressure below the usable connection limit.",
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "cause": {
+           "description": "Modeled source of this database's under-limit pressure contribution.",
+           "enum": [
+            "connection_pressure",
+            "cpu_pressure",
+            "connection_and_cpu_pressure",
+            "provider_reference_fit"
+           ],
+           "type": "string"
+          },
+          "connectionUtilization": {
+           "minimum": 0,
+           "type": "number"
+          },
+          "contributionPct": {
+           "minimum": 0,
+           "type": "number"
+          },
+          "cpuUtilization": {
+           "minimum": 0,
+           "type": "number"
+          },
+          "modeledConnections": {
+           "minimum": 0,
+           "type": "number"
+          },
+          "name": {
+           "description": "Human-readable database resource name.",
+           "type": "string"
+          },
+          "resourceId": {
+           "description": "Database resource ID contributing to modeled under-limit connection pressure.",
+           "type": "string"
+          },
+          "usableConnectionLimit": {
+           "minimum": 0,
+           "type": "number"
+          }
+         },
+         "required": [
+          "resourceId",
+          "name",
+          "cause",
+          "modeledConnections",
+          "usableConnectionLimit",
+          "connectionUtilization",
+          "cpuUtilization",
+          "contributionPct"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "dbFailure": {
+        "type": "number"
+       },
+       "dependencyFailure": {
+        "type": "number"
+       },
+       "ociStorage": {
+        "type": "number"
+       },
+       "poolSaturation": {
+        "type": "number"
+       },
+       "poolSaturationDetails": {
+        "description": "Per-database pool exhaustion details, including the cause when available. Modeled demand is not observed live sessions.",
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "cause": {
+           "const": "connection_limit_exceeded",
+           "description": "Why this database's modeled connection demand exceeded its usable pool limit.",
+           "type": "string"
+          },
+          "demandBasis": {
+           "const": "modeled connection demand; not observed live sessions",
+           "type": "string"
+          },
+          "modeledConnections": {
+           "description": "Modeled demand/assumption, not observed live sessions.",
+           "minimum": 0,
+           "type": "number"
+          },
+          "name": {
+           "description": "Human-readable database resource name.",
+           "type": "string"
+          },
+          "resourceId": {
+           "description": "Database resource ID whose modeled demand exceeds its usable limit.",
+           "type": "string"
+          },
+          "usableConnectionLimit": {
+           "description": "This database's effective usable connection limit.",
+           "minimum": 0,
+           "type": "number"
+          }
+         },
+         "required": [
+          "resourceId",
+          "name",
+          "modeledConnections",
+          "usableConnectionLimit",
+          "demandBasis"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "queueAbsorption": {
+        "type": "number"
+       },
+       "runtimeMemory": {
+        "type": "number"
+       },
+       "sessionAffinity": {
+        "type": "number"
+       },
+       "startupBackpressure": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "poolSaturation",
+       "dbFailure",
+       "computeFailure",
+       "capacityOverload",
+       "cpuOverload",
+       "ociStorage",
+       "queueAbsorption"
+      ],
+      "type": "object"
+     },
+     "latencyBasis": {
+      "description": "General modeled latency path/boundary; see latencyP99Basis for P99-specific provenance.",
+      "type": "string"
+     },
+     "latencyP50": {
+      "description": "50th-percentile latency in ms; null when workload-specific latency evidence is unavailable.",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "latencyP95": {
+      "description": "95th-percentile latency in ms; null when workload-specific latency evidence is unavailable.",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "latencyP99": {
+      "description": "Modeled 99th-percentile latency in ms; null when workload-specific latency evidence is unavailable. Interpret with this metric's latencyP99Basis and predictionEvidence.latencyP99.",
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "latencyP99Basis": {
+      "description": "Percentile-specific P99 basis for this metric checkpoint.",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "modeledShedRps": {
+    "description": "Aggregate modeled requests per second shed by bounded capacity",
+    "type": "number"
+   },
+   "offeredRps": {
+    "description": "Aggregate offered requests per second represented by metrics.offeredRps provenance",
+    "type": "number"
+   },
+   "predictionEffectiveConfigHash": {
+    "description": "Versioned prediction hash over replay startup inputs, engine version, and calibration identity.",
+    "maxLength": 64,
+    "minLength": 64,
+    "type": "string"
+   },
+   "predictionEvidence": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "appCpu": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "central": {
+            "minimum": 0,
+            "type": "number"
+           },
+           "high": {
+            "minimum": 0,
+            "type": "number"
+           },
+           "low": {
+            "minimum": 0,
+            "type": "number"
+           }
+          },
+          "required": [
+           "low",
+           "central",
+           "high"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "appCpuByResource": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "central": {
+           "$ref": "#/properties/predictionEvidence/anyOf/0/properties/appCpu/anyOf/0/properties/central"
+          },
+          "evidenceLevel": {
+           "$ref": "#/properties/predictionEvidence/anyOf/0/properties/evidenceLevel"
+          },
+          "high": {
+           "$ref": "#/properties/predictionEvidence/anyOf/0/properties/appCpu/anyOf/0/properties/high"
+          },
+          "legacyGeneric": {
+           "type": "boolean"
+          },
+          "low": {
+           "$ref": "#/properties/predictionEvidence/anyOf/0/properties/appCpu/anyOf/0/properties/low"
+          },
+          "resourceId": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "low",
+          "central",
+          "high",
+          "evidenceLevel",
+          "resourceId",
+          "legacyGeneric"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "appWeight": {
+        "enum": [
+         "lean",
+         "typical",
+         "heavy"
+        ],
+        "type": "string"
+       },
+       "appWeightDefaulted": {
+        "type": "boolean"
+       },
+       "evidenceLevel": {
+        "enum": [
+         "measured",
+         "scaled from measured",
+         "reference estimate"
+        ],
+        "type": "string"
+       },
+       "formulaIds": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "latencyAvailability": {
+        "additionalProperties": false,
+        "properties": {
+         "reason": {
+          "minLength": 1,
+          "type": "string"
+         },
+         "resourceIds": {
+          "items": {
+           "minLength": 1,
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "status": {
+          "const": "unavailable",
+          "type": "string"
+         }
+        },
+        "required": [
+         "status",
+         "reason",
+         "resourceIds"
+        ],
+        "type": "object"
+       },
+       "latencyP50": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "central": {
+            "$ref": "#/properties/predictionEvidence/anyOf/0/properties/appCpu/anyOf/0/properties/central"
+           },
+           "evidenceLevel": {
+            "$ref": "#/properties/predictionEvidence/anyOf/0/properties/evidenceLevel"
+           },
+           "high": {
+            "$ref": "#/properties/predictionEvidence/anyOf/0/properties/appCpu/anyOf/0/properties/high"
+           },
+           "low": {
+            "$ref": "#/properties/predictionEvidence/anyOf/0/properties/appCpu/anyOf/0/properties/low"
+           }
+          },
+          "required": [
+           "low",
+           "central",
+           "high",
+           "evidenceLevel"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "latencyP95": {
+        "anyOf": [
+         {
+          "$ref": "#/properties/predictionEvidence/anyOf/0/properties/latencyP50/anyOf/0"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "latencyP99": {
+        "anyOf": [
+         {
+          "$ref": "#/properties/predictionEvidence/anyOf/0/properties/latencyP50/anyOf/0"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "latencyPercentileStatus": {
+        "enum": [
+         "modeled",
+         "unavailable"
+        ],
+        "type": "string"
+       },
+       "legacyGeneric": {
+        "type": "boolean"
+       },
+       "loadScope": {
+        "enum": [
+         "within measured load",
+         "beyond measured load",
+         "below measured load",
+         "not calibrated"
+        ],
+        "type": "string"
+       },
+       "note": {
+        "type": "string"
+       },
+       "requestServingCapacity": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "aggregateCapacityRps": {
+           "minimum": 0,
+           "type": "number"
+          },
+          "capacityEvidence": {
+           "additionalProperties": false,
+           "properties": {
+            "basis": {
+             "enum": [
+              "assumption",
+              "documented",
+              "measured",
+              "catalog"
+             ],
+             "type": "string"
+            },
+            "origin": {
+             "enum": [
+              "caller-provided",
+              "fargate-size-heuristic",
+              "policy-default",
+              "provider-catalog"
+             ],
+             "type": "string"
+            },
+            "source": {
+             "type": "string"
+            }
+           },
+           "required": [
+            "basis",
+            "origin"
+           ],
+           "type": "object"
+          },
+          "maxAggregateCapacityRps": {
+           "minimum": 0,
+           "type": "number"
+          },
+          "maxTaskCount": {
+           "exclusiveMinimum": 0,
+           "type": "integer"
+          },
+          "perTaskCapacityRps": {
+           "exclusiveMinimum": 0,
+           "type": "number"
+          },
+          "resourceId": {
+           "type": "string"
+          },
+          "resourceName": {
+           "type": "string"
+          },
+          "taskCount": {
+           "minimum": 0,
+           "type": "integer"
+          }
+         },
+         "required": [
+          "resourceId",
+          "resourceName",
+          "taskCount",
+          "perTaskCapacityRps",
+          "aggregateCapacityRps",
+          "maxTaskCount",
+          "maxAggregateCapacityRps",
+          "capacityEvidence"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "sourceIds": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "version": {
+        "const": 1,
+        "type": "number"
+       }
+      },
+      "required": [
+       "version",
+       "evidenceLevel",
+       "legacyGeneric",
+       "appWeight",
+       "appWeightDefaulted",
+       "loadScope",
+       "sourceIds",
+       "formulaIds",
+       "appCpu",
+       "appCpuByResource",
+       "latencyP50",
+       "latencyP95",
+       "note"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "appCpu": {
+        "type": "null"
+       },
+       "appCpuByResource": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "central": {
+           "$ref": "#/properties/predictionEvidence/anyOf/0/properties/appCpu/anyOf/0/properties/central"
+          },
+          "evidenceLevel": {
+           "$ref": "#/properties/predictionEvidence/anyOf/0/properties/evidenceLevel"
+          },
+          "high": {
+           "$ref": "#/properties/predictionEvidence/anyOf/0/properties/appCpu/anyOf/0/properties/high"
+          },
+          "low": {
+           "$ref": "#/properties/predictionEvidence/anyOf/0/properties/appCpu/anyOf/0/properties/low"
+          },
+          "resourceId": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "low",
+          "central",
+          "high",
+          "evidenceLevel",
+          "resourceId"
+         ],
+         "type": "object"
+        },
+        "maxItems": 0,
+        "type": "array"
+       },
+       "appWeight": {
+        "type": "null"
+       },
+       "appWeightDefaulted": {
+        "type": "null"
+       },
+       "evidenceLevel": {
+        "const": "unavailable/legacy",
+        "type": "string"
+       },
+       "formulaIds": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "latencyP50": {
+        "type": "null"
+       },
+       "latencyP95": {
+        "type": "null"
+       },
+       "latencyP99": {
+        "type": "null"
+       },
+       "legacyGeneric": {
+        "type": "null"
+       },
+       "loadScope": {
+        "type": "null"
+       },
+       "note": {
+        "type": "string"
+       },
+       "sourceIds": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "version": {
+        "const": 1,
+        "type": "number"
+       }
+      },
+      "required": [
+       "version",
+       "evidenceLevel",
+       "appWeight",
+       "appWeightDefaulted",
+       "loadScope",
+       "sourceIds",
+       "formulaIds",
+       "appCpu",
+       "appCpuByResource",
+       "latencyP50",
+       "latencyP95",
+       "note"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "appCpu": {
+        "anyOf": [
+         {
+          "$ref": "#/properties/predictionEvidence/anyOf/0/properties/appCpu/anyOf/0"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "appCpuByResource": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "central": {
+           "$ref": "#/properties/predictionEvidence/anyOf/0/properties/appCpu/anyOf/0/properties/central"
+          },
+          "evidenceLevel": {
+           "$ref": "#/properties/predictionEvidence/anyOf/0/properties/evidenceLevel"
+          },
+          "high": {
+           "$ref": "#/properties/predictionEvidence/anyOf/0/properties/appCpu/anyOf/0/properties/high"
+          },
+          "legacyGeneric": {
+           "type": "boolean"
+          },
+          "low": {
+           "$ref": "#/properties/predictionEvidence/anyOf/0/properties/appCpu/anyOf/0/properties/low"
+          },
+          "resourceId": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "low",
+          "central",
+          "high",
+          "evidenceLevel",
+          "resourceId"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "appWeight": {
+        "$ref": "#/properties/predictionEvidence/anyOf/0/properties/appWeight"
+       },
+       "appWeightDefaulted": {
+        "type": "boolean"
+       },
+       "evidenceLevel": {
+        "$ref": "#/properties/predictionEvidence/anyOf/0/properties/evidenceLevel"
+       },
+       "formulaIds": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "latencyAvailability": {
+        "$ref": "#/properties/predictionEvidence/anyOf/0/properties/latencyAvailability"
+       },
+       "latencyP50": {
+        "anyOf": [
+         {
+          "$ref": "#/properties/predictionEvidence/anyOf/0/properties/latencyP50/anyOf/0"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "latencyP95": {
+        "anyOf": [
+         {
+          "$ref": "#/properties/predictionEvidence/anyOf/0/properties/latencyP50/anyOf/0"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "latencyP99": {
+        "anyOf": [
+         {
+          "$ref": "#/properties/predictionEvidence/anyOf/0/properties/latencyP50/anyOf/0"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "latencyPercentileStatus": {
+        "enum": [
+         "modeled",
+         "unavailable"
+        ],
+        "type": "string"
+       },
+       "legacyGeneric": {
+        "type": "boolean"
+       },
+       "loadScope": {
+        "enum": [
+         "within measured load",
+         "beyond measured load",
+         "below measured load",
+         "not calibrated"
+        ],
+        "type": "string"
+       },
+       "note": {
+        "type": "string"
+       },
+       "sourceIds": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "version": {
+        "const": 1,
+        "type": "number"
+       }
+      },
+      "required": [
+       "version",
+       "evidenceLevel",
+       "appWeight",
+       "appWeightDefaulted",
+       "loadScope",
+       "sourceIds",
+       "formulaIds",
+       "appCpu",
+       "appCpuByResource",
+       "latencyP50",
+       "latencyP95",
+       "note"
+      ],
+      "type": "object"
+     }
+    ]
+   },
+   "replayIdentity": {
+    "additionalProperties": false,
+    "properties": {
+     "effectiveConfigHash": {
+      "description": "Original replay-only SHA-256 of the effective six-control startup configuration; top-level effectiveConfigHash is the versioned prediction identity.",
+      "maxLength": 64,
+      "minLength": 64,
+      "type": "string"
+     },
+     "scenarioHash": {
+      "description": "Canonical SHA-256 of the persisted scenario graph and attached traffic-pattern order",
+      "maxLength": 64,
+      "minLength": 64,
+      "type": "string"
+     }
+    },
+    "required": [
+     "scenarioHash",
+     "effectiveConfigHash"
+    ],
+    "type": "object"
+   },
+   "resilienceDiagnostics": {
+    "additionalProperties": true,
+    "description": "Bounded resilience diagnostics summary (compact mode). Absent when the resilience model did not run. Use simulation.compare_resilience for full per-path detail.",
+    "properties": {
+     "bounded": {
+      "description": "True when a generated-traffic, traversal-work, or cascade-depth bound truncated model work",
+      "type": "boolean"
+     },
+     "capacityByResource": {
+      "description": "Unique logical dependency resources; each appears once even when several paths reference it. When values are finite, nominalCapacityRps minus warmupCapacityLossRps (members still warming) and healthCapacityLossRps (unavailable or degraded members) equals routableCapacityRps, within rounding.",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "healthCapacityLossRps": {
+         "anyOf": [
+          {
+           "minimum": 0,
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "Aggregate capacity lost because members are unavailable or degraded; zero means no modeled member-health loss"
+        },
+        "nominalCapacityRps": {
+         "anyOf": [
+          {
+           "minimum": 0,
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "Aggregate capacity before warm-up and member-health reductions; null means no finite capacity ceiling is known"
+        },
+        "resourceId": {
+         "description": "Logical resource ID used by one or more resilience dependency paths",
+         "type": "string"
+        },
+        "role": {
+         "description": "Whether this resource is a dependency source, target, or both",
+         "enum": [
+          "source",
+          "target",
+          "source_and_target"
+         ],
+         "type": "string"
+        },
+        "routableCapacityRps": {
+         "anyOf": [
+          {
+           "minimum": 0,
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "Aggregate capacity available to this logical resource after modeled warm-up and member health; null means no finite capacity ceiling is known"
+        },
+        "warmupCapacityLossRps": {
+         "anyOf": [
+          {
+           "minimum": 0,
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "Aggregate capacity lost because fleet members are still warming up; zero means no modeled warm-up loss"
+        }
+       },
+       "required": [
+        "resourceId",
+        "role",
+        "routableCapacityRps"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "incidentOutcome": {
+      "description": "Incident outcome: stable | degraded | cascading | protected | recovered",
+      "type": "string"
+     },
+     "pathCount": {
+      "description": "Number of dependency paths evaluated this step",
+      "type": "number"
+     }
+    },
+    "type": "object"
+   },
+   "resources": {
+    "description": "Per-resource status summary (compact mode)",
+    "items": {
+     "additionalProperties": true,
+     "properties": {
+      "availabilityState": {
+       "description": "Availability derived from routed traffic: available = serving normally, degraded = critical/warning but still serving, unavailable = no traffic and not routable",
+       "enum": [
+        "available",
+        "degraded",
+        "unavailable"
+       ],
+       "type": "string"
+      },
+      "cpuPercent": {
+       "description": "CPU utilization (%)",
+       "type": "number"
+      },
+      "failureLifecycle": {
+       "description": "Read-only failure lifecycle marker when the backend identifies a quick injection or typed instance failure",
+       "enum": [
+        "quick_injection_parked",
+        "quick_injection_rejoined",
+        "instance_down",
+        "instance_kill"
+       ],
+       "type": "string"
+      },
+      "id": {
+       "description": "Resource ID",
+       "type": "string"
+      },
+      "isRoutable": {
+       "description": "Whether this compute/Kubernetes resource can receive traffic in this step; false distinguishes a failed/parked node from a critical node still serving",
+       "type": "boolean"
+      },
+      "name": {
+       "description": "Resource display name",
+       "type": "string"
+      },
+      "recoveryBlockedReason": {
+       "description": "Engine recovery guard currently preventing cooldown progress, when present (for example failure_park_window or idle_cpu_floor)",
+       "type": "string"
+      },
+      "recoveryProgress": {
+       "additionalProperties": false,
+       "description": "Read-only recovery progress; poll simulation.step until state is healthy, then use simulation.metrics to inspect the result",
+       "properties": {
+        "cooldown": {
+         "additionalProperties": false,
+         "properties": {
+          "completedSteps": {
+           "type": "number"
+          },
+          "remainingSteps": {
+           "type": "number"
+          },
+          "requiredSteps": {
+           "type": "number"
+          },
+          "target": {
+           "anyOf": [
+            {
+             "enum": [
+              "warning",
+              "healthy"
+             ],
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          }
+         },
+         "required": [
+          "target",
+          "completedSteps",
+          "requiredSteps",
+          "remainingSteps"
+         ],
+         "type": "object"
+        },
+        "parkWindow": {
+         "additionalProperties": false,
+         "properties": {
+          "completedSteps": {
+           "type": "number"
+          },
+          "remainingSteps": {
+           "type": "number"
+          },
+          "totalSteps": {
+           "type": "number"
+          }
+         },
+         "required": [
+          "totalSteps",
+          "completedSteps",
+          "remainingSteps"
+         ],
+         "type": "object"
+        },
+        "state": {
+         "enum": [
+          "parked",
+          "blocked",
+          "cooling_down",
+          "healthy"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "state",
+        "parkWindow",
+        "cooldown"
+       ],
+       "type": "object"
+      },
+      "routedRps": {
+       "description": "Requests per second routed to this resource this step (compute/kubernetes only)",
+       "type": "number"
+      },
+      "routingState": {
+       "description": "Read-only current routing state for a resource with failure lifecycle telemetry",
+       "enum": [
+        "unavailable",
+        "serving"
+       ],
+       "type": "string"
+      },
+      "status": {
+       "description": "Health status (healthy/warning/critical/failed)",
+       "type": "string"
+      }
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "retryAmplificationFactor": {
+    "description": "(Original offered RPS + generated retry RPS) / original offered RPS; an amplification measure, not capacity or goodput. Values > 1.0 = amplification risk. null = model ran but no traffic. Absent = resilience model disabled.",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "scenarioHash": {
+    "description": "Canonical SHA-256 of the persisted scenario graph and attached traffic-pattern order",
+    "maxLength": 64,
+    "minLength": 64,
+    "type": "string"
+   },
+   "simulationId": {
+    "description": "ID of the stepped simulation",
+    "type": "string"
+   },
+   "throughput": {
+    "description": "Effective requests per second",
+    "type": "number"
+   },
+   "tokensPerSecond": {
+    "description": "Inference throughput in tokens/second \u2014 present only on GPU inference simulations",
+    "type": "number"
+   },
+   "traffic": {
+    "description": "Current traffic level in RPS",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Simulate Step"
+}
