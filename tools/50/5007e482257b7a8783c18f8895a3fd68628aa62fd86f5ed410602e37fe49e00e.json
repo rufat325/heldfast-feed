@@ -1,0 +1,135 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Verzamel context"
+ },
+ "description": "Bundelt server-side meerdere achtergrondbronnen voor een onderwerp in \u00e9\u00e9n antwoord, zodat je niet meerdere losse tools hoeft te ketenen. Alleen de via parameters gevraagde bronnen worden opgehaald (opt-in), zodat de call snel blijft. Beschikbare bronnen:\n- **CBS-achtergrond** (publieke StatLine open data, geen credentials): geef `cbs_beleidsgebied` (bv. 'wonen', 'inkomen', 'criminaliteit') voor EXACTE, geciteerde cijfers uit de gecureerde nationale-contextlaag (cache-first, WS85/ADR-0037; nooit vector-embedded) voor `cbs_gemeente` (default GM0599). Of geef `cbs_zoekterm` / `cbs_tabel_id` (+ optioneel `cbs_perioden` + `cbs_extra_filters` + `cbs_top`) voor ad-hoc live StatLine-zoek. Voor aggregerende Iv3-tabellen (84413NED rekeningen, 83641NED begrotingen \u2014 grootteklasse-niveau, NIET per gemeente) gebruik `cbs_extra_filters` (bv. {\"RegioS\": \"LD03\"}) en verhoog `cbs_top` (default 100). LET OP: CBS StatLine biedt jeugd-lasten UITSLUITEND op grootteklasse-niveau, NIET per gemeente; gebruik `iv3_kerncijfers_gemeenten` voor per-gemeente totale lasten (niet taakveld-specifiek). Netwerk-call.\n- **CBS afgeleide cijfers** (metrics-laag, WS85b): geef `cbs_metric` (bv. 'woningvoorraad_per_1000_inw') voor een BEREKEND cijfer (per-1.000 / \u0394-t.o.v.-vorig-jaar / verhouding) m\u00e9t bronherkomst; optioneel `cbs_compare_regions` (tussen regio's) OF `cbs_compare_periodes` (over de tijd) \u2014 precies \u00e9\u00e9n van beide \u2014 met vergelijkbaarheidswaarborg, OF `cbs_rollup_region` (bv. 'NL01') om op te rollen van leden naar ouder-niveau (anti-Simpson, dekkingsvlag).\n- **CBS cube-engine** (WS90/ADR-0054, vrije slice-and-dice): voor een vraag die NIET op een vaste `cbs_metric` past, geef eerst `cube_describe` (tabel-id/onderwerp) \u2192 krijg de maten met hun aggregation_type + toegestane ops + dimensieleden; geef daarna `cube_query` (een {table_id|topic, measures, filters, op, region, + max \u00e9\u00e9n vergelijkings-as}-dict). De engine compileert deterministisch en WEIGERT illegale ops ('je kunt geen gemiddelde middelen') of ONTHOUDT ZICH bij een onbekend lid / niet-vergelijkbare as i.p.v. een fout cijfer te geven.\n- **CBS Iv3 per-gemeente financi\u00eble data** (gemeentelijke aanleveringen bij CBS, ADR-0042): geef `iv3_kerncijfers_gemeenten` voor ELKE vraag over financi\u00ebn per gemeente \u2014 dit queries `fin_iv3_fact` (NeoDemos eigen DB, beschikbare gemeenten en verslagjaren vanaf 2017, gemeentelijke aanleveringen gepubliceerd door CBS). NOOIT CBS StatLine hiervoor gebruiken (84413NED/83641NED = grootteklasse, niet per gemeente). Retourneert: totale lasten, overhead% (taakveld 0.4 \u00f7 totale lasten excl. 0.10 en 0.11, Iv3-afgeleid), overhead & uitvoering \u20ac/inwoner \u2014 per gemeente, gesorteerd op laagste overhead%. Optioneel `iv3_jaar` + `iv3_verslagsoort` ('jaarrekening' / 'begroting'). Kant-en-klare tabel + JSON-blok. Gebruik dit i.p.v. `vraag_begrotingsregel` voor vergelijkingen TUSSEN gemeenten. Voeg `iv3_taakvelden` toe voor een PER-TAAKVELD uitsplitsing (bv. ['6.72','6.71'] voor jeugd + WMO; laat leeg voor alle taakvelden). BBV-codes (selectie): 0.4=Overhead, 1.2=OOV, 2.1=Verkeer, 4.3=Onderwijs, 6.1=Samenkracht, 6.3=Inkomen, 6.71=WMO 18+, 6.72=Jeugdhulp 18-, 7.3=Afval, 7.4=Milieu, 8.3=Wonen.\n- **RIVM gezondheidsdata** (WS88, separate path): geef `rivm_gezondheid` (bv. 'levensverwachting', 'gezonde levensverwachting') voor EXACTE, geciteerde RIVM-cijfers per gemeente uit de gecureerde RIVM-contextlaag (cache-first, rivm_context_*; nooit vector-embedded). Bron: RIVM \u2014 Gezondheidsmonitor (GGD'en, CBS, RIVM), CC-BY 4.0. Tabel 50108NED (gezonde levensverwachting per gemeente, RegioS) live. Optioneel `cbs_gemeente` voor het regio-filter (default GM0599 Rotterdam). GEBRUIK DIT voor elke vraag over levensverwachting / gemeente-gezondheid \u2014 NIET `cbs_beleidsgebied` (CBS StatLine heeft geen per-gemeente gezondheidsdata).\n- **Raadsinstrument-advies**: geef `instrument_doel` ('informatie'/'controle'/'agenderen'/'besluit_wijzigen'/'nieuw_beleid'/'onderzoek') om te adviseren WELK instrument past, m\u00e9t doorlooptijd-afweging en RvO-template.\n\nGebruik wanneer: je een onderwerp wilt staven met maatschappelijke cijfers en/of wilt weten welk raadsinstrument past \u2014 in \u00e9\u00e9n keer. Voor zware corpus-retrieval (notulen, moties): gebruik `zoek_raadshistorie` / `zoek_moties` apart (die zijn niet in deze orchestrator gebundeld om binnen de tijdslimiet te blijven).\n\nKRITIEKE GUARDRAILS \u2014 DATA-INTEGRITEIT:\n1. **Nooit een CBS-tabel-ID noemen dat je niet hebt geverifieerd.** Als `cbs_beleidsgebied` niets oplevert (geen curated match), zeg dan eerlijk dat de data niet beschikbaar is in NeoDemos \u2014 NOOIT een tabel-ID suggereren dat je niet via deze tool hebt opgehaald. Een hallucinated tabel-ID is erger dan 'niet beschikbaar': de gebruiker gaat op zoek naar data die niet bestaat op de plek waar je hem stuurt.\n2. **CBS StatLine heeft GEEN levensverwachting per individuele gemeente.** Gebruik de `rivm_gezondheid`-parameter (bv. 'levensverwachting') \u2014 die haalt tabel 50108NED op uit de gecureerde RIVM-contextlaag (WS88). Verwijs NIET naar 85388NED of een ander onbekend CBS-tabel-ID voor gezondheidsdata.\n3. **CBS StatLine heeft GEEN Iv3-lasten per individuele gemeente per taakveld.** Dat is grootteklasse-niveau (84413NED/83641NED). Verwijs naar `iv3_kerncijfers_gemeenten` voor totale per-gemeente lasten, of leg de bronbeperking uit.\n\nRetourneert: markdown met een sectie per gevraagde bron.",
+ "inputSchema": {
+  "properties": {
+   "cbs_beleidsgebied": {
+    "default": null,
+    "title": "Cbs Beleidsgebied",
+    "type": "string"
+   },
+   "cbs_compare_periodes": {
+    "default": null,
+    "items": {},
+    "title": "Cbs Compare Periodes",
+    "type": "array"
+   },
+   "cbs_compare_regions": {
+    "default": null,
+    "items": {},
+    "title": "Cbs Compare Regions",
+    "type": "array"
+   },
+   "cbs_extra_filters": {
+    "additionalProperties": true,
+    "default": null,
+    "title": "Cbs Extra Filters",
+    "type": "object"
+   },
+   "cbs_gemeente": {
+    "default": "GM0599",
+    "title": "Cbs Gemeente",
+    "type": "string"
+   },
+   "cbs_metric": {
+    "default": null,
+    "title": "Cbs Metric",
+    "type": "string"
+   },
+   "cbs_perioden": {
+    "default": null,
+    "title": "Cbs Perioden",
+    "type": "string"
+   },
+   "cbs_rollup_region": {
+    "default": null,
+    "title": "Cbs Rollup Region",
+    "type": "string"
+   },
+   "cbs_tabel_id": {
+    "default": null,
+    "title": "Cbs Tabel Id",
+    "type": "string"
+   },
+   "cbs_top": {
+    "default": 100,
+    "title": "Cbs Top",
+    "type": "integer"
+   },
+   "cbs_zoekterm": {
+    "default": null,
+    "title": "Cbs Zoekterm",
+    "type": "string"
+   },
+   "cube_describe": {
+    "default": null,
+    "title": "Cube Describe",
+    "type": "string"
+   },
+   "cube_query": {
+    "additionalProperties": true,
+    "default": null,
+    "title": "Cube Query",
+    "type": "object"
+   },
+   "instrument_doel": {
+    "default": null,
+    "title": "Instrument Doel",
+    "type": "string"
+   },
+   "instrument_op_agenda": {
+    "default": null,
+    "title": "Instrument Op Agenda",
+    "type": "boolean"
+   },
+   "instrument_urgentie": {
+    "default": "normaal",
+    "title": "Instrument Urgentie",
+    "type": "string"
+   },
+   "iv3_jaar": {
+    "default": null,
+    "title": "Iv3 Jaar",
+    "type": "integer"
+   },
+   "iv3_kerncijfers_gemeenten": {
+    "default": null,
+    "items": {},
+    "title": "Iv3 Kerncijfers Gemeenten",
+    "type": "array"
+   },
+   "iv3_taakvelden": {
+    "default": null,
+    "items": {},
+    "title": "Iv3 Taakvelden",
+    "type": "array"
+   },
+   "iv3_verslagsoort": {
+    "default": "jaarrekening",
+    "title": "Iv3 Verslagsoort",
+    "type": "string"
+   },
+   "onderwerp": {
+    "title": "Onderwerp",
+    "type": "string"
+   },
+   "rivm_gezondheid": {
+    "default": null,
+    "title": "Rivm Gezondheid",
+    "type": "string"
+   }
+  },
+  "required": [
+   "onderwerp"
+  ],
+  "title": "verzamel_contextArguments",
+  "type": "object"
+ },
+ "name": "verzamel_context"
+}

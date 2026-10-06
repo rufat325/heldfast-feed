@@ -1,0 +1,155 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false,
+  "title": "Build a riddle"
+ },
+ "description": "Builds a new Riddle of any of the nine types from a build configuration: \"type\" says which kind (see that argument for what each one is and what it needs at a minimum), \"build\" carries the content. Everything a type accepts is described on the \"build\" fields themselves, marked with the types it belongs to; the exhaustive per-type shapes are in riddle://reference/riddle-builder/riddle-types, the block types in riddle://reference/riddle-builder/block-types, and the human help pages at https://www.riddle.com/help/api/build-riddles/riddle-types-and-other-blocks/<type>. To change an existing Riddle instead, use riddle_builder_update (a merge, not a rebuild); to check a configuration without creating anything, riddle_builder_validate. Returns the compact build-configuration envelope of riddle_get (riddle://reference/response-format), with 'queued': true added when queue is set. The new Riddle's view URL comes back in it - \"context.viewUrl\" once published, \"context.viewUrlUnavailable.url\" (already final, not live yet) before that.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "build": {
+    "description": "The build configuration of the Riddle type named in \"type\".This is the raw build configuration in the engine's own key names - the exact same shape riddle_get returns under \"build\", riddle_builder_update takes, and riddle_builder_validate dry-runs, so a read-back can be fed straight back in - riddle_get's \"build\" KEY, never the outer envelope around it, whose \"uuid\" and siblings are rejected as unsupported properties. Unknown keys are rejected rather than ignored. WHICH fields exist is decided by \"type\": each one below opens with the types it belongs to, and a field the chosen type does not have is rejected. Only \"title\" exists on all nine.",
+    "properties": {
+     "attributes": {
+      "description": "Personality only, optional. Scored via answers' \"attributeScores\"; see riddle-types.",
+      "type": "array"
+     },
+     "blocks": {
+      "description": "The Riddle's blocks - required by every type except Leaderboard and Placeholder, which have none. A block is {\"type\": <one of the block types listed below for the \"type\" you are building>, \"title\": \"...\"} plus that block type's own content, and the content differs sharply per block type - unknown keys are rejected rather than ignored. A CHOICE block's answer options go in \"items\" - not \"answers\" - each one an object: {\"title\": \"Paris\", \"isCorrect\": true} on a Quiz, {\"title\": \"Paris\", \"scores\": [3, 0]} on a Personality Test. The blocks that take typed-in answers instead name their own key - a Quiz TextEntry takes \"answers\", a Quiz GuessIt \"acceptableAnswers\" - and some blocks (a Poll NetPromoterScore) have no options at all; the per-block-type reference below is what says which. A FormBuilder's inputs go in \"fields\" instead. Every remaining property, value range and trap per block type is in riddle://reference/riddle-builder/block-types; read it with reference_get scoped to your \"riddleType\" AND the \"blockTypes\" you intend to build before writing them. The block types each Riddle type allows: >> QUIZ: SingleChoice / MultipleChoice / TextEntry / Order / Flashcard / TypeRush / GuessIt / TapAndFind / SpotTheDifference / QuestionBank - the last two place their answers as hotspots on an image, in percentages of it. >> POLL: SingleChoice / MultipleChoice / Matrix / Order / Upvote / NetPromoterScore / RateIt / Swiper / Reaction / TierList / ThisOrThat / QuestionBank (free text: FormField, fieldType ShortText/LongText/Number). >> PERSONALITY: SingleChoice / MultipleChoice - every answer item's \"scores\" array must have one integer per personality, in personality order. >> FORM: FormBuilder, whose \"fields\" are the 19 types in riddle://reference/riddle-builder/form-field-types. >> PREDICTOR: PickTheWinner / GuessTheScore. >> MINIGAME: SlotMachine / WheelSpinner / Sudoku / Minesweeper / Crosswords. >> STORY: Content / Ad / Quote / InteractiveGraphic / FormBuilder / FormField / FormSelect - a Story has no answers of any kind, so build a Poll or a Quiz instead if you need them. >> QUIZ / PREDICTOR / MINIGAME / STORY additionally take the lead-collecting blocks FormBuilder, FormField and FormSelect in the same array; on a Quiz, a Predictor or a Minigame a Name and an Email field are what make it Leaderboard-connectable (a Story scores nothing, so it collects leads but never feeds a Leaderboard). A QuestionBank block draws its questions from an existing bank (\"questionBankId\" plus a non-empty \"questionBankBlocks\"; riddle://reference/question-bank/overview).",
+      "type": "array"
+     },
+     "conditions": {
+      "description": "Placeholder only. Prioritized (first match wins), time-windowed routing rules evaluated before the fallback \"riddleId\"; at most 100. Each targets exactly one of \"riddleId\" (UUID of an existing, non-Placeholder, published Riddle) or \"tag\" (name or numeric id of an EXISTING tag in this Riddle's scope - a typo'd name is rejected, never auto-created), never both; a \"tag\" also requires \"tagMode\": \"lastPublished\" or \"random\" (with optional \"randomRefreshIntervalSeconds\", \"random\" only). ONE kind of time window per condition - a date range (\"from\" required, \"to\" optional) or a daily one (\"dailyFrom\" plus \"dailyTo\") - with neither it always matches. No other key is accepted. This REPLACES the whole list, and the stored list is re-sorted into tiers with overlapping windows trimmed, so a read-back is not what you sent. Normalization, and why resending a read-back can delete a condition: riddle://reference/riddle-builder/riddle-types with riddleType [\"Placeholder\"].",
+      "type": "array"
+     },
+     "leaderboard": {
+      "description": "Quiz / Predictor / Minigame only. Leaderboard connection. Keys: connections (leaderboard UUIDs to attach this Riddle to), identifier, nickname. identifier/nickname name a form field of this Riddle by its label (\"Your email\", case-insensitive) or by the key riddle_get reports (\"email1\"); an ambiguous label is rejected, pass the key then.",
+      "type": "object"
+     },
+     "logic": {
+      "description": "Quiz / Poll / Form / Story only. Optional branching logic tree over the blocks. A node is {\"blockId\": int, \"branchingType\": \"linear\"|\"answer\"|\"condition\"|\"score\"}. For \"linear\" add \"next\": {<child node>}; for \"answer\" add \"rules\": [{\"answers\": [\"Answer text\"], \"blockId\": int, \"next\": {...}}]; for \"condition\" add \"condition\": {\"field\": string, \"operator\": string, \"value\"?: mixed} plus \"ifTrue\"/\"ifFalse\": {<child node>} (riddle://reference/concepts/logic lists the \"field\"/\"operator\" values); for \"score\" add \"scoreType\": \"total\"|\"block\" plus \"ranges\": [{\"min\": int, \"max\": int, \"blockId\": int, \"next\": {...}}]. A bare {\"blockId\": X} shows X and ends the flow; to merge paths and keep going you must repeat the shared tail under each branch. Omit for a default linear flow. >> QUIZ: A Quiz containing a Flashcard block is linear-only: one \"answer\"/\"condition\"/\"score\" node anywhere in the tree is then rejected for the whole Riddle. >> STORY: A Story has no answers to branch on, so only \"linear\" nodes are meaningful here.",
+      "type": "object"
+     },
+     "personalities": {
+      "description": "Personality only, and required there. Array of personality objects (min 2), each with \"title\" (string). Optional: \"description\", \"media\", \"minScore\"/\"maxScore\" (0-100, the score window in which this personality wins), the CTA button (\"ctaButtonText\"/\"ctaButtonURL\" - either one shows it - plus \"isIncludeCTAButtonEnabled\") and the runner-ups (\"otherResults\", \"areOtherResultsEnabled\", \"areOtherResultsMediaEnabled\"). Their exact shapes: riddle://reference/riddle-builder/riddle-types under types.Personality.",
+      "type": "array"
+     },
+     "preset": {
+      "description": "Riddle-level design and behaviour settings (design, open/close scheduling, timers, progress, live score, result visibility, vote integrity, page chrome, ~20 UX flags); only the keys you send are applied, and a key only exists for the types that have it. A Leaderboard's own display settings live here too. Exact names: riddle://reference/concepts/preset.",
+      "type": "object"
+     },
+     "publish": {
+      "description": "Every type except Leaderboard. Publish CONFIGURATION stored on the Riddle - an object, not this tool's separate top-level \"publish\" boolean, which publishes right away. Covers showcase/QR code, lead verification, email automation, dataLayer, tracking, integrations, embedSettings. Keys: riddle://reference/concepts/publish.",
+      "type": "object"
+     },
+     "result": {
+      "description": "The single result page - Poll, Form, Predictor, Minigame, Story and Personality. A Quiz has \"results\" (plural, one page per score range) instead, and a Leaderboard and a Placeholder have no result page at all. Single result object: \"title\" plus optional \"description\", or an advanced \"blocks\" array (PopularChoices, AnsweredBlocks, Text, Media, ...) for full control over the page. Send \"redirectUrl\" instead to redirect rather than show a page. Both: riddle://reference/riddle-builder/result-blocks. >> FORM also: Supports dynamic %variables naming a form field by TYPE and position - \"%name1\", \"%email1\", the first field of a type also as \"%name\" - never by its label (\"%Your name\" is rejected). riddle://reference/concepts/form-fields-usage (\"variables\"). >> PERSONALITY instead: Optional result page configuration. Takes the full result-builder block set plus the Personality-only WinningPersonality, OtherPersonalities and Attributes blocks - riddle://reference/riddle-builder/result-blocks.",
+      "type": "object"
+     },
+     "results": {
+      "description": "Quiz only - every other type with a result page has the singular \"result\" instead. Array of result objects, each {\"title\": \"...\", \"minPercentage\": 0, \"maxPercentage\": 50} (0-100) with optional \"description\" - or \"minPercentage\"/\"maxPercentage\" plus an advanced \"blocks\" array (Text / ResultScore / Share / AnsweredBlocks / Button) for full control over the page. Send \"redirectUrl\" instead of \"blocks\" to redirect the respondent rather than show a page. Block properties and redirect support: riddle://reference/riddle-builder/result-blocks.",
+      "type": "array"
+     },
+     "riddleConnections": {
+      "description": "Leaderboard only. Riddle UUIDs (max 10) to connect to the Leaderboard - quizzes, predictors and minigames (except WheelSpinner-only ones), each already published; connecting a draft fails. On an edit this REPLACES the whole list rather than appending, so resend every UUID you want to keep.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "riddleId": {
+      "description": "Placeholder only. The fallback target: the UUID of the Riddle to show when no condition matches. Must be an existing, non-Placeholder, published Riddle, and not this Placeholder itself. Having none is meaningful - the Placeholder then resolves to nothing. On an EDIT, omitting it leaves it as it is; \"riddleId\": null clears it, and is rejected if that would leave the Placeholder with no fallback and no conditions at all - as is \"conditions\": [] while this is empty. riddle://reference/riddle-builder/riddle-types with riddleType [\"Placeholder\"].",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "scoring": {
+      "description": "Predictor only. Scoring rules of the Predictor, a nested object. Keys (ints >= 0): \"correct\" (exactly right), \"tendency\" (right winner, wrong score), \"difference\" (right goal difference), \"wrong\". Defaults 30 / 10 / 20 / 0.",
+      "type": "object"
+     },
+     "title": {
+      "description": "The Riddle title.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "title"
+    ],
+    "type": "object"
+   },
+   "omit": {
+    "default": null,
+    "description": "Sections of the returned envelope to leave out; omit the parameter for the whole envelope. \"uuid\"/\"type\"/\"modifiedAt\" are always returned, and whatever you leave out is echoed back under \"omittedFields\", so a missing key never means the Riddle has none of it. Details: riddle://reference/concepts/warnings.",
+    "items": {
+     "enum": [
+      "build",
+      "warnings",
+      "nextBlockId",
+      "published",
+      "context"
+     ],
+     "type": "string"
+    },
+    "type": "array",
+    "uniqueItems": true
+   },
+   "project": {
+    "default": null,
+    "description": "The project ID; pass NULL for personal project; omit to use the currently selected project.",
+    "type": [
+     "null",
+     "integer"
+    ]
+   },
+   "publish": {
+    "default": null,
+    "description": "Whether to publish the Riddle right after creation; default false (draft). Distinct from the \"publish\" field INSIDE the build config, which is the stored publish configuration.",
+    "type": [
+     "null",
+     "boolean"
+    ]
+   },
+   "queue": {
+    "default": null,
+    "description": "Whether to queue the creation asynchronously.",
+    "type": [
+     "null",
+     "boolean"
+    ]
+   },
+   "templateId": {
+    "default": null,
+    "description": "Only when this build config came from a template you adapted (riddle_template_get): that template's id. Always pass it when you have one - the new Riddle then starts out on the template's whole DESIGN, including what no build config can express, with your build config applied on top. The content is yours either way. Details: riddle://reference/concepts/unknown-properties.",
+    "type": [
+     "null",
+     "integer"
+    ]
+   },
+   "type": {
+    "description": "Which kind of Riddle to build - this decides which \"build\" fields and which block types exist. Quiz: questions with right and wrong answers, scored, one result page per score range (title + blocks). Poll: opinion questions, nothing right or wrong, one shared result page (title + blocks). Personality: answers score towards personalities, the winner is the result (title + blocks + personalities). Form: lead-collecting fields only, no questions (title + blocks). Predictor: predictions of real-world outcomes, scored once the actual result is entered (title + blocks). Minigame: SlotMachine, WheelSpinner, Sudoku, Minesweeper or Crosswords (title + blocks). Story: linear content pages, no answers of any kind (title + blocks). Leaderboard: a standalone ranking other published Riddles connect to, no blocks (title). Placeholder: no content of its own, routes to another Riddle by prioritized, time-windowed rules (title). Per-type shapes: riddle://reference/riddle-builder/riddle-types.",
+    "enum": [
+     "Quiz",
+     "Poll",
+     "Personality",
+     "Form",
+     "Predictor",
+     "Minigame",
+     "Story",
+     "Leaderboard",
+     "Placeholder"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "type",
+   "build"
+  ],
+  "type": "object"
+ },
+ "name": "riddle_builder_create"
+}

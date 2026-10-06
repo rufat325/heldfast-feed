@@ -1,0 +1,423 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Check a whole npm dependency inventory against OSV.dev in one call: pass `packages: [{name, version?}]`, or raw package.json / package-lock / yarn.lock / pnpm-lock / CycloneDX / SPDX content via `content`. Large inventories are chunked automatically. Each finding has severity, summary, CVE aliases, fixedVersion and isMalware, so no per-package follow-up is needed.\n\nBefore calling anything clean, read:\n- `unresolvedPackages`/`nonexistentVersions` (and each result's `registryStatus`): a name or version not on npm shows vulnerabilityCount 0 just like a clean package. A version npm removed can still have real OSV findings (often malware).\n- A `packages` entry with no version is checked against every historical version; confirm against the version actually in use before calling it vulnerable.\n- `signals` (deprecated, hasInstallScripts, popularity/maintenance tiers, possibleTyposquatOf): 0 vulnerabilities can still be deprecated, abandoned or a typosquat. `signals` is null for git/file/workspace/URL entries, which are not scanned.\n- `source` (lockfile input): `nonRegistryHost` means the tarball comes from an unexpected host; `identityMismatch` means it is a different package/version than declared (`resolvedName`/`resolvedVersion`) and the counts describe the declared one. Treat both as lockfile tampering.\n- Use `uniqueVulnerabilityCount` for distinct issues; raw counts can list one CVE twice.\n- package.json input: `projectLifecycleScripts`/`projectLifecycleScriptRisk` are the project's own install scripts; peerDependencies are skipped unless `includePeerDependencies: true` (see `ignoredPeerDependencyNames`); `declaredSpec` marks a version resolved from a range, which can change on the next install.\n- npm aliases are followed: `package.actualName` is the real package the data describes.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "content": {
+    "description": "Raw dependency inventory content: package.json, package-lock.json, yarn.lock, pnpm-lock.yaml, CycloneDX JSON, or SPDX JSON. Use this OR `packages`, not both.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "includeDevDependencies": {
+    "description": "Ignored when using `packages`; only applies when `content` is a manifest/lockfile format that distinguishes dev dependencies.",
+    "type": "boolean"
+   },
+   "includePeerDependencies": {
+    "description": "Ignored when using `packages`; only applies when `content` is a package.json. peerDependencies are excluded from scanning by default (see ignoredPeerDependencyNames) since a peer is often intentionally left unresolved by the consumer \u2014 set this to also check them.",
+    "type": "boolean"
+   },
+   "packages": {
+    "description": "Explicit package list (1-1000 items). Use this OR `content`, not both.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "maxLength": 214,
+       "minLength": 1,
+       "type": "string"
+      },
+      "version": {
+       "description": "One exact published version, e.g. \"18.2.0\" (not a range/tag like \"^18.2.0\" or \"latest\" \u2014 those are resolved against the registry first, at the cost of an extra lookup, rather than rejected)",
+       "maxLength": 128,
+       "type": "string"
+      }
+     },
+     "required": [
+      "name"
+     ],
+     "type": "object"
+    },
+    "maxItems": 1000,
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "name": "batch_query_vulnerabilities",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "enrichmentNote": {
+    "type": "string"
+   },
+   "existenceCheckNote": {
+    "type": "string"
+   },
+   "ignoredCount": {
+    "type": "number"
+   },
+   "ignoredPeerDependencyNames": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "inputFormat": {
+    "type": "string"
+   },
+   "nonexistentVersions": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "packagesWithVulnerabilities": {
+    "type": "number"
+   },
+   "parsedPackageCount": {
+    "type": "number"
+   },
+   "projectLifecycleScriptRisk": {
+    "additionalProperties": false,
+    "properties": {
+     "hasLifecycleScripts": {
+      "type": "boolean"
+     },
+     "riskTier": {
+      "enum": [
+       "none",
+       "low",
+       "moderate",
+       "high",
+       "critical"
+      ],
+      "type": "string"
+     },
+     "totalScore": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "hasLifecycleScripts",
+     "riskTier",
+     "totalScore"
+    ],
+    "type": "object"
+   },
+   "projectLifecycleScripts": {
+    "anyOf": [
+     {
+      "additionalProperties": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "queryFailureCount": {
+    "type": "number"
+   },
+   "results": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "advisoryCount": {
+       "type": "number"
+      },
+      "npmscanUrl": {
+       "type": "string"
+      },
+      "package": {
+       "additionalProperties": false,
+       "properties": {
+        "actualName": {
+         "type": "string"
+        },
+        "declaredSpec": {
+         "type": "string"
+        },
+        "name": {
+         "type": "string"
+        },
+        "version": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "type": "object"
+      },
+      "registryStatus": {
+       "enum": [
+        "found",
+        "package-not-found",
+        "version-not-found",
+        "unchecked"
+       ],
+       "type": "string"
+      },
+      "scanStatus": {
+       "enum": [
+        "scanned",
+        "not-scanned"
+       ],
+       "type": "string"
+      },
+      "signals": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "deprecated": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "hasInstallScripts": {
+           "type": [
+            "boolean",
+            "null"
+           ]
+          },
+          "maintenanceTier": {
+           "enum": [
+            "active",
+            "aging",
+            "stale",
+            "unknown"
+           ],
+           "type": "string"
+          },
+          "popularityTier": {
+           "enum": [
+            "very-high",
+            "high",
+            "moderate",
+            "low",
+            "very-low",
+            "unknown"
+           ],
+           "type": "string"
+          },
+          "possibleTyposquatOf": {
+           "anyOf": [
+            {
+             "additionalProperties": false,
+             "properties": {
+              "name": {
+               "type": "string"
+              },
+              "rank": {
+               "type": "number"
+              }
+             },
+             "required": [
+              "name",
+              "rank"
+             ],
+             "type": "object"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          }
+         },
+         "required": [
+          "deprecated",
+          "hasInstallScripts",
+          "popularityTier",
+          "maintenanceTier",
+          "possibleTyposquatOf"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "source": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "identityMismatch": {
+           "type": [
+            "boolean",
+            "null"
+           ]
+          },
+          "integrity": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "nonRegistryHost": {
+           "type": [
+            "boolean",
+            "null"
+           ]
+          },
+          "resolvedName": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "resolvedUrl": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "resolvedVersion": {
+           "type": [
+            "string",
+            "null"
+           ]
+          }
+         },
+         "required": [
+          "resolvedUrl",
+          "integrity",
+          "nonRegistryHost",
+          "identityMismatch",
+          "resolvedName",
+          "resolvedVersion"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "uniqueVulnerabilityCount": {
+       "type": "number"
+      },
+      "vulnerabilities": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "aliases": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "fixedVersion": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "id": {
+          "type": "string"
+         },
+         "isMalware": {
+          "description": "Confirmed-malicious package (MAL-* id/alias or CWE-506), not an ordinary vulnerability: remove it, do not patch.",
+          "type": "boolean"
+         },
+         "npmscanUrl": {
+          "type": "string"
+         },
+         "publishedAt": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "severity": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "summary": {
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "id",
+         "summary",
+         "severity",
+         "aliases",
+         "publishedAt",
+         "fixedVersion",
+         "isMalware",
+         "npmscanUrl"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "vulnerabilityCount": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "package",
+      "npmscanUrl",
+      "scanStatus",
+      "registryStatus",
+      "vulnerabilityCount",
+      "advisoryCount",
+      "uniqueVulnerabilityCount",
+      "vulnerabilities",
+      "signals",
+      "source"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "totalUniqueVulnerabilities": {
+    "type": "number"
+   },
+   "totalVulnerabilities": {
+    "type": "number"
+   },
+   "unresolvedPackages": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "warnings": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "results",
+   "totalVulnerabilities",
+   "totalUniqueVulnerabilities",
+   "packagesWithVulnerabilities"
+  ],
+  "type": "object"
+ },
+ "title": "Batch query known vulnerabilities"
+}
