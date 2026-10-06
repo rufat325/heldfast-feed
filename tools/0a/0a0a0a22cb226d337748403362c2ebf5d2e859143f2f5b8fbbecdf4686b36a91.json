@@ -1,0 +1,656 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Check whether terrain blocks the straight sightline between an observer and a target, each at a height above the ground, accounting for earth curvature and atmospheric refraction. Returns a verdict of clear, blocked, or indeterminate (when samples along the line have no data), the minimum clearance and the terrain point that limits it, and the first obstruction from the observer when blocked. With frequency_mhz, it also reports first Fresnel zone clearance against the 60% free-space bar. Where Mapzen reports sea-floor depth over open water, clearance is measured to the sea surface; USGS 3DEP values below 0 m (bay floor in some bays, or dry land) count as received unless water_surface_m sets a water level. Models terrain only: buildings and vegetation are not modeled beyond what the elevation source itself captures, and a ridge narrower than the reported sample spacing can be missed. To see the terrain between the points, call elevation_get_profile on the same two points.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "earth_model": {
+    "default": "optical",
+    "description": "Earth model: flat ignores curvature; geometric applies curvature without refraction; optical applies standard visible-light refraction (coefficient 0.13, default); radio applies the standard 4/3-earth radio refraction (coefficient 0.25).",
+    "enum": [
+     "flat",
+     "geometric",
+     "optical",
+     "radio"
+    ],
+    "type": "string"
+   },
+   "frequency_mhz": {
+    "description": "Radio frequency in MHz (30\u2013300,000; 5800 for 5.8 GHz). When set, the result adds first Fresnel zone clearance against the 60% free-space bar; pair it with earth_model radio.",
+    "maximum": 300000,
+    "minimum": 30,
+    "type": "number"
+   },
+   "observer": {
+    "description": "Observer location as {lat, lon} in decimal degrees (WGS84).",
+    "properties": {
+     "lat": {
+      "description": "Latitude in decimal degrees (WGS84), -90 to 90.",
+      "maximum": 90,
+      "minimum": -90,
+      "type": "number"
+     },
+     "lon": {
+      "description": "Longitude in decimal degrees (WGS84), -180 to 180.",
+      "maximum": 180,
+      "minimum": -180,
+      "type": "number"
+     }
+    },
+    "required": [
+     "lat",
+     "lon"
+    ],
+    "type": "object"
+   },
+   "observer_height_m": {
+    "default": 1.7,
+    "description": "Observer eye or antenna height above ground, meters (default 1.7, standing eye height).",
+    "maximum": 10000,
+    "minimum": 0,
+    "type": "number"
+   },
+   "samples": {
+    "default": 100,
+    "description": "Evenly spaced terrain samples along the line, endpoints included (3\u2013250, default 100). Spacing is reported; a ridge narrower than it can be missed.",
+    "maximum": 250,
+    "minimum": 3,
+    "type": "integer"
+   },
+   "source": {
+    "default": "auto",
+    "description": "Elevation source: auto (default) uses USGS 3DEP where it has data and Open Topo Data (SRTM, with Mapzen terrain tiles where SRTM has no data) for the rest; usgs_3dep uses 3DEP only; opentopodata uses Open Topo Data only. Case is ignored and spaces or hyphens read as underscores, so USGS-3DEP and open topo data are accepted; 3dep, usgs, and epqs are also aliases for usgs_3dep.",
+    "enum": [
+     "auto",
+     "usgs_3dep",
+     "opentopodata"
+    ],
+    "type": "string"
+   },
+   "target": {
+    "description": "Target location as {lat, lon} in decimal degrees (WGS84).",
+    "properties": {
+     "lat": {
+      "description": "Latitude in decimal degrees (WGS84), -90 to 90.",
+      "maximum": 90,
+      "minimum": -90,
+      "type": "number"
+     },
+     "lon": {
+      "description": "Longitude in decimal degrees (WGS84), -180 to 180.",
+      "maximum": 180,
+      "minimum": -180,
+      "type": "number"
+     }
+    },
+    "required": [
+     "lat",
+     "lon"
+    ],
+    "type": "object"
+   },
+   "target_height_m": {
+    "default": 0,
+    "description": "Target height above ground, meters (default 0, the ground itself). Set it for a tower, building top, or second antenna.",
+    "maximum": 10000,
+    "minimum": 0,
+    "type": "number"
+   },
+   "water_surface_m": {
+    "description": "Water level in meters (-500 to 9,000). When set, each sample's surface, endpoints included, is the higher of its elevation and this level, replacing the default that lifts only Mapzen sea-floor values to 0 m. Set it where the line crosses water: 0 where USGS 3DEP reports a bay floor, or a lake or tide level.",
+    "maximum": 9000,
+    "minimum": -500,
+    "type": "number"
+   }
+  },
+  "required": [
+   "observer",
+   "target"
+  ],
+  "type": "object"
+ },
+ "name": "elevation_check_line_of_sight",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "verdict",
+     "distance_m",
+     "observer",
+     "target",
+     "obstructed_samples",
+     "earth_model",
+     "sample_interval_m",
+     "samples",
+     "samples_with_data",
+     "missing_samples",
+     "datasets_used",
+     "source_mode",
+     "attribution"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "attribution": {
+    "description": "Sources to credit for the returned values, one line per dataset that answered.",
+    "type": "string"
+   },
+   "datasets_used": {
+    "additionalProperties": false,
+    "description": "Number of values each dataset answered.",
+    "properties": {
+     "mapzen": {
+      "description": "Values answered by Mapzen terrain tiles via Open Topo Data.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "srtm30m": {
+      "description": "Values answered by SRTM via Open Topo Data.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "usgs_3dep": {
+      "description": "Values answered by USGS 3DEP.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "usgs_3dep",
+     "srtm30m",
+     "mapzen"
+    ],
+    "type": "object"
+   },
+   "distance_m": {
+    "description": "Great-circle distance from observer to target, meters.",
+    "type": "number"
+   },
+   "earth_model": {
+    "description": "The earth model applied.",
+    "enum": [
+     "flat",
+     "geometric",
+     "optical",
+     "radio"
+    ],
+    "type": "string"
+   },
+   "effective_earth_radius_m": {
+    "description": "Earth radius divided by (1 \u2212 refraction coefficient), meters. Absent for the flat model.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `same_endpoints`: Observer and target are under 1 m apart. `sightline_too_long`: Observer and target are more than 1,000 km apart. `endpoint_no_data`: The observer's or target's own sample has no data, so its sightline height is unknown. `usgs_unavailable`: USGS 3DEP failed: a server error, rate limit, network error, or timeout that outlasted the retries (retryable), or a client error or unexpected status that retrying cannot fix (not retryable). `opentopodata_unavailable`: Open Topo Data failed: a server error, network error, timeout, or unreadable response that outlasted the retries (retryable), or an unexpected status that retrying cannot fix (not retryable). `opentopodata_rate_limited`: Open Topo Data kept answering HTTP 429 through the retries, or asked for a wait over 8 s. `opentopodata_daily_limit`: Only on the public Open Topo Data instance: this server has sent it 1,000 requests in the trailing 24 hours, so no request was sent. `opentopodata_config_rejected`: The Open Topo Data instance answered 401, 403, or 404, a redirect from a self-hosted instance, a 400 naming a dataset it lacks or a location limit below 100, or a 200 naming a dataset this server did not request. `sampling_deadline_exceeded`: The call's 45 s sampling budget ran out (a retry deadline, or a wait in either provider's request queue), or the USGS 3DEP lookups other calls had queued, plus this call's, would not drain within the calls' budgets, so it sent none and data.retryAfter gives the seconds until the queued lookups drain. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "same_endpoints",
+         "sightline_too_long",
+         "endpoint_no_data",
+         "usgs_unavailable",
+         "opentopodata_unavailable",
+         "opentopodata_rate_limited",
+         "opentopodata_daily_limit",
+         "opentopodata_config_rejected",
+         "sampling_deadline_exceeded"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "first_obstruction": {
+    "additionalProperties": false,
+    "description": "The obstructing sample nearest the observer; present only when the verdict is blocked. Fields as on limiting_point.",
+    "properties": {
+     "clearance_m": {
+      "description": "Clearance.",
+      "type": "number"
+     },
+     "curvature_bulge_m": {
+      "description": "Curvature bulge.",
+      "type": "number"
+     },
+     "dataset": {
+      "description": "Answering dataset.",
+      "enum": [
+       "usgs_3dep",
+       "srtm30m",
+       "mapzen"
+      ],
+      "type": "string"
+     },
+     "distance_from_observer_m": {
+      "description": "Distance from the observer.",
+      "type": "number"
+     },
+     "lat": {
+      "description": "Latitude.",
+      "type": "number"
+     },
+     "lon": {
+      "description": "Longitude.",
+      "type": "number"
+     },
+     "resolution_m": {
+      "description": "Raster resolution.",
+      "type": "number"
+     },
+     "sightline_elevation_m": {
+      "description": "Sightline elevation.",
+      "type": "number"
+     },
+     "surface_elevation_m": {
+      "description": "Surface elevation.",
+      "type": "number"
+     },
+     "terrain_elevation_m": {
+      "description": "Terrain elevation.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "lat",
+     "lon",
+     "distance_from_observer_m",
+     "terrain_elevation_m",
+     "surface_elevation_m",
+     "curvature_bulge_m",
+     "sightline_elevation_m",
+     "clearance_m",
+     "dataset"
+    ],
+    "type": "object"
+   },
+   "fresnel": {
+    "additionalProperties": false,
+    "description": "First Fresnel zone clearance; present only when frequency_mhz is set. Zone radius = \u221a(\u03bb\u00b7d\u2081\u00b7d\u2082/D) m, with \u03bb = 299.792458 / frequency_mhz, d\u2081 and d\u2082 the distances to each end, and D the line length.",
+    "properties": {
+     "frequency_mhz": {
+      "description": "Frequency evaluated.",
+      "type": "number"
+     },
+     "limiting_point": {
+      "additionalProperties": false,
+      "description": "The sample with the smallest ratio (first on ties), often not limiting_point; absent with min_clearance_ratio. Fields as on limiting_point, plus the zone radius there.",
+      "properties": {
+       "clearance_m": {
+        "description": "Clearance.",
+        "type": "number"
+       },
+       "curvature_bulge_m": {
+        "description": "Curvature bulge.",
+        "type": "number"
+       },
+       "dataset": {
+        "description": "Answering dataset.",
+        "enum": [
+         "usgs_3dep",
+         "srtm30m",
+         "mapzen"
+        ],
+        "type": "string"
+       },
+       "distance_from_observer_m": {
+        "description": "Distance from the observer.",
+        "type": "number"
+       },
+       "fresnel_radius_m": {
+        "description": "Zone radius.",
+        "type": "number"
+       },
+       "lat": {
+        "description": "Latitude.",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude.",
+        "type": "number"
+       },
+       "resolution_m": {
+        "description": "Raster resolution.",
+        "type": "number"
+       },
+       "sightline_elevation_m": {
+        "description": "Sightline elevation.",
+        "type": "number"
+       },
+       "surface_elevation_m": {
+        "description": "Surface elevation.",
+        "type": "number"
+       },
+       "terrain_elevation_m": {
+        "description": "Terrain elevation.",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon",
+       "distance_from_observer_m",
+       "terrain_elevation_m",
+       "surface_elevation_m",
+       "curvature_bulge_m",
+       "sightline_elevation_m",
+       "clearance_m",
+       "dataset",
+       "fresnel_radius_m"
+      ],
+      "type": "object"
+     },
+     "min_clearance_ratio": {
+      "description": "Smallest clearance_m / zone radius over samples between the endpoints. Absent when none of them has data.",
+      "type": "number"
+     },
+     "verdict": {
+      "description": "sufficient when every sample between the endpoints has data and clears at least 0.6 of the zone radius; insufficient when any sample with data clears less, terrain blocking the line included; indeterminate when samples without data leave it unconfirmed.",
+      "enum": [
+       "sufficient",
+       "insufficient",
+       "indeterminate"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "frequency_mhz",
+     "verdict"
+    ],
+    "type": "object"
+   },
+   "limiting_point": {
+    "additionalProperties": false,
+    "description": "The sample between the endpoints with the smallest clearance (first on ties); absent when none of them has data. Units, surface, and resolution_m as on observer, with terrain in place of its ground; bulge is the rise of the curved surface above the straight observer-target chord (0 for flat); clearance = sightline \u2212 (surface + bulge), and 0 or below means blocked.",
+    "properties": {
+     "clearance_m": {
+      "description": "Clearance.",
+      "type": "number"
+     },
+     "curvature_bulge_m": {
+      "description": "Curvature bulge.",
+      "type": "number"
+     },
+     "dataset": {
+      "description": "Answering dataset.",
+      "enum": [
+       "usgs_3dep",
+       "srtm30m",
+       "mapzen"
+      ],
+      "type": "string"
+     },
+     "distance_from_observer_m": {
+      "description": "Distance from the observer.",
+      "type": "number"
+     },
+     "lat": {
+      "description": "Latitude.",
+      "type": "number"
+     },
+     "lon": {
+      "description": "Longitude.",
+      "type": "number"
+     },
+     "resolution_m": {
+      "description": "Raster resolution.",
+      "type": "number"
+     },
+     "sightline_elevation_m": {
+      "description": "Sightline elevation.",
+      "type": "number"
+     },
+     "surface_elevation_m": {
+      "description": "Surface elevation.",
+      "type": "number"
+     },
+     "terrain_elevation_m": {
+      "description": "Terrain elevation.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "lat",
+     "lon",
+     "distance_from_observer_m",
+     "terrain_elevation_m",
+     "surface_elevation_m",
+     "curvature_bulge_m",
+     "sightline_elevation_m",
+     "clearance_m",
+     "dataset"
+    ],
+    "type": "object"
+   },
+   "min_clearance_ft": {
+    "description": "Smallest clearance in international feet. Absent with min_clearance_m.",
+    "type": "number"
+   },
+   "min_clearance_m": {
+    "description": "Smallest clearance over samples between the endpoints, meters (negative means terrain above the sightline). Absent when none of them has data.",
+    "type": "number"
+   },
+   "missing_samples": {
+    "description": "Samples no queried dataset answered.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "notice": {
+    "description": "Guidance on unconfirmed sightlines, thin clearance margins, a clear line short of 60% first Fresnel zone clearance, lines crossing the USGS 3DEP coverage edge, samples over open water or below water_surface_m, and USGS 3DEP values below 0 m.",
+    "type": "string"
+   },
+   "observer": {
+    "additionalProperties": false,
+    "description": "The observer's end of the sightline, in decimal degrees and meters. Ground elevation is as the dataset reports it; surface is the higher of the ground and water_surface_m when set, otherwise the ground, or 0 where a Mapzen value below 0 marks open water; sightline = surface + height. resolution_m is absent for mapzen.",
+    "properties": {
+     "dataset": {
+      "description": "Answering dataset.",
+      "enum": [
+       "usgs_3dep",
+       "srtm30m",
+       "mapzen"
+      ],
+      "type": "string"
+     },
+     "ground_elevation_m": {
+      "description": "Ground elevation.",
+      "type": "number"
+     },
+     "height_above_ground_m": {
+      "description": "Requested height above the surface.",
+      "type": "number"
+     },
+     "lat": {
+      "description": "Latitude.",
+      "type": "number"
+     },
+     "lon": {
+      "description": "Longitude.",
+      "type": "number"
+     },
+     "resolution_m": {
+      "description": "Raster resolution.",
+      "type": "number"
+     },
+     "sightline_elevation_m": {
+      "description": "Sightline elevation.",
+      "type": "number"
+     },
+     "surface_elevation_m": {
+      "description": "Surface elevation.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "lat",
+     "lon",
+     "ground_elevation_m",
+     "surface_elevation_m",
+     "height_above_ground_m",
+     "sightline_elevation_m",
+     "dataset"
+    ],
+    "type": "object"
+   },
+   "obstructed_samples": {
+    "description": "Samples between the endpoints with clearance 0 or below.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "refraction_coefficient": {
+    "description": "Refraction coefficient applied. Absent for the flat model.",
+    "type": "number"
+   },
+   "sample_interval_m": {
+    "description": "Distance between consecutive samples, meters.",
+    "type": "number"
+   },
+   "samples": {
+    "description": "Samples along the line, endpoints included.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "samples_with_data": {
+    "description": "Samples with an elevation, endpoints included.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "source_mode": {
+    "description": "The source the call used (auto unless the caller chose one).",
+    "enum": [
+     "auto",
+     "usgs_3dep",
+     "opentopodata"
+    ],
+    "type": "string"
+   },
+   "target": {
+    "additionalProperties": false,
+    "description": "The target's end of the sightline; fields as on observer.",
+    "properties": {
+     "dataset": {
+      "description": "Answering dataset.",
+      "enum": [
+       "usgs_3dep",
+       "srtm30m",
+       "mapzen"
+      ],
+      "type": "string"
+     },
+     "ground_elevation_m": {
+      "description": "Ground elevation.",
+      "type": "number"
+     },
+     "height_above_ground_m": {
+      "description": "Requested height above the surface.",
+      "type": "number"
+     },
+     "lat": {
+      "description": "Latitude.",
+      "type": "number"
+     },
+     "lon": {
+      "description": "Longitude.",
+      "type": "number"
+     },
+     "resolution_m": {
+      "description": "Raster resolution.",
+      "type": "number"
+     },
+     "sightline_elevation_m": {
+      "description": "Sightline elevation.",
+      "type": "number"
+     },
+     "surface_elevation_m": {
+      "description": "Surface elevation.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "lat",
+     "lon",
+     "ground_elevation_m",
+     "surface_elevation_m",
+     "height_above_ground_m",
+     "sightline_elevation_m",
+     "dataset"
+    ],
+    "type": "object"
+   },
+   "verdict": {
+    "description": "blocked when terrain reaches the sightline at any sample; clear when every sample between the endpoints has data and lies below it; indeterminate when samples without data leave the line unconfirmed.",
+    "enum": [
+     "clear",
+     "blocked",
+     "indeterminate"
+    ],
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Check Terrain Line of Sight"
+}

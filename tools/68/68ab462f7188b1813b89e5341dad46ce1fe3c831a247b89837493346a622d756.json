@@ -1,0 +1,857 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "permission": "none",
+  "readOnlyHint": true
+ },
+ "description": "Ranked public leaderboard \u2014 the same data human traders see. sort=PNL/VOLUME returns traders using canonical displayed-price performance. Legacy sort=RETURN aliases PNL; return percentage fields are null and no return is calculated. Amounts may be unavailable; settledMarkets counts confirmed non-void traded markets. RISK_ADJ_PNL is a legacy adapter; sort=CREATOR_QUALITY returns creators (track record + tier); sort=VOTERS returns voters. Every row carries the wallet and its black-box reputation tier.",
+ "inputSchema": {
+  "$defs": {
+   "LeaderboardPeriod": {
+    "description": "Window the board covers: `7d` is THIS CALENDAR WEEK (from Monday 00:00 UTC) and `30d` THIS CALENDAR MONTH \u2014 calendar windows since 2026-09-18, not trailing days; the keys are kept because this enum never renames a member. `all` is the life score, `season` the 2026 championship's fixed window, `season7d`/`season30d` the same calendar week and month clamped inside it. OPEN enum: windows are added over time \u2014 tolerate unseen values.",
+    "enum": [
+     "7d",
+     "30d",
+     "all",
+     "season",
+     "season7d",
+     "season30d"
+    ],
+    "type": "string",
+    "x-extensible-enum": true
+   },
+   "LeaderboardSort": {
+    "description": "Board ordering. `MARKETS`, `SETTLED` and `WINS` rank the table's count columns; `WIN_RATE` ranks Wins \u00f7 Settled among accounts with enough settled markets; `ROI` ranks P&L \u00f7 PM spent over closed calls (sold out, or held to a resolved winner) among accounts with enough of them. Ties on any board are ordered by Volume, then P&L. OPEN enum: boards are added over time \u2014 tolerate unseen values.",
+    "enum": [
+     "PNL",
+     "VOLUME",
+     "RISK_ADJ_PNL",
+     "CREATOR_QUALITY",
+     "VOTERS",
+     "RETURN",
+     "MARKETS",
+     "SETTLED",
+     "WINS",
+     "WIN_RATE",
+     "ROI"
+    ],
+    "type": "string",
+    "x-extensible-enum": true
+   },
+   "ServedCollateralSymbol": {
+    "description": "Collateral symbol as this venue currently offers it. Read the live set from GET /markets/config or GET /discover/contracts rather than assuming the set in this document.",
+    "maxLength": 16,
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "properties": {
+   "category": {
+    "default": "ALL",
+    "description": "Market category for PNL and VOLUME.",
+    "enum": [
+     "ALL",
+     "CRYPTO",
+     "SPORTS",
+     "POLITICS",
+     "ELECTIONS",
+     "FINANCE",
+     "TECH",
+     "WORLD",
+     "ECONOMY",
+     "CULTURE",
+     "WEATHER",
+     "SCIENCE_HEALTH",
+     "AI",
+     "GAMING",
+     "BUSINESS",
+     "FASHION",
+     "MOVIES_TV",
+     "MUSIC",
+     "SHOPPING",
+     "BEAUTY",
+     "TRAVEL",
+     "CLIMATE",
+     "DAILY_LIFE",
+     "LOCAL",
+     "SOCIAL",
+     "FUN",
+     "OTHER"
+    ],
+    "type": "string"
+   },
+   "collateral": {
+    "$ref": "#/$defs/ServedCollateralSymbol",
+    "description": "Collateral symbol whose board to read. Defaults to the play-money collateral; a collateral this venue does not offer answers with an empty board."
+   },
+   "generation": {
+    "description": "Pin the generation from the preceding leaderboard response.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   },
+   "limit": {
+    "default": 50,
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "offset": {
+    "default": 0,
+    "maximum": 200,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "period": {
+    "$ref": "#/$defs/LeaderboardPeriod",
+    "default": "7d",
+    "description": "7d, 30d, all (the life score), season \u2014 the 2026 championship window \u2014 or season7d / season30d, the rolling 7- and 30-day windows clamped inside the championship."
+   },
+   "sort": {
+    "$ref": "#/$defs/LeaderboardSort",
+    "default": "PNL",
+    "description": "PNL, VOLUME (traders). Legacy RETURN aliases PNL. RISK_ADJ_PNL is legacy. CREATOR_QUALITY (creators), or VOTERS."
+   }
+  },
+  "type": "object"
+ },
+ "name": "problee_list_leaderboard",
+ "outputSchema": {
+  "$defs": {
+   "EvmAddress": {
+    "pattern": "^0x[a-fA-F0-9]{40}$",
+    "type": "string"
+   },
+   "ExactTradingRatio": {
+    "additionalProperties": false,
+    "properties": {
+     "denominator": {
+      "maxLength": 4096,
+      "pattern": "^[1-9][0-9]*$",
+      "type": "string"
+     },
+     "numerator": {
+      "maxLength": 4096,
+      "pattern": "^-?(0|[1-9][0-9]*)$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "numerator",
+     "denominator"
+    ],
+    "type": "object"
+   },
+   "LeaderboardMeasurement": {
+    "additionalProperties": false,
+    "properties": {
+     "asOf": {
+      "format": "date-time",
+      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+      "type": "string"
+     },
+     "availableAccounts": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "category": {
+      "type": "string"
+     },
+     "evaluatedAccounts": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "generation": {
+      "type": "string"
+     },
+     "markMethod": {
+      "const": "displayed-market-price-v1",
+      "type": "string"
+     },
+     "methodVersion": {
+      "const": "committed-pm-trading-account-v2",
+      "type": "string"
+     },
+     "period": {
+      "additionalProperties": false,
+      "properties": {
+       "end": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+        "type": "string"
+       },
+       "kind": {
+        "$ref": "#/$defs/LeaderboardPeriod"
+       },
+       "start": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+        "type": "string"
+       }
+      },
+      "required": [
+       "kind",
+       "start",
+       "end"
+      ],
+      "type": "object"
+     },
+     "scope": {
+      "enum": [
+       "committed_trading_account",
+       "committed_trading_category"
+      ],
+      "type": "string"
+     },
+     "sort": {
+      "enum": [
+       "PNL",
+       "VOLUME",
+       "RISK_ADJ_PNL",
+       "CREATOR_QUALITY",
+       "VOTERS",
+       "RETURN",
+       "MARKETS",
+       "SETTLED",
+       "WINS",
+       "WIN_RATE",
+       "ROI"
+      ],
+      "type": "string",
+      "x-extensible-enum": true
+     },
+     "stale": {
+      "type": "boolean"
+     },
+     "unit": {
+      "additionalProperties": false,
+      "properties": {
+       "cashValue": {
+        "const": false,
+        "type": "boolean"
+       },
+       "decimals": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+       },
+       "symbol": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "symbol",
+       "decimals",
+       "cashValue"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "methodVersion",
+     "markMethod",
+     "unit",
+     "scope",
+     "category",
+     "sort",
+     "generation",
+     "period",
+     "asOf",
+     "stale",
+     "evaluatedAccounts",
+     "availableAccounts"
+    ],
+    "type": "object"
+   },
+   "LeaderboardPeriod": {
+    "enum": [
+     "7d",
+     "30d",
+     "all",
+     "season",
+     "season7d",
+     "season30d"
+    ],
+    "type": "string",
+    "x-extensible-enum": true
+   },
+   "LeaderboardResponse": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "hasMore": {
+        "type": "boolean"
+       },
+       "measurement": {
+        "$ref": "#/$defs/LeaderboardMeasurement"
+       },
+       "minClosedCallsToRank": {
+        "maximum": 9007199254740991,
+        "minimum": 1,
+        "type": "integer"
+       },
+       "minSettledMarketsToRank": {
+        "maximum": 9007199254740991,
+        "minimum": 1,
+        "type": "integer"
+       },
+       "period": {
+        "$ref": "#/$defs/LeaderboardPeriod"
+       },
+       "total": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+       },
+       "traders": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "address": {
+           "$ref": "#/$defs/EvmAddress"
+          },
+          "closedCalls": {
+           "anyOf": [
+            {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "identity": {
+           "anyOf": [
+            {
+             "$ref": "#/$defs/WalletIdentity"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "losses": {
+           "anyOf": [
+            {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "marketsTraded": {
+           "maximum": 9007199254740991,
+           "minimum": 0,
+           "type": "integer"
+          },
+          "performance": {
+           "additionalProperties": false,
+           "properties": {
+            "pnl": {
+             "anyOf": [
+              {
+               "$ref": "#/$defs/ExactTradingRatio"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "return": {
+             "anyOf": [
+              {
+               "$ref": "#/$defs/ExactTradingRatio"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "volumeWei": {
+             "anyOf": [
+              {
+               "maxLength": 256,
+               "pattern": "^-?(0|[1-9][0-9]*)$",
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            }
+           },
+           "required": [
+            "pnl",
+            "return",
+            "volumeWei"
+           ],
+           "type": "object"
+          },
+          "pnl": {
+           "anyOf": [
+            {
+             "pattern": "^-?\\d+(?:\\.\\d+)?$",
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "rank": {
+           "exclusiveMinimum": 0,
+           "maximum": 9007199254740991,
+           "type": "integer"
+          },
+          "reputationTier": {
+           "anyOf": [
+            {
+             "$ref": "#/$defs/ReputationTier"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "returnPercent": {
+           "anyOf": [
+            {
+             "pattern": "^-?\\d+(?:\\.\\d+)?$",
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "riskAdjustedPnl": {
+           "pattern": "^-?\\d+(?:\\.\\d+)?$",
+           "type": "string"
+          },
+          "roiPercent": {
+           "anyOf": [
+            {
+             "pattern": "^-?\\d+(?:\\.\\d+)?$",
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "settledMarkets": {
+           "anyOf": [
+            {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "sourceRevision": {
+           "type": "string"
+          },
+          "unavailableReasons": {
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "volume": {
+           "anyOf": [
+            {
+             "pattern": "^\\d+(?:\\.\\d+)?$",
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "winRate": {
+           "anyOf": [
+            {
+             "maximum": 100,
+             "minimum": 0,
+             "type": "number"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "wins": {
+           "anyOf": [
+            {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          }
+         },
+         "required": [
+          "rank",
+          "address",
+          "pnl",
+          "volume",
+          "marketsTraded",
+          "wins",
+          "losses",
+          "winRate",
+          "reputationTier"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "updatedAt": {
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      },
+      "required": [
+       "updatedAt",
+       "total",
+       "hasMore",
+       "traders"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "creators": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "address": {
+           "$ref": "#/$defs/EvmAddress"
+          },
+          "cleanResolutionRate": {
+           "anyOf": [
+            {
+             "maximum": 100,
+             "minimum": 0,
+             "type": "number"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "identity": {
+           "anyOf": [
+            {
+             "$ref": "#/$defs/WalletIdentity"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "marketsCreated": {
+           "maximum": 9007199254740991,
+           "minimum": 0,
+           "type": "integer"
+          },
+          "marketsOverturned": {
+           "maximum": 9007199254740991,
+           "minimum": 0,
+           "type": "integer"
+          },
+          "marketsVoided": {
+           "maximum": 9007199254740991,
+           "minimum": 0,
+           "type": "integer"
+          },
+          "rank": {
+           "exclusiveMinimum": 0,
+           "maximum": 9007199254740991,
+           "type": "integer"
+          },
+          "reputationTier": {
+           "anyOf": [
+            {
+             "$ref": "#/$defs/ReputationTier"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "resolvedCount": {
+           "maximum": 9007199254740991,
+           "minimum": 0,
+           "type": "integer"
+          },
+          "tier": {
+           "$ref": "#/$defs/ReputationTier"
+          },
+          "upheldRate": {
+           "anyOf": [
+            {
+             "maximum": 100,
+             "minimum": 0,
+             "type": "number"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          }
+         },
+         "required": [
+          "rank",
+          "address",
+          "tier",
+          "marketsCreated",
+          "resolvedCount",
+          "marketsVoided",
+          "marketsOverturned",
+          "upheldRate",
+          "cleanResolutionRate",
+          "reputationTier"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "generatedAt": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+        "type": "string"
+       },
+       "hasMore": {
+        "type": "boolean"
+       },
+       "measurement": {
+        "$ref": "#/$defs/LeaderboardMeasurement"
+       },
+       "period": {
+        "$ref": "#/$defs/LeaderboardPeriod"
+       },
+       "total": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+       },
+       "updatedAt": {
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      },
+      "required": [
+       "updatedAt",
+       "total",
+       "hasMore",
+       "creators"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "generatedAt": {
+        "format": "date-time",
+        "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+        "type": "string"
+       },
+       "hasMore": {
+        "type": "boolean"
+       },
+       "measurement": {
+        "$ref": "#/$defs/LeaderboardMeasurement"
+       },
+       "period": {
+        "$ref": "#/$defs/LeaderboardPeriod"
+       },
+       "total": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+       },
+       "updatedAt": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "voters": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "accuracy": {
+           "anyOf": [
+            {
+             "maximum": 100,
+             "minimum": 0,
+             "type": "number"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "address": {
+           "$ref": "#/$defs/EvmAddress"
+          },
+          "correctCount": {
+           "anyOf": [
+            {
+             "maximum": 9007199254740991,
+             "minimum": 0,
+             "type": "integer"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "identity": {
+           "anyOf": [
+            {
+             "$ref": "#/$defs/WalletIdentity"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "rank": {
+           "exclusiveMinimum": 0,
+           "maximum": 9007199254740991,
+           "type": "integer"
+          },
+          "reputationTier": {
+           "anyOf": [
+            {
+             "$ref": "#/$defs/ReputationTier"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "rewardTotal": {
+           "type": "string"
+          },
+          "voteCount": {
+           "maximum": 9007199254740991,
+           "minimum": 0,
+           "type": "integer"
+          }
+         },
+         "required": [
+          "rank",
+          "address",
+          "rewardTotal",
+          "voteCount",
+          "correctCount",
+          "accuracy",
+          "reputationTier"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "updatedAt",
+       "total",
+       "hasMore",
+       "voters"
+      ],
+      "type": "object"
+     }
+    ]
+   },
+   "ReputationTier": {
+    "enum": [
+     "banned",
+     "new",
+     "established",
+     "trusted",
+     "expert",
+     "legend"
+    ],
+    "type": "string"
+   },
+   "WalletIdentity": {
+    "additionalProperties": false,
+    "properties": {
+     "actorType": {
+      "anyOf": [
+       {
+        "enum": [
+         "human",
+         "agent",
+         "venue"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "avatarUrl": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "displayName": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "generatedName": {
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "displayName",
+     "generatedName",
+     "avatarUrl"
+    ],
+    "type": "object"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "result": {
+    "$ref": "#/$defs/LeaderboardResponse"
+   }
+  },
+  "required": [
+   "result"
+  ],
+  "type": "object"
+ },
+ "title": "Public trader, creator, and voter leaderboard"
+}

@@ -1,0 +1,128 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "title": "WalletConnect (EVM + Solana)"
+ },
+ "description": "Pair and use an EVM and/or Solana wallet via WalletConnect v2. **No authentication required** \u2014 available to every user (including unauthenticated/anonymous). Non-custodial: the server never holds keys and the user approves every signature/transaction in their own wallet. **Pairing proposal** is controlled per request via optional `pairingTarget` on `action: \"connect\"`: `eth` (default, eip155 only), `solana`, or `both`. Many mobile wallets fail if eip155 and solana are proposed together; prefer `eth` or `solana` unless the user needs both in one session. **Every call must include `action`** (string).\n\n**Connect QR (critical for assistants):** On `action: \"connect\"`, successful responses return **(1) an MCP `type: \"image\"` PNG** of the pairing QR (render this even if the host has no `resources/read`), then **(2) optional `resource_link`**, then **(3) text JSON** with `pairingQrResourceUri`, `presentation`, `nextSteps`, `url`, optional `mobileDeeplinks`, etc. **Desktop / scan UX:** show the image content block first. **Mobile / no-camera:** follow `nextSteps`; when present, `mobileDeeplinks` lists HTTPS `url` (+ `nativeUrl`) per curated WalletConnect wallet. Raw `wc:` (`url` / `walletConnectLinkForUser`) remains fallback. **Avoid calling `connect` again while pairing is still in progress** unless the user must reset \u2014 pass `walletSessionToken` to resume the same pairing after MCP session rotation.\n\n**Flow:** (1) `connect` as above. (2) User approves in the wallet (EVM only, Solana only, or both). (3) `status` until `kind` is `session` \u2014 optional `evm` / `solana` blocks; `address`/`chains` remain legacy EVM when EVM is connected. (4) `sign` / `send_transaction` or swap `execute=true` (swap execute remains EVM unless extended elsewhere). `kind: \"pending\"` on `status` is success \u2014 keep polling.\n\n**Actions (exact JSON shapes):**\n- **connect** \u2014 `{ \"action\": \"connect\", \"sessionTtlDays\"?: number, \"pairingTarget\"?: \"eth\" | \"solana\" | \"both\", \"walletSessionToken\"?: string }`\n- **status** \u2014 `{ \"action\": \"status\" }` (anonymous sessions include a `terms` block showing the connected wallet's 1inch Terms-of-Use acceptance state)\n- **sign** \u2014 EVM: `personal_sign` / `eth_signTypedData_v4`. Solana: `solana_signMessage` / `solana_signTransaction` (see schema fields `params`, `chainId`, `solanaChainId`).\n- **send_transaction** \u2014 EVM: `tx.to`, numeric `tx.chainId`. Solana: string `tx.chainId` (`solana:...`), `tx.serializedTransaction` (base64). Set `tx.namespace` when both WC namespaces are active and the payload is ambiguous.\n- **accept_terms** \u2014 `{ \"action\": \"accept_terms\", \"address\"?: \"0x\u2026\" }`. When the user has not accepted yet: **write to the user** that they must sign the 1inch Terms of Use in their wallet (one-time, gas-free personal_sign), **then immediately call this action in the same turn** so the signature prompt appears. You trigger the signing \u2014 do not only instruct them to sign. Required before anonymous aqua create_position / close_position. Idempotent \u2014 already-accepted wallets return immediately without a prompt.\n- **disconnect** \u2014 `{ \"action\": \"disconnect\" }`\n\n**Anonymous durable sessions:** for unauthenticated callers, pairing `connect` (QR) returns a `walletSessionToken`. Store it and pass it back as `walletSessionToken` on later `status` / `sign` / `send_transaction` / `accept_terms` / `disconnect` **and** on a later `connect` to resume the same pairing after MCP session rotation. A tokenless `connect` that resumes an already-approved session does **not** mint a new token \u2014 within this MCP session, `status` / `sign` still work via `anon:{sessionId}`. Authenticated callers ignore the token (their WC session is scoped by org/app).\n\nNon-custodial relay; no authentication required.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "action": {
+    "description": "Required. One of: connect (start pairing), status (session info), sign (EVM + Solana WC methods), send_transaction (EVM eth_sendTransaction or Solana solana_signAndSendTransaction), accept_terms (write to the user that they must sign the 1inch Terms of Use, then immediately call this action in the same turn to trigger the wallet prompt \u2014 required once per wallet before anonymous writes), disconnect. Only include the fields that apply to this action.",
+    "enum": [
+     "connect",
+     "status",
+     "sign",
+     "send_transaction",
+     "accept_terms",
+     "disconnect"
+    ],
+    "type": "string"
+   },
+   "address": {
+    "description": "Optional; only with action \"accept_terms\". EVM address that signs the Terms-of-Use acceptance; must belong to the active WalletConnect session. When omitted, the session's primary EVM account is used.",
+    "pattern": "^0x[a-fA-F0-9]{40}$",
+    "type": "string"
+   },
+   "chainId": {
+    "description": "Optional; only when action is \"sign\" and method is personal_sign (EVM numeric chain id). Must be omitted for eth_signTypedData_v4, Solana methods, send_transaction, and other actions.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "method": {
+    "description": "Required when action is \"sign\". EVM: personal_sign | eth_signTypedData_v4. Solana: solana_signMessage | solana_signTransaction. Omit for connect, status, send_transaction, disconnect.",
+    "enum": [
+     "personal_sign",
+     "eth_signTypedData_v4",
+     "solana_signMessage",
+     "solana_signTransaction"
+    ],
+    "type": "string"
+   },
+   "pairingTarget": {
+    "description": "Optional; only with action \"connect\". What to advertise in the WalletConnect proposal: \"eth\" (eip155 only, default), \"solana\" only, or \"both\". Many mobile wallets fail if eip155 and solana are proposed together; use \"solana\" or \"both\" only when needed.",
+    "enum": [
+     "eth",
+     "solana",
+     "both"
+    ],
+    "type": "string"
+   },
+   "params": {
+    "description": "Required when action is \"sign\": exactly two items. personal_sign: [message, 0xAddress]. eth_signTypedData_v4: [0xSigner, typedDataJsonString]. solana_signMessage: [message, pubkey]. solana_signTransaction: [base64Tx, pubkey].",
+    "items": {},
+    "type": "array"
+   },
+   "sessionTtlDays": {
+    "description": "Optional; only with action \"connect\". How long to persist this WalletConnect client state in Redis (days). Server clamps to [1, WALLETCONNECT_SESSION_TTL_DAYS_MAX] and defaults when omitted.",
+    "maximum": 9007199254740991,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "solanaChainId": {
+    "description": "Optional; only when action is \"sign\" and method is solana_signMessage or solana_signTransaction. CAIP-2 string (e.g. solana:5eykt4\u2026). When omitted, the server uses the first Solana chain on the session.",
+    "type": "string"
+   },
+   "tx": {
+    "description": "Required when action is \"send_transaction\". EVM or Solana shape \u2014 see `tx` field descriptions. Omit for connect, status, sign, disconnect.",
+    "properties": {
+     "chainId": {
+      "anyOf": [
+       {
+        "exclusiveMinimum": 0,
+        "maximum": 9007199254740991,
+        "type": "integer"
+       },
+       {
+        "minLength": 1,
+        "type": "string"
+       }
+      ]
+     },
+     "data": {
+      "maxLength": 1000000,
+      "pattern": "^0x([a-fA-F0-9]{2})*$",
+      "type": "string"
+     },
+     "from": {
+      "type": "string"
+     },
+     "namespace": {
+      "enum": [
+       "eip155",
+       "solana"
+      ],
+      "type": "string"
+     },
+     "serializedTransaction": {
+      "maxLength": 32768,
+      "type": "string"
+     },
+     "to": {
+      "type": "string"
+     },
+     "value": {
+      "pattern": "^(0x)?[0-9a-fA-F]{1,64}$",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "walletSessionToken": {
+    "description": "Optional durable token for ANONYMOUS (unauthenticated) sessions. `connect` mints a fresh token; store it and pass it back on status/sign/send_transaction/accept_terms/disconnect (and on a later `connect` to resume the same pairing) so the wallet session survives MCP session rotation. Treat it as a secret. Ignored for authenticated (OAuth) callers.",
+    "maxLength": 200,
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "action"
+  ],
+  "type": "object"
+ },
+ "name": "walletconnect"
+}

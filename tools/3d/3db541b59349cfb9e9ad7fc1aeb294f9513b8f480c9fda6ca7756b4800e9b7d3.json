@@ -1,0 +1,166 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Fund Holdings (SEC Form N-PORT)"
+ },
+ "description": "Returns per-security holdings from SEC Form N-PORT primary documents \u2014 one row per investment-or-security line in a mutual fund / ETF / closed-end fund's monthly portfolio report. Use this when the user asks about: which funds hold a specific stock or bond, a fund's complete portfolio composition, fund-level derivative exposure (swaps, options, futures), repo positions, concentration by issuer, or to compose 'which ETFs added X this month' / 'which funds shorted Y' style queries.  Source: parsed from each NportFiling's primary_doc.xml. asset_cat is SEC's own code, and these twenty are the only ones the data holds \u2014 EC common equity; EP preferred equity; DBT debt, Treasuries included; LON loan; ABS-MBS asset-backed, mortgage; ABS-O asset-backed, other; ABS-CBDO asset-backed, CDO/CBO; ABS-APCP asset-backed commercial paper; SN structured note; STIV short-term investment vehicle, money-market and liquidity pools; RA repurchase and reverse-repurchase agreement; RE real estate; COMM commodity; DE equity derivative; DIR interest-rate derivative; DFE foreign-exchange derivative; DCR credit derivative; DCO commodity derivative; DO other derivative; OTHER other. Anything else is refused with this list.  Useful filter combos:   ticker='NVDA'                       all funds holding NVDA   cusip='037833100'                   AAPL by CUSIP (more reliable than ticker for N-PORT)   is_derivative=true, filer_name='BlackRock'                                        the BlackRock FAMILY's derivative book \u2014 a name is a                                        substring, and this one spans five trusts. filer_cik                                        picks one of them.   derivative_type='swap'              every swap position in the universe   asset_cat='RA'                      repo and reverse-repo exposure   payoff_profile='Short'              short positions only   min_pct_of_portfolio=5              concentrated positions (>=5% of NAV)   filer_cik='0000884394'              one fund's complete portfolio   counterparty='Morgan Stanley'       every fund's exposure to one dealer   min_notional=10000000               derivatives with >=$10M of EXPOSURE                                        (not fair value \u2014 see min_notional)   derivative_type='swap', expiration_until='2026-12-31'                                        swaps rolling off before year-end   maturity_since='2026-01-01', maturity_until='2026-12-31'                                        bonds maturing this year  Each holding ties to its parent NportFiling via filing_id. Read the parent for fund metadata (file_date, file_number, amendment flag); read the holding for security-level detail. is_derivative + derivative_type distinguish structured derivative rows from straight equity/debt holdings.  DERIVATIVE + DEBT TERMS are extracted and filterable (2026-08-09). Derivatives carry deriv_notional_amount, deriv_counterparty_name/_lei, deriv_expiration_date, deriv_unrealized_appreciation, and the leg-level detail \u2014 put/call, written/purchased, strike, share count and delta for options; swap flag and upfront payment/receipt for swaps; both currency legs for forwards. Debt rows carry debt_maturity_date, coupon kind, annualized rate, default, arrears and paid-in-kind flags.  USE min_notional, NOT min_value_usd, TO SIZE A DERIVATIVE. Fair value and exposure differ by orders of magnitude: a real interest-rate swap here shows value_usd -49,184 against a notional of 6,795,000. Ranking derivatives by value_usd understates them by ~100x.  BACKFILL IN PROGRESS: these fields are populated on filings re-extracted since 2026-08-09 and are absent (null) on the rest until it completes. A null term on an older filing means not-yet-extracted, NOT absent from the source \u2014 do not read it as 'this swap has no counterparty'. The parent filing's primary_document_url always has the authoritative detail.  COVERAGE: holdings begin with N-PORT filings FILED 2024-06-01. Most filings from then on have holdings rows, but not all: some are still metadata-only in get_nport_filings (not yet extracted \u2014 about 4% as of September 2026). Filings before 2024-06-01 are outside this coverage. For a filing with no holdings here, follow primary_document_url in get_nport_filings. An empty result for a filing means not-extracted, not an empty fund.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "asset_cat": {
+    "description": "SEC's asset-category code, case-insensitive. The data holds exactly these: EC common equity; EP preferred equity; DBT debt, Treasuries included; LON loan; ABS-MBS asset-backed, mortgage; ABS-O asset-backed, other; ABS-CBDO asset-backed, CDO/CBO; ABS-APCP asset-backed commercial paper; SN structured note; STIV short-term investment vehicle, money-market and liquidity pools; RA repurchase and reverse-repurchase agreement; RE real estate; COMM commodity; DE equity derivative; DIR interest-rate derivative; DFE foreign-exchange derivative; DCR credit derivative; DCO commodity derivative; DO other derivative; OTHER other. An unknown code is refused with the list rather than searched for \u2014 Treasuries are DBT, money-market positions are STIV, and a repurchase agreement is RA.",
+    "enum": [
+     "EC",
+     "EP",
+     "DBT",
+     "LON",
+     "ABS-MBS",
+     "ABS-O",
+     "ABS-CBDO",
+     "ABS-APCP",
+     "SN",
+     "STIV",
+     "RA",
+     "RE",
+     "COMM",
+     "DE",
+     "DIR",
+     "DFE",
+     "DCR",
+     "DCO",
+     "DO",
+     "OTHER"
+    ],
+    "type": "string"
+   },
+   "counterparty": {
+    "description": "Case-insensitive substring against the derivative counterparty (the dealer or clearing house on the other side). Answers exposure-concentration questions \u2014 e.g. counterparty='Morgan Stanley' across funds. Cleared derivatives name an exchange or clearing house (CME, Chicago Board of Trade) rather than a bank. Note the source writes the literal 'N/A' where no counterparty is disclosed, and that value is preserved rather than nulled.",
+    "type": "string"
+   },
+   "country": {
+    "description": "ISO-2 country code of the holding (e.g., 'US', 'GB', 'JP').",
+    "type": "string"
+   },
+   "cusip": {
+    "description": "Exact 9-character CUSIP. Most reliable identifier for equity and debt holdings in N-PORT.",
+    "type": "string"
+   },
+   "derivative_type": {
+    "description": "Structural derivative type, derived from which `<derivativeInfo>` child element is present in the filing.",
+    "enum": [
+     "future",
+     "forward",
+     "swap",
+     "option",
+     "warrant",
+     "swaption",
+     "other"
+    ],
+    "type": "string"
+   },
+   "expiration_since": {
+    "description": "ISO date (YYYY-MM-DD). Only derivatives expiring on or after this date. Normalized across contract types \u2014 futures expDate, option expDt, swap terminationDt, forward settlementDt all populate it, and deriv_category tells you which. Rows whose value is not a real date (the source writes 'N/A') are excluded from the window rather than compared.",
+    "type": "string"
+   },
+   "expiration_until": {
+    "description": "ISO date (YYYY-MM-DD). Only derivatives expiring on or before this date. Pair with expiration_since for a rollover window.",
+    "type": "string"
+   },
+   "filer_cik": {
+    "description": "Fund trust CIK (10-digit, padded with leading zeros). Returns the trust's holdings across all reporting months. This is the precise form of filer_name: one trust, rather than a name substring that can match a whole family of them.",
+    "type": "string"
+   },
+   "filer_name": {
+    "description": "Case-insensitive substring against fund trust name (e.g., 'iShares', 'Vanguard', 'SPDR'). \u26a0 A name substring matches a FAMILY, not a fund: 'BlackRock' matches at least five separate trusts (0000893818, 0000844779, 0001761055, 0000355916, 0001804196) and 300,000+ holdings rows, so it asks for the whole family's book and reads far more than a caller usually wants. filer_cik is the precise form \u2014 one trust. To narrow a name search instead, add period_ending.",
+    "type": "string"
+   },
+   "filing_id": {
+    "description": "EDGAR accession number \u2014 returns all holdings from one specific N-PORT filing (one fund-month).",
+    "type": "string"
+   },
+   "is_derivative": {
+    "description": "True returns only derivative rows (asset_cat starting with 'D'). False returns only non-derivative rows. Omit for both.",
+    "type": "boolean"
+   },
+   "isin": {
+    "description": "Exact ISIN if filer included it in the identifiers block.",
+    "type": "string"
+   },
+   "limit": {
+    "description": "Maximum records to return. Default 50, max 500.",
+    "maximum": 500,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "maturity_since": {
+    "description": "ISO date (YYYY-MM-DD). Only debt holdings maturing on or after this date. Applies to the 33.6% of rows that are bond-like; pair with maturity_until to build a maturity ladder.",
+    "type": "string"
+   },
+   "maturity_until": {
+    "description": "ISO date (YYYY-MM-DD). Only debt holdings maturing on or before this date.",
+    "type": "string"
+   },
+   "min_notional": {
+    "description": "Minimum derivative NOTIONAL amount in the contract's currency. This is EXPOSURE, not fair value, and for derivatives the two differ by orders of magnitude \u2014 a real interest-rate swap in this dataset carries value_usd -49,184 against a notional of 6,795,000. Use min_notional (not min_value_usd) to ask 'how big is the bet'; use min_value_usd to ask 'how much is the position worth today'. Rows with no notional are excluded by any positive floor: options carry share count + strike instead and legitimately have none.",
+    "type": "number"
+   },
+   "min_pct_of_portfolio": {
+    "description": "Minimum percentage of fund net assets (0-100 scale). Use to focus on concentrated positions.",
+    "type": "number"
+   },
+   "min_value_usd": {
+    "description": "Minimum fair value in USD. Use to focus on large positions only.",
+    "type": "number"
+   },
+   "name": {
+    "description": "Case-insensitive substring against the holding issuer name (e.g., 'Apple', 'Treasury', 'Goldman Sachs').",
+    "type": "string"
+   },
+   "payoff_profile": {
+    "description": "Filter to long or short positions per N-PORT payoffProfile field.",
+    "enum": [
+     "Long",
+     "Short"
+    ],
+    "type": "string"
+   },
+   "period_ending": {
+    "description": "Reporting month-end (YYYY-MM-DD). Restricts results to one reporting period.",
+    "type": "string"
+   },
+   "since": {
+    "description": "ISO date (YYYY-MM-DD). Only holdings whose period_ending >= this date.",
+    "type": "string"
+   },
+   "sort_by": {
+    "description": "Default: value_usd.",
+    "enum": [
+     "value_usd",
+     "pct_of_portfolio",
+     "period_ending"
+    ],
+    "type": "string"
+   },
+   "sort_order": {
+    "description": "Default: desc (largest / most recent first).",
+    "enum": [
+     "desc",
+     "asc"
+    ],
+    "type": "string"
+   },
+   "ticker": {
+    "description": "Exact ticker symbol if filer included it in the identifiers block (less common than CUSIP).",
+    "type": "string"
+   },
+   "until": {
+    "description": "ISO date (YYYY-MM-DD). Only holdings whose period_ending <= this date.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "get_fund_holdings"
+}

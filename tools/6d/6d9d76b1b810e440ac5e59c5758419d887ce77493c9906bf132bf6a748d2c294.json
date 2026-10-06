@@ -1,0 +1,286 @@
+{
+ "annotations": {
+  "destructiveHint": true
+ },
+ "description": "Search and replace inside a single note, literally or by regex. Replacements run in array order, each over the previous one's output, and cover the note body only unless `scope` says otherwise \u2014 the YAML frontmatter block is left byte-identical by default, because a prose edit that lands in a scalar can silently invalidate the whole block. Use for edits that don't fit `obsidian_patch_note`'s structural targets \u2014 e.g., body-wide find-and-replace. Prefer `obsidian_manage_frontmatter` for typed edits to a single property.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "replacements": {
+    "description": "Replacements to apply in array order over the evolving content.",
+    "items": {
+     "description": "A single search/replace operation.",
+     "properties": {
+      "caseSensitive": {
+       "default": true,
+       "description": "When false, match case-insensitively.",
+       "type": "boolean"
+      },
+      "flexibleWhitespace": {
+       "default": false,
+       "description": "Treat any run of whitespace in `search` as matching any whitespace in the body. Literal mode only \u2014 has no effect when `useRegex: true` (express it directly with `\\s+`).",
+       "type": "boolean"
+      },
+      "replace": {
+       "description": "Replacement text. Empty string deletes matches.",
+       "type": "string"
+      },
+      "replaceAll": {
+       "default": true,
+       "description": "When false, only the first match is replaced.",
+       "type": "boolean"
+      },
+      "search": {
+       "description": "Substring or regex pattern to match.",
+       "minLength": 1,
+       "type": "string"
+      },
+      "useRegex": {
+       "default": false,
+       "description": "Treat `search` as an ECMAScript regex pattern (\u22641024 chars, no nested quantifiers like `(a+)+` \u2014 catastrophic-backtracking guard).",
+       "type": "boolean"
+      },
+      "wholeWord": {
+       "default": false,
+       "description": "Match only at word boundaries. Applies in both literal and regex modes \u2014 the search pattern is wrapped with `\\b\u2026\\b`.",
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "search",
+      "replace"
+     ],
+     "type": "object"
+    },
+    "minItems": 1,
+    "type": "array"
+   },
+   "scope": {
+    "default": "body",
+    "description": "Which part of the note the replacements run over. `body` leaves the YAML frontmatter block byte-identical. `frontmatter` and `both` also rewrite the YAML between the `---` fences \u2014 never the fences themselves \u2014 and re-parse it afterwards, failing the whole call and writing nothing if the result no longer parses. That check catches YAML that breaks, not YAML that still parses while meaning something else: a replacement that renames a key or strips a scalar's quotes passes it.",
+    "enum": [
+     "body",
+     "frontmatter",
+     "both"
+    ],
+    "type": "string"
+   },
+   "target": {
+    "description": "Where the note lives.",
+    "oneOf": [
+     {
+      "description": "Address a note by its vault-relative path.",
+      "properties": {
+       "path": {
+        "description": "Vault-relative path including extension, e.g. \"Projects/foo.md\".",
+        "minLength": 1,
+        "type": "string"
+       },
+       "type": {
+        "const": "path",
+        "description": "Address by vault-relative path.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "path"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "Address whichever file is currently active in the Obsidian UI.",
+      "properties": {
+       "type": {
+        "const": "active",
+        "description": "Address the file currently open in Obsidian.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "Address a periodic note (current or dated).",
+      "properties": {
+       "date": {
+        "description": "ISO date YYYY-MM-DD. Omit for the current period.",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+       },
+       "period": {
+        "description": "Periodic note granularity.",
+        "enum": [
+         "daily",
+         "weekly",
+         "monthly",
+         "quarterly",
+         "yearly"
+        ],
+        "type": "string"
+       },
+       "type": {
+        "const": "periodic",
+        "description": "Address a daily/weekly/monthly/etc. periodic note.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "period"
+      ],
+      "type": "object"
+     }
+    ]
+   }
+  },
+  "required": [
+   "target",
+   "replacements"
+  ],
+  "type": "object"
+ },
+ "name": "obsidian_replace_in_note",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "path",
+     "totalReplacements",
+     "perReplacement",
+     "previousSizeInBytes",
+     "currentSizeInBytes"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "currentSizeInBytes": {
+    "description": "Byte size of the note after replacements were applied. Equals `previousSizeInBytes` when no matches were found and no write was issued.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `path_forbidden`: The target path is outside OBSIDIAN_WRITE_PATHS, or OBSIDIAN_READ_ONLY=true denies all writes. The pre-read also requires the path to be readable. `regex_invalid`: A `useRegex: true` replacement supplied a `search` pattern that is not a valid ECMAScript regex. `regex_unsafe`: A `useRegex: true` replacement supplied a `search` pattern that is well-formed but exceeds the 1024-character limit or contains nested quantifiers known to cause catastrophic backtracking against the note body. `frontmatter_invalid`: A `scope` of \"frontmatter\" or \"both\" produced YAML that no longer parses as a mapping of properties, or that parses but cannot be re-emitted (an alias whose anchor the replacement removed). Nothing is written \u2014 the note keeps its original bytes. The check reads the rewritten YAML only, so a replacement that renames a key or changes a scalar's type while still parsing is not caught by it. `note_missing`: The vault path does not resolve to an existing note. `no_active_file`: Target was `active` but no file is currently open in Obsidian. `periodic_unsupported`: Target was `periodic` and this vault runs Local REST API v5.0.2 or later without the companion periodic-notes extension, so the `/periodic/` routes are not served at all. `periodic_not_found`: Target was `periodic`, the `/periodic/` routes are served on this vault, and no note exists for the requested period. `periodic_disabled`: Target was `periodic` but the requested period is not enabled in Obsidian's Periodic Notes plugin settings. `path_is_directory`: The supplied path names a folder rather than a note file. `path_traversal`: The path contains a `.` or `..` segment, which is rejected to prevent vault escape. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "path_forbidden",
+         "regex_invalid",
+         "regex_unsafe",
+         "frontmatter_invalid",
+         "note_missing",
+         "no_active_file",
+         "periodic_unsupported",
+         "periodic_not_found",
+         "periodic_disabled",
+         "path_is_directory",
+         "path_traversal"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "path": {
+    "description": "Resolved vault-relative path of the note.",
+    "type": "string"
+   },
+   "perReplacement": {
+    "description": "Per-entry counts in the order replacements were applied.",
+    "items": {
+     "additionalProperties": false,
+     "description": "Counts for one replacement entry.",
+     "properties": {
+      "bodyCount": {
+       "description": "Matches replaced in the note body.",
+       "type": "number"
+      },
+      "count": {
+       "description": "Number of matches replaced for this entry, across every scope it ran in.",
+       "type": "number"
+      },
+      "frontmatterCount": {
+       "description": "Matches replaced inside the YAML frontmatter block. Always 0 under the default `body` scope.",
+       "type": "number"
+      },
+      "search": {
+       "description": "The search term/pattern that ran.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "search",
+      "count",
+      "bodyCount",
+      "frontmatterCount"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "previousSizeInBytes": {
+    "description": "Byte size of the note before replacements were applied.",
+    "type": "number"
+   },
+   "totalReplacements": {
+    "description": "Total number of substitutions applied across all replacement entries.",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Obsidian Replace In Note"
+}

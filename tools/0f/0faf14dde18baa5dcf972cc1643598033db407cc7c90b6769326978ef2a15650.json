@@ -1,0 +1,259 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Match patient demographics and conditions to eligible recruiting clinical trials. Provide age, sex, conditions, and location to find studies with matching eligibility criteria, contact information, and recruiting locations. Results are re-ranked so studies whose own condition matches a requested condition surface above tangential matches from ClinicalTrials.gov's fuzzy condition search. Each candidate returns only the sites matching the requested location (capped by locationLimit), not the study's full registered site list \u2014 a large trial can register hundreds of sites worldwide. When none of a candidate's matched sites is recruiting, one recruiting site is added so an enrollable site is never hidden behind a closer closed one: the one nearest the matched sites by their published coordinates, in the requested country whenever a site there recruits, carrying distanceMi, or the first in match order when coordinates are missing. Fetch a study's complete record with clinicaltrials_get_study_record.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "age": {
+    "description": "Patient age in years.",
+    "maximum": 120,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "conditions": {
+    "description": "Medical conditions or diagnoses, e.g. [\"Type 2 Diabetes\", \"Hypertension\"]. Each entry is matched as a condition (multi-word entries match as a phrase); multiple entries are combined with OR, so studies for any listed condition qualify. Returned studies are re-ranked so those whose own condition list names a requested condition rank above tangential matches the upstream fuzzy search pulls in via the MeSH umbrella.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "healthyVolunteer": {
+    "default": false,
+    "description": "Whether the patient is a healthy volunteer. When true, only studies accepting healthy volunteers are queried.",
+    "type": "boolean"
+   },
+   "location": {
+    "additionalProperties": false,
+    "description": "Patient location as `{ country (required), state?, city? }`. Country is required; state/city narrow the match. For radius-based geographic search, use clinicaltrials_search_studies with geoFilter.",
+    "properties": {
+     "city": {
+      "description": "City name.",
+      "type": "string"
+     },
+     "country": {
+      "description": "Country name. E.g., \"United States\".",
+      "type": "string"
+     },
+     "state": {
+      "description": "State or province.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "country"
+    ],
+    "type": "object"
+   },
+   "locationLimit": {
+    "default": 10,
+    "description": "Cap on the sites returned per candidate. Each candidate keeps only the sites matching the requested location at the narrowest level that matched (city, else state, else country), capped at this many; the rest of the study's registered sites are omitted. The cap governs those matched sites \u2014 when none of them is recruiting, one recruiting site is added on top of it (the nearest to any matched site, measured before this cap, when coordinates allow \u2014 in the requested country whenever a site there recruits), so a candidate can carry one site more than this. Raise it to see more nearby sites, or fetch the complete site list with clinicaltrials_get_study_record. Each candidate reports totalLocations / matchedLocations / locationsTruncated / nearestRecruitingSiteAdded in locationSummary only when the bound actually dropped sites.",
+    "maximum": 500,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "maxResults": {
+    "default": 10,
+    "description": "Maximum results to return.",
+    "maximum": 50,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "recruitingOnly": {
+    "default": true,
+    "description": "Only include actively recruiting studies.",
+    "type": "boolean"
+   },
+   "sex": {
+    "description": "Patient's biological sex. Use 'ALL' to include studies regardless of sex restrictions.",
+    "enum": [
+     "FEMALE",
+     "MALE",
+     "ALL"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "age",
+   "sex",
+   "conditions",
+   "location"
+  ],
+  "type": "object"
+ },
+ "name": "clinicaltrials_find_eligible",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "studies",
+     "searchCriteria",
+     "funnel"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `blank_value`: A parameter was supplied with a blank, whitespace-only, or empty-list value. `rate_limited`: ClinicalTrials.gov returned 429 after retry budget exhausted. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "blank_value",
+         "rate_limited"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "funnel": {
+    "additionalProperties": false,
+    "description": "Match counts at each filter stage. Shows where the funnel collapsed \u2014 e.g., conditionMatched=298 but demographicsMatched=2 means age/sex/status are the constraint.",
+    "properties": {
+     "conditionMatched": {
+      "description": "Studies matching the condition query alone (broadest stage).",
+      "type": "number"
+     },
+     "demographicsMatched": {
+      "description": "Studies matching the full filter set (condition + location + age/sex + status). Equal to totalCount.",
+      "type": "number"
+     },
+     "locationMatched": {
+      "description": "Studies matching condition + location \u2014 diagnoses geographic narrowing.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "conditionMatched",
+     "locationMatched",
+     "demographicsMatched"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Recovery guidance when no studies matched \u2014 identifies which filter stage collapsed and suggests how to broaden. Absent when results are returned.",
+    "type": "string"
+   },
+   "searchCriteria": {
+    "additionalProperties": false,
+    "description": "Normalized search criteria applied to this eligibility query, including the exact upstream query strings needed to reproduce the full match set via clinicaltrials_search_studies (replay with includeUnknownEnrollment=true, which find_eligible always sets).",
+    "properties": {
+     "advancedFilter": {
+      "description": "The exact AREA[] advancedFilter (age range, plus sex/healthy-volunteer when constrained) sent upstream. Pass as advancedFilter to clinicaltrials_search_studies to reproduce the demographic constraints.",
+      "type": "string"
+     },
+     "age": {
+      "description": "Patient age.",
+      "type": "number"
+     },
+     "conditionQuery": {
+      "description": "The exact queryCond string sent upstream (multi-word terms quoted, OR-joined). Pass as conditionQuery to clinicaltrials_search_studies to reproduce the full match set beyond the maxResults cap.",
+      "type": "string"
+     },
+     "conditions": {
+      "description": "Conditions searched.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "location": {
+      "description": "The exact queryLocn string sent upstream (city/state/country, multi-word components quoted, AND-joined). Pass as locationQuery to clinicaltrials_search_studies to reproduce the location filter beyond the maxResults cap.",
+      "type": "string"
+     },
+     "sex": {
+      "description": "Patient sex.",
+      "type": "string"
+     },
+     "statusFilter": {
+      "description": "The status filter applied ([\"RECRUITING\"] when recruitingOnly). Pass as statusFilter to clinicaltrials_search_studies. Absent when recruitingOnly is false.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "conditions",
+     "location",
+     "age",
+     "sex"
+    ],
+    "type": "object"
+   },
+   "studies": {
+    "description": "Matching studies with eligibility and location fields. Each candidate's protocolSection.contactsLocationsModule.locations is BOUNDED to the sites matching the requested location (capped at locationLimit) plus, when none of those is recruiting, one added recruiting site \u2014 not the study's full registered site list. The added site is the one nearest any matched site by published coordinates, taken from the requested country whenever a site there recruits, and carries distanceMi (miles to that nearest matched site); when the matched or recruiting sites publish no coordinates it is the first in match order and carries no distanceMi. A candidate whose sites were bounded also carries a top-level locationSummary object \u2014 { totalLocations, matchedLocations, locationsTruncated, nearestRecruitingSiteAdded?, retrieveFullStudyWith } \u2014 absent when nothing was dropped; nearestRecruitingSiteAdded is present only when that extra site was added (the key keeps its name in the match-order fallback). Fetch a study's complete record and site list with clinicaltrials_get_study_record.",
+    "items": {
+     "additionalProperties": {},
+     "propertyNames": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "totalCount": {
+    "description": "Total matching studies from the API.",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Clinicaltrials Find Eligible"
+}

@@ -1,0 +1,227 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "readOnlyHint": true
+ },
+ "description": "List notes and subdirectories at a vault path. Defaults to the vault root when `path` is omitted. Tune recursion with `depth`, or filter the walk with `extension` / `nameRegex`. Capped at 1000 entries per call \u2014 when reached, walking stops and `excluded` is set; narrow `path` or tighten filters to surface the rest.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "depth": {
+    "default": 2,
+    "description": "How many directory levels to walk. `1` = target directory only (no recursion); `2` = target plus its immediate children \u2014 a structural overview; bump higher to drill in. Prefer narrowing `path` to a subdirectory over a high `depth` on the vault root.",
+    "maximum": 20,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "extension": {
+    "description": "Only include files matching this extension, with or without leading dot. Applies to files only \u2014 directories are returned regardless.",
+    "type": "string"
+   },
+   "nameRegex": {
+    "description": "Optional ECMAScript regex (no flags, \u2264256 chars, no nested quantifiers like `(a+)+`) applied to entry names. Matches both files and directories; directories that fail the regex are skipped without recursing into them.",
+    "type": "string"
+   },
+   "path": {
+    "description": "Vault-relative directory path. Omit for the vault root.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "obsidian_list_notes",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "path",
+     "entries",
+     "totals",
+     "appliedFilters"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "appliedFilters": {
+    "additionalProperties": false,
+    "description": "Active filters and the recursion depth that produced this listing.",
+    "properties": {
+     "depth": {
+      "description": "Recursion depth used to produce this listing.",
+      "type": "number"
+     },
+     "extension": {
+      "description": "Extension filter applied, normalized with leading dot.",
+      "type": "string"
+     },
+     "nameRegex": {
+      "description": "nameRegex filter applied to this listing.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "depth"
+    ],
+    "type": "object"
+   },
+   "entries": {
+    "description": "Entries in DFS order \u2014 top-level first, then descendants.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A single entry in the listing.",
+     "properties": {
+      "path": {
+       "description": "Vault-relative path of this entry.",
+       "type": "string"
+      },
+      "truncated": {
+       "description": "On directory entries: true when the depth limit prevented walking into this directory. Pass a deeper `depth` to expand.",
+       "type": "boolean"
+      },
+      "type": {
+       "description": "Whether this entry is a regular file or a subdirectory.",
+       "enum": [
+        "file",
+        "directory"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "path",
+      "type"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `regex_invalid`: The supplied `nameRegex` is not a valid ECMAScript regex. `regex_unsafe`: The supplied `nameRegex` is well-formed but exceeds the 256-character limit or contains nested quantifiers known to cause catastrophic backtracking. `path_forbidden`: The supplied `path` is outside OBSIDIAN_READ_PATHS and is not a folder on the way to it. The vault root and the folders leading to a scoped path always list, showing only in-scope entries. `directory_missing`: No listable directory at the supplied `path` \u2014 either it does not exist, or it exists and currently holds no files. Sub-directories that disappear mid-walk are silently skipped, so only the root path surfaces this error. `path_is_file`: The supplied `path` names a file rather than a directory. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "regex_invalid",
+         "regex_unsafe",
+         "path_forbidden",
+         "directory_missing",
+         "path_is_file"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "excluded": {
+    "additionalProperties": false,
+    "description": "Present when the walk was truncated by the global entry cap.",
+    "properties": {
+     "cap": {
+      "description": "The cap value at which walking stopped.",
+      "type": "number"
+     },
+     "hint": {
+      "description": "Suggestion for narrowing the listing.",
+      "type": "string"
+     },
+     "reason": {
+      "const": "entry_cap",
+      "description": "`entry_cap`: walk stopped because the per-call entry limit was reached.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "reason",
+     "cap",
+     "hint"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Guidance when the walk was truncated by the entry cap, or the listed directory is empty.",
+    "type": "string"
+   },
+   "path": {
+    "description": "The directory listed (empty string for vault root).",
+    "type": "string"
+   },
+   "totals": {
+    "additionalProperties": false,
+    "description": "Counts across the returned tree.",
+    "properties": {
+     "directories": {
+      "description": "Number of directory entries.",
+      "type": "number"
+     },
+     "entries": {
+      "description": "Total entries returned across all walked depths.",
+      "type": "number"
+     },
+     "files": {
+      "description": "Number of file entries.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "entries",
+     "files",
+     "directories"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Obsidian List Notes"
+}

@@ -1,0 +1,440 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Trace many figures to filings"
+ },
+ "description": "Returns, for up to 50 fact_ids in one call, each figure's source filing or a not-found code and message, plus counts of requested, found and missing. Use this when the user wants a list of cited figures checked against SEC filings. Duplicate pairs are checked once, and a lookup by concept rather than fact_id comes from `verify_fact_lineage`.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "facts": {
+    "description": "1 to 50 pairs of ticker and fact_id to check, e.g. [{\"ticker\": \"AAPL\", \"fact_id\": \"8a02707ced0d5a157ed2cdb28df035e52250daf4d0699952f7fc5420e1ce3afa\"}].",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "fact_id": {
+       "description": "64-character lowercase hex fact_id as an earlier result gave it, e.g. 8a02707ced0d5a157ed2cdb28df035e52250daf4d0699952f7fc5420e1ce3afa.",
+       "pattern": "^[0-9a-f]{64}$",
+       "type": "string"
+      },
+      "ticker": {
+       "description": "Ticker symbol or SEC CIK of the company that reported the fact, e.g. AAPL.",
+       "maxLength": 10,
+       "minLength": 1,
+       "pattern": "^[A-Za-z0-9.\\-]+$",
+       "type": "string"
+      }
+     },
+     "required": [
+      "ticker",
+      "fact_id"
+     ],
+     "type": "object"
+    },
+    "maxItems": 50,
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "required": [
+   "facts"
+  ],
+  "type": "object"
+ },
+ "name": "verify_facts",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "_meta": {
+    "additionalProperties": false,
+    "description": "Provenance envelope \u2014 data lineage for every MCP response",
+    "properties": {
+     "as_of_date": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "data_quality": {
+      "additionalProperties": false,
+      "description": "Server-side invariants run on this response",
+      "properties": {
+       "notes": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "validation_failed": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "detail": {
+           "type": "string"
+          },
+          "rule": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "rule",
+          "detail"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "validation_passed": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "validation_passed",
+       "validation_failed",
+       "notes"
+      ],
+      "type": "object"
+     },
+     "fundamentals_as_of": {
+      "description": "Use THIS \u2014 not `last_updated` \u2014 when telling a user how current the cross-sectional fundamentals are. The snapshot is republished on every weekday price refresh while the statements are carried forward unchanged, so `last_updated` can be far more recent than the numbers it sits next to. It is a floor for a single filer, not a ceiling: a filer with a live partition receives its filing, facts and ratios intraday (minutes after EDGAR dissemination), so an entity-scoped read may carry a filing newer than this; cross-sectional ranks (factor scores, earnings signals) refresh with the weekly bulk export.",
+      "type": "string"
+     },
+     "pit_safe": {
+      "description": "true iff a zero-look-ahead point-in-time cut was applied to every returned figure",
+      "type": "boolean"
+     },
+     "price_as_of": {
+      "description": "ISO timestamp when the price surfaces were last refreshed.",
+      "type": "string"
+     },
+     "result_count": {
+      "type": "integer"
+     },
+     "source": {
+      "const": "SEC EDGAR",
+      "type": "string"
+     },
+     "ticker": {
+      "type": "string"
+     },
+     "truncation": {
+      "additionalProperties": false,
+      "description": "Set when fewer rows were returned than requested \u2014 explains why and points to a remedy",
+      "properties": {
+       "plan_limit": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "reason": {
+        "enum": [
+         "PLAN_LIMIT",
+         "DATA_NOT_AVAILABLE",
+         "FISCAL_YEAR_BOUNDARY_FILTER",
+         "OTHER"
+        ],
+        "type": "string"
+       },
+       "requested": {
+        "minimum": 0,
+        "type": "integer"
+       },
+       "returned": {
+        "minimum": 0,
+        "type": "integer"
+       }
+      },
+      "required": [
+       "requested",
+       "returned",
+       "reason"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "source",
+     "pit_safe"
+    ],
+    "type": "object"
+   },
+   "results": {
+    "description": "Check `found` before reading `lineage`.",
+    "items": {
+     "anyOf": [
+      {
+       "additionalProperties": false,
+       "properties": {
+        "fact_id": {
+         "description": "The fact_id this item asked about \u2014 echoed so a caller can key results without relying on order.",
+         "type": "string"
+        },
+        "found": {
+         "const": true,
+         "description": "The fact resolved; `lineage` carries its full provenance chain.",
+         "type": "boolean"
+        },
+        "lineage": {
+         "additionalProperties": false,
+         "description": "Full provenance for one fact. Identity: fact_id, entity_id, ticker, company_name, concept, standard_concept, accession_id. Filing: source_url, inline_viewer_url, document_url, filing_date, form_type, accepted_at. Duration: period_start, period_end, period_span_days, and period_type (instant | quarterly | half_year | nine_month | annual | duration) so a 3-month stub is never mistaken for the 12-month figure \u2014 a 10-K tags BOTH at the same period_end.",
+         "properties": {
+          "accepted_at": {
+           "description": "SEC acceptance timestamp (ISO 8601) \u2014 the moment this number became public. The PIT cut is taken on this.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "accession_id": {
+           "description": "SEC accession number of the filing that reported this value, e.g. 0000320193-24-000123.",
+           "type": "string"
+          },
+          "company_name": {
+           "description": "Registrant name as filed.",
+           "type": "string"
+          },
+          "concept": {
+           "description": "Raw XBRL tag as the filer used it, e.g. us-gaap:Revenues.",
+           "type": "string"
+          },
+          "derived_quarterly_display": {
+           "description": "`derived_quarterly_value` rendered the same way. Null when that value is null.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "derived_quarterly_value": {
+           "description": "The three-month figure derived from a year-to-date filing. A Q2/Q3 10-Q states YTD, so THIS and `numeric_value` are different numbers for the same fact \u2014 a verifier comparing against whichever one it happened to read passes wrong numbers half the time. Null when no derivation applies.",
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "display": {
+           "description": "Null when `numeric_value` is null.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "document_url": {
+           "description": "Direct link to the rendered primary document (not the index page). Null when the primary document is unknown.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "entity_id": {
+           "description": "Zero-padded 10-digit SEC CIK of the filer. (The key is named entity_id \u2014 there is no `cik` field.)",
+           "type": "string"
+          },
+          "fact_id": {
+           "description": "Deterministic fact identity: SHA-256(entity_id|accession_id|concept|period_end|unit), 64-char lowercase hex.",
+           "type": "string"
+          },
+          "filing_date": {
+           "description": "Filing date (YYYY-MM-DD). Null when the filing join found nothing.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "form_type": {
+           "description": "Filing form type \u2014 10-K, 10-Q, 8-K, 20-F. Null when the filing join found nothing.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "inline_viewer_url": {
+           "description": "SEC Inline-XBRL viewer opened on the rendered primary document \u2014 the strongest one-click verification link. Null when the filing is not Inline-XBRL or the primary document is unknown.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "numeric_value": {
+           "description": "The raw reported value. Null when the fact carries no numeric value.",
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "period_end": {
+           "description": "End of the reporting window (YYYY-MM-DD), or the instant date for balance-sheet facts.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "period_span_days": {
+           "description": "Length of the reporting window in days. Null when not derivable.",
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "period_start": {
+           "description": "Start of the reporting window (YYYY-MM-DD). Null for instant (balance-sheet) facts.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "period_type": {
+           "description": "Coarse duration class: instant | quarterly | half_year | nine_month | annual | duration. A single 10-K tags BOTH a 12-month figure and a 3-month Q4 stub at the same period_end, so this is what stops a stub being quoted as the annual number.",
+           "type": "string"
+          },
+          "source_url": {
+           "description": "SEC filing-index URL. Null when the filing join found nothing.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "standard_concept": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "ticker": {
+           "description": "Uppercase ticker the lookup resolved through.",
+           "type": "string"
+          },
+          "unit": {
+           "description": "Unit of the value, e.g. USD, USD/share, shares.",
+           "type": "string"
+          }
+         },
+         "required": [
+          "fact_id",
+          "entity_id",
+          "ticker",
+          "company_name",
+          "accession_id",
+          "concept",
+          "standard_concept",
+          "unit",
+          "numeric_value",
+          "derived_quarterly_value",
+          "display",
+          "derived_quarterly_display",
+          "accepted_at",
+          "source_url",
+          "inline_viewer_url",
+          "document_url",
+          "filing_date",
+          "form_type",
+          "period_start",
+          "period_end",
+          "period_span_days",
+          "period_type"
+         ],
+         "type": "object"
+        },
+        "ticker": {
+         "description": "The uppercased ticker (or CIK) this item asked about.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "ticker",
+        "fact_id",
+        "found",
+        "lineage"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "error": {
+         "additionalProperties": false,
+         "description": "Why this item could not be resolved.",
+         "properties": {
+          "code": {
+           "type": "string"
+          },
+          "message": {
+           "description": "Human-readable detail for this item.",
+           "type": "string"
+          }
+         },
+         "required": [
+          "code",
+          "message"
+         ],
+         "type": "object"
+        },
+        "fact_id": {
+         "description": "The fact_id this item asked about.",
+         "type": "string"
+        },
+        "found": {
+         "const": false,
+         "description": "This one fact could not be resolved. The other items in the call are unaffected \u2014 read them.",
+         "type": "boolean"
+        },
+        "ticker": {
+         "description": "The uppercased ticker (or CIK) this item asked about.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "ticker",
+        "fact_id",
+        "found",
+        "error"
+       ],
+       "type": "object"
+      }
+     ]
+    },
+    "type": "array"
+   },
+   "summary": {
+    "additionalProperties": false,
+    "description": "Counts over `results`. Quote `missing` when reporting coverage \u2014 it is the number of figures you could NOT tie to a filing.",
+    "properties": {
+     "found": {
+      "description": "How many resolved to a filing.",
+      "type": "number"
+     },
+     "missing": {
+      "description": "How many did not. Always `requested - found`; a non-zero value is a fact about your citations, not about this call.",
+      "type": "number"
+     },
+     "requested": {
+      "description": "Unique (ticker, fact_id) pairs resolved \u2014 duplicates in your input are collapsed.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "requested",
+     "found",
+     "missing"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "_meta",
+   "results",
+   "summary"
+  ],
+  "type": "object"
+ },
+ "title": "Trace many figures to filings"
+}

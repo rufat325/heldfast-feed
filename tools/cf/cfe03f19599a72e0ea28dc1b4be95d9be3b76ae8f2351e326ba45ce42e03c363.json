@@ -1,0 +1,913 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Check a dependency list against EchelonGraph's advisory corpus, one verdict per component. For container images and Kubernetes pods, the input is an SBOM of each image, or its purls. Pass purls (package URLs, up to 2,000 distinct) or sbom (a CycloneDX JSON or SPDX JSON document, up to 5,000,000 characters). The purls are read from the document by this MCP server and only they are sent to the API, in POST bodies of at most 200 purls each, never in a URL; the document itself is not sent on. Run from npm, this server is on your machine; over the hosted endpoint (mcp.echelongraph.io) it is EchelonGraph's, and the document is the request body, accepted up to 6 MiB. data.results holds one row per component sent, in order, with verdict (affected, not_affected, undetermined or not_assessed), not_assessed_reason, cve_ids, matched_package and matched_via (a deb or apk purl's upstream qualifier is matched as its source package); each match carries fixed_in, its advisory interval's fixed bound, or null with fixed_in_reason. data.summary counts the verdicts. not_affected is the only clean verdict. not_assessed is no verdict, as for a deb, apk or rpm purl without a distro qualifier naming its release (EchelonGraph does not guess one); neither it nor undetermined is clean, and the note counts both. The API allows 1,200 components a minute per caller; on a 429 the tool waits out Retry-After, up to 50 seconds a call, then answers what it has: data.not_sent_purls lists the unsent purls, unchecked and not clean. A list or document with more than 2,000 distinct purls is refused, not truncated. Past 30,000 characters of JSON, the first text block holds data cut to fit, and the note says what the cut leaves out and where to read it (TEXT CUT); data in the structured result always holds it whole. Cut, each row keeps index, purl, verdict, not_assessed_reason and cve_ids at least, and each match its fixed_in while matches are kept; not_affected rows leave the text first, then not_assessed ones, and not_sent_purls keeps its first 10.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "purls": {
+    "description": "package URLs to check, e.g. pkg:npm/lodash@4.17.20 or pkg:deb/debian/openssl@3.0.11-1~deb12u1?distro=debian-12 (up to 2,000 distinct, sent in batches of 200)",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "sbom": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "additionalProperties": {},
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     }
+    ],
+    "description": "a CycloneDX JSON or SPDX JSON document, as JSON text or as an object; its purls are read by this MCP server and only they are sent to the API; over the hosted endpoint (mcp.echelongraph.io) the document is the request body"
+   }
+  },
+  "type": "object"
+ },
+ "name": "check_sbom",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+   {
+    "additionalProperties": false,
+    "properties": {
+     "coverage": {
+      "anyOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "batch_size": {
+          "description": "The most purls one request carries (the API's cap per request).",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "batches": {
+          "description": "Requests the distinct purls make, at batch_size each.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "batches_sent": {
+          "description": "Of those, the ones the API answered.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "components_in_document": {
+          "anyOf": [
+           {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "Components (CycloneDX) or packages (SPDX) in the document; null for a purl list."
+         },
+         "distinct_purls": {
+          "description": "Distinct purls to check: sent plus not_sent.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "duplicates_removed": {
+          "description": "Purls that appeared more than once and were sent once.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "input": {
+          "description": "What was passed: a purl list, a CycloneDX JSON document or an SPDX JSON document.",
+          "enum": [
+           "purls",
+           "cyclonedx",
+           "spdx"
+          ],
+          "type": "string"
+         },
+         "not_assessed": {
+          "anyOf": [
+           {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "Of those sent, the components with no verdict, as the answer counts them."
+         },
+         "not_sent": {
+          "description": "Distinct purls not sent, listed in data.not_sent_purls: not checked, and not clean.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "not_sent_reason": {
+          "anyOf": [
+           {
+            "enum": [
+             "time_budget",
+             "rate_limited",
+             "request_failed"
+            ],
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "Why not_sent is above 0: time_budget (the call's 50 s budget ran out, before a batch or while one was unanswered, which is then cut off; or waiting out the API's Retry-After would pass it), rate_limited (a 429 without Retry-After, or a 429 after 10 waits), request_failed (a batch after the first failed; the note quotes how). null when every purl was sent."
+         },
+         "partial": {
+          "description": "true when not every purl was sent (not_sent above 0) or any batch's summary.partial was true (its time budget ran out first); otherwise the answer's summary.partial.",
+          "type": [
+           "boolean",
+           "null"
+          ]
+         },
+         "rate_limit_waits": {
+          "description": "How many times the API answered 429 and the tool waited its Retry-After before sending the batch again.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "sent": {
+          "description": "Distinct purls sent and answered.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "waited_ms": {
+          "description": "Milliseconds spent in those waits.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "with_purl": {
+          "description": "Of those, the ones carrying a purl.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "without_purl": {
+          "description": "The ones without a purl: not checked, and not clean.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         }
+        },
+        "required": [
+         "input",
+         "components_in_document",
+         "with_purl",
+         "without_purl",
+         "duplicates_removed",
+         "distinct_purls",
+         "batch_size",
+         "batches",
+         "batches_sent",
+         "sent",
+         "not_sent",
+         "not_sent_reason",
+         "rate_limit_waits",
+         "waited_ms",
+         "not_assessed",
+         "partial"
+        ],
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "What the answer covers; null where the answer says nothing about it."
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "answered_at": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "components": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "match_layer": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "not_sent_purls": {
+        "anyOf": [
+         {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "The distinct purls not sent (coverage.not_sent_reason says why): not checked, and not clean. Present only when some were not sent."
+       },
+       "results": {
+        "items": {
+         "additionalProperties": {},
+         "properties": {
+          "advisories_considered": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "assessed": {
+           "description": "Whether the matcher produced a verdict for this component. false is never clean.",
+           "type": [
+            "boolean",
+            "null"
+           ]
+          },
+          "candidates_capped": {
+           "type": [
+            "boolean",
+            "null"
+           ]
+          },
+          "capped": {
+           "type": [
+            "boolean",
+            "null"
+           ]
+          },
+          "code": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "count": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "cve_ids": {
+           "anyOf": [
+            {
+             "items": {
+              "type": "string"
+             },
+             "type": "array"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "ecosystem": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "error": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "index": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "input_kind": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "matched_package": {
+           "description": "The package name the advisories were looked up by (#2836): the purl's own name, or, for a deb or apk purl with an upstream qualifier, the source package it names, which is how Debian and Alpine file advisories.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "matched_version_from": {
+           "description": "Upstream rows: upstream when the qualifier named a version (upstream=name@version) and it was used, purl when the purl's own version was.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "matched_via": {
+           "description": "Which name matched_package is: purl_name (the purl's name), upstream (the purl's upstream qualifier) or coordinates (the component's package).",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "matches": {
+           "anyOf": [
+            {
+             "items": {
+              "additionalProperties": {},
+              "properties": {
+               "cve_id": {
+                "type": [
+                 "string",
+                 "null"
+                ]
+               },
+               "epss_score": {
+                "description": "The CVE's EPSS score (FIRST), as EchelonGraph's record holds it; null when it has none.",
+                "type": [
+                 "number",
+                 "null"
+                ]
+               },
+               "fixed_in": {
+                "description": "The fixed bound of the advisory interval that holds this component's version, always above it. null when that interval records no fix (it ends at last_affected, or has no end) or no interval holds the version, with fixed_in_reason saying which.",
+                "type": [
+                 "string",
+                 "null"
+                ]
+               },
+               "fixed_in_reason": {
+                "description": "Why fixed_in is null; absent when fixed_in is a version.",
+                "type": [
+                 "string",
+                 "null"
+                ]
+               },
+               "interval": {
+                "anyOf": [
+                 {
+                  "additionalProperties": {},
+                  "properties": {
+                   "fixed": {
+                    "type": [
+                     "string",
+                     "null"
+                    ]
+                   },
+                   "introduced": {
+                    "type": [
+                     "string",
+                     "null"
+                    ]
+                   },
+                   "last_affected": {
+                    "type": [
+                     "string",
+                     "null"
+                    ]
+                   }
+                  },
+                  "type": "object"
+                 },
+                 {
+                  "type": "null"
+                 }
+                ],
+                "description": "The advisory interval that holds this component's version (fixed is exclusive, last_affected inclusive); absent when no interval holds it."
+               },
+               "kev_listed": {
+                "description": "Whether the CVE is in CISA's Known Exploited Vulnerabilities catalog, as EchelonGraph's record holds it.",
+                "type": [
+                 "boolean",
+                 "null"
+                ]
+               },
+               "match_reason": {
+                "description": "Why the advisory applies, with the advisory interval the version falls inside: \"[A, B)\" names the fixed version B, \"[A, B]\" the last affected version B. On an upstream row it ends by naming the source package and the purl name.",
+                "type": [
+                 "string",
+                 "null"
+                ]
+               }
+              },
+              "type": "object"
+             },
+             "type": "array"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "not_affected_count": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "not_assessed_reason": {
+           "description": "Why assessed is false: package_not_in_advisory_corpus, no_decidable_advisory, advisory_lookup_failed, candidate_window_truncated, time_budget, distro_release_unknown, purl_type_unsupported, version_missing or invalid_component.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "package": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "purl": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "purl_name": {
+           "description": "Upstream rows: the purl's own (binary) package name, not looked up.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "undetermined": {
+           "anyOf": [
+            {
+             "items": {
+              "additionalProperties": {},
+              "properties": {
+               "cve_id": {
+                "type": [
+                 "string",
+                 "null"
+                ]
+               }
+              },
+              "type": "object"
+             },
+             "type": "array"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "undetermined_count": {
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "verdict": {
+           "description": "affected (count > 0); not_affected (assessed, no match, nothing undetermined: the only clean verdict); undetermined (advisories name the package, at least one could not be decided, none matched: not clean); not_assessed (no verdict: not clean).",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "version": {
+           "type": [
+            "string",
+            "null"
+           ]
+          }
+         },
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "summary": {
+        "additionalProperties": {},
+        "properties": {
+         "affected": {
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "components": {
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "corpus_cache_max_age_ms": {
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "elapsed_ms": {
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "lookups": {
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "not_affected": {
+          "description": "Components with a decided, clean verdict.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "not_assessed": {
+          "description": "Components with no verdict: not clean.",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "not_assessed_by_reason": {
+          "anyOf": [
+           {
+            "additionalProperties": {},
+            "properties": {
+             "advisory_lookup_failed": {
+              "type": "number"
+             },
+             "candidate_window_truncated": {
+              "type": "number"
+             },
+             "distro_release_unknown": {
+              "description": "deb, apk or rpm purls without a distro qualifier naming the release, which EchelonGraph does not guess.",
+              "type": "number"
+             },
+             "invalid_component": {
+              "type": "number"
+             },
+             "no_decidable_advisory": {
+              "type": "number"
+             },
+             "package_not_in_advisory_corpus": {
+              "type": "number"
+             },
+             "purl_type_unsupported": {
+              "type": "number"
+             },
+             "time_budget": {
+              "description": "Components the batch's time budget ran out before: not clean; check them again.",
+              "type": "number"
+             },
+             "version_missing": {
+              "type": "number"
+             }
+            },
+            "type": "object"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "The not_assessed components, counted by not_assessed_reason."
+         },
+         "partial": {
+          "description": "true when the time budget ran out before every component was looked up.",
+          "type": [
+           "boolean",
+           "null"
+          ]
+         },
+         "time_budget_ms": {
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "undetermined": {
+          "description": "Components whose advisories could not all be decided and none matched: not clean.",
+          "type": [
+           "number",
+           "null"
+          ]
+         }
+        },
+        "type": "object"
+       }
+      },
+      "type": "object"
+     },
+     "freshness": {
+      "description": "The producing radar's last completed check (last_run_at), where the API serves one.",
+      "type": "null"
+     },
+     "measured_at": {
+      "anyOf": [
+       {
+        "description": "An RFC 3339 instant.",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "When the underlying observation was made, as the API states it; null when the answer does not say or holds no observation."
+     },
+     "method": {
+      "description": "How the numbers were produced.",
+      "type": "string"
+     },
+     "notes": {
+      "description": "Caveats, one sentence each.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "state": {
+      "description": "measured: a measurement of what was asked; an exposure count is measured only with measured_at and method. not_assessed: the answer holds no dated measurement of what was asked, so no count in it is presented as one; it can still relay a count, as what the source holds on record, undated, and its notes (and exposure_state, where the result carries it) say what each count is.",
+      "enum": [
+       "measured",
+       "not_assessed"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "state",
+     "measured_at",
+     "method",
+     "coverage",
+     "freshness",
+     "notes",
+     "data"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "coverage": {
+      "anyOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "batch_size": {
+          "description": "The most purls one request carries (the API's cap per request).",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "batches": {
+          "description": "Requests the distinct purls make, at batch_size each.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "batches_sent": {
+          "description": "Of those, the ones the API answered.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "components_in_document": {
+          "anyOf": [
+           {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "Components (CycloneDX) or packages (SPDX) in the document; null for a purl list."
+         },
+         "distinct_purls": {
+          "description": "Distinct purls to check: sent plus not_sent.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "duplicates_removed": {
+          "description": "Purls that appeared more than once and were sent once.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "input": {
+          "description": "What was passed: a purl list, a CycloneDX JSON document or an SPDX JSON document.",
+          "enum": [
+           "purls",
+           "cyclonedx",
+           "spdx"
+          ],
+          "type": "string"
+         },
+         "not_assessed": {
+          "anyOf": [
+           {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "Of those sent, the components with no verdict, as the answer counts them."
+         },
+         "not_sent": {
+          "description": "Distinct purls not sent, listed in data.not_sent_purls: not checked, and not clean.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "not_sent_reason": {
+          "anyOf": [
+           {
+            "enum": [
+             "time_budget",
+             "rate_limited",
+             "request_failed"
+            ],
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ],
+          "description": "Why not_sent is above 0: time_budget (the call's 50 s budget ran out, before a batch or while one was unanswered, which is then cut off; or waiting out the API's Retry-After would pass it), rate_limited (a 429 without Retry-After, or a 429 after 10 waits), request_failed (a batch after the first failed; the note quotes how). null when every purl was sent."
+         },
+         "partial": {
+          "description": "true when not every purl was sent (not_sent above 0) or any batch's summary.partial was true (its time budget ran out first); otherwise the answer's summary.partial.",
+          "type": [
+           "boolean",
+           "null"
+          ]
+         },
+         "rate_limit_waits": {
+          "description": "How many times the API answered 429 and the tool waited its Retry-After before sending the batch again.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "sent": {
+          "description": "Distinct purls sent and answered.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "waited_ms": {
+          "description": "Milliseconds spent in those waits.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "with_purl": {
+          "description": "Of those, the ones carrying a purl.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "without_purl": {
+          "description": "The ones without a purl: not checked, and not clean.",
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         }
+        },
+        "required": [
+         "input",
+         "components_in_document",
+         "with_purl",
+         "without_purl",
+         "duplicates_removed",
+         "distinct_purls",
+         "batch_size",
+         "batches",
+         "batches_sent",
+         "sent",
+         "not_sent",
+         "not_sent_reason",
+         "rate_limit_waits",
+         "waited_ms",
+         "not_assessed",
+         "partial"
+        ],
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "error": {
+      "additionalProperties": false,
+      "properties": {
+       "kind": {
+        "description": "What failed: the request (network, timeout), the answer (http, not_json, not_object, unexpected_shape), the input, or this server.",
+        "enum": [
+         "network",
+         "timeout",
+         "http",
+         "not_json",
+         "not_object",
+         "invalid_input",
+         "internal",
+         "unexpected_shape",
+         "radars"
+        ],
+        "type": "string"
+       },
+       "message": {
+        "description": "The cause: the API's own message, or what went wrong.",
+        "type": "string"
+       },
+       "path": {
+        "description": "The API path requested, when a request was made.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "status": {
+        "anyOf": [
+         {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "The HTTP status, when the API answered one."
+       }
+      },
+      "required": [
+       "kind",
+       "path",
+       "status",
+       "message"
+      ],
+      "type": "object"
+     },
+     "freshness": {
+      "type": "null"
+     },
+     "measured_at": {
+      "type": "null"
+     },
+     "method": {
+      "type": "null"
+     },
+     "notes": {
+      "description": "Caveats, one sentence each.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "state": {
+      "description": "failed: the lookup did not complete. invalid_input: the input was refused, so nothing was looked up. Neither is a finding.",
+      "enum": [
+       "failed",
+       "invalid_input"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "state",
+     "measured_at",
+     "method",
+     "coverage",
+     "freshness",
+     "notes",
+     "error"
+    ],
+    "type": "object"
+   }
+  ],
+  "type": "object"
+ },
+ "title": "Check an SBOM against the advisory corpus"
+}

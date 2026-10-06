@@ -1,0 +1,84 @@
+{
+ "_meta": {
+  "securitySchemes": [
+   {
+    "scopes": [
+     "commerce"
+    ],
+    "type": "oauth2"
+   }
+  ]
+ },
+ "description": "Pay for a catalog service from your spend-capped delegation and return the vendor response. This charges real funds. Call `get_service` FIRST: its `requestShape.endpoints[]` lists the callable paths with their HTTP method and price, and each `payServiceArgs` is the `slug`/`path`/`method` to pass here, after replacing any `pathParams` placeholder in `path` with a real value. A bare slug reaches the service base URL, which for a multi-endpoint API answers 404 instead of a payment challenge; only a single-endpoint service is called by slug alone. Send the endpoint's `payServiceArgs`: they carry an example only when it is `paid-run` or `challenge`. A `docs` example (and its `invokePath`) is unverified \u2014 use it only deliberately, filling any path parameter with the entity you want; otherwise build `body` from the endpoint description or the provider's docs. `method` may be omitted: it is taken from the catalog endpoint matching `path` (POST when the catalog names none) and echoed back under `request`. To accept a live quote, pass its `quoteId` before `expiresAt` with the exact same call arguments; the Router uses that cached challenge and exact fee-inclusive total. Keep `maxTotalCents` as an independent ceiling. Repeating an identical call (same arguments, no `fresh`) charges nothing new: on a deployment running API 1.48 or later it is answered within 24 hours from the first call's stored result, or its `pending` answer; on an older deployment it comes back as `already_paid`. For an ASYNC service, where you submit once and then poll a status endpoint with the same id, set `fresh: true` on every poll INCLUDING THE FIRST: otherwise each later poll reuses the first poll's idempotency key and gets the first poll's stored answer (or `already_paid`) back, so the status never advances. `fresh` makes each poll a distinct, separately billed call (the merchant charges per status call). Leave `fresh` off the submit and off any retry of a call whose outcome is unsure, because with `fresh` a retry is not de-duplicated and is charged again. A completed call returns `paid`, `upstreamStatus` (the vendor's HTTP status) and `response` (its body); `paid: true` with a non-2xx `upstreamStatus` may still have cost the merchant price. Outcomes to act on: `{\"status\":\"pending\"}` means the payment was made and the service is still working; call `get_payment_result` with its `paymentId` every few seconds instead of calling pay_service again. `{\"status\":\"already_paid\"}` means this call's idempotency key already carries a payment whose result is not replayed here (the original call failed, its 24-hour result expired, the `requestId` was reused for a different request, or the deployment predates result replay, API 1.48); nothing new was charged, and it does not by itself say whether the original succeeded. Read the original with `get_payment_result` (`paymentId`) or `list_payments`. A new `requestId` starts a separate, separately charged purchase: use one only after that read shows the original failed and the human still wants the result. `{\"error\":\"payment_indeterminate\"}` means the charge may or may not have landed: check `list_payments` first, and to retry reuse the returned `requestId` verbatim without `fresh` so the retry stays idempotent. `{\"error\":\"per_call_max_exceeded\"}` means no charge; raise `maxTotalCents` only after a deliberate decision and retry with the same requestId. `quote_not_found`, `quote_expired`, and `quote_mismatch` are named no-charge quote refusals; quote again rather than paying unpinned. `{\"error\":\"payment_failed\"}` is a definite decline (see `code`, `message` and `retryable`). These charge nothing: `{\"payable\":false}` (not payable via the Router; no upstream URL is ever returned), `service_not_found` (wrong slug), `catalog_unavailable` and `delegation_lookup_failed` (transient; retry later), `no_delegation` (call `setup_delegation`), `router_controls_unavailable` (the API behind this server is too old to enforce `search`, `quoteId` or `maxTotalCents`; tell the human instead of retrying without them) and `credential_refused` (re-authorize). A paid result also carries `delegationId` and `budget`, the spending budget after this call (`capCents`/`spentCents`/`remainingCents`, cents with up to four decimals), so to say what has been spent or what is left, repeat `budget` rather than adding up your calls yourself; `budget: null` means it could not be read this time, not that it is zero (call `get_budget`). Requires your Nevermined API key on the Authorization header.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "body": {
+    "description": "Request payload sent to the vendor."
+   },
+   "delegationId": {
+    "description": "Delegation to charge when you authenticate with an API key; defaults to your active one. An OAuth-connected caller always spends from the grant it approved, so a value here does not choose the delegation; it still feeds the derived idempotency key when you omit `requestId`, so keep it the same across retries of one call. The result's `delegationId` names the delegation actually charged.",
+    "type": "string"
+   },
+   "fresh": {
+    "description": "Set true on every POLL of an async status endpoint, including the first: each call mints a fresh idempotency key so the poll advances, instead of later polls reusing the derived key and getting the first poll's stored answer (or, before API 1.48, `already_paid`) back. Trade-off: with `fresh` a retry is NOT de-duplicated and WILL be charged again \u2014 use it to advance a poll, never to retry a call whose outcome you are unsure of. Leave unset for ordinary calls so a genuine retry stays idempotent. Ignored when you pass an explicit requestId.",
+    "type": "boolean"
+   },
+   "headers": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "description": "Extra headers for the vendor call.",
+    "type": "object"
+   },
+   "maxTotalCents": {
+    "description": "Maximum whole cents this call may cost, including the buyer fee (compared exactly, so rounding alone never exceeds it). The price the service quotes on its 402 can differ from the catalog price label.",
+    "minimum": 0,
+    "type": "integer"
+   },
+   "method": {
+    "description": "HTTP method for the vendor call. Omit to use the method the catalog records for the endpoint matching `path`; falls back to POST when the catalog records none.",
+    "type": "string"
+   },
+   "path": {
+    "description": "Router suffix appended to the service base. Read `get_service`'s `requestShape.endpoints[].payServiceArgs.path`: a checked `invokePath` may be empty even when the display path is not. Replace every `pathParams` placeholder. Put query parameters in `search`, never in `path`.",
+    "type": "string"
+   },
+   "quoteId": {
+    "description": "Opaque short-lived quote id returned by quote_service. Pass it only with the exact same call before expiresAt; the Router then pays the cached challenge and exact fee-inclusive total. Keep maxTotalCents as an independent ceiling.",
+    "type": "string"
+   },
+   "requestId": {
+    "description": "Idempotency key. Leave unset \u2014 a retry of the same call is de-duplicated automatically. Only set a NEW value if you intend a genuinely separate, additional charge. To poll an async status endpoint, prefer `fresh: true` over minting your own value.",
+    "type": "string"
+   },
+   "search": {
+    "description": "Query string without ?, for a slug-routed GET (e.g. flight_iata=AA217).",
+    "type": "string"
+   },
+   "slug": {
+    "description": "The service slug to pay for.",
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "slug"
+  ],
+  "type": "object"
+ },
+ "name": "pay_service",
+ "securitySchemes": [
+  {
+   "scopes": [
+    "commerce"
+   ],
+   "type": "oauth2"
+  }
+ ],
+ "title": "Pay for and call a service"
+}

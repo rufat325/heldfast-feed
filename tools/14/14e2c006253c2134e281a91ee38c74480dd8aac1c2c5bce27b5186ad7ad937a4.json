@@ -1,0 +1,301 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Search the vault by text tokens or JSONLogic predicate. Pick the mode that matches the query shape. Results paginate via opaque cursors: omit `cursor` for the first page, then pass `nextCursor` from the prior response. Text-mode hits additionally clip per file at `maxMatchesPerHit` match locations.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "contextLength": {
+    "default": 100,
+    "description": "Characters of context on each side of a match location (text mode only). Sizes the rendered text as well as the structured payload, so a wide window multiplies the response across every location on the page. Query tokens within 2 \u00d7 `contextLength` of each other share a location.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "cursor": {
+    "description": "Opaque cursor from a prior response. Omit for the first page. Page size is server-determined; do not assume a fixed value.",
+    "type": "string"
+   },
+   "logic": {
+    "additionalProperties": {},
+    "description": "JSONLogic tree. Required for `jsonlogic` mode; ignored in `text` and `omnisearch` modes (use `query` instead \u2014 this field must be an object, so passing a string here is rejected). `glob` and `regexp` take `[PATTERN, VALUE]` \u2014 pattern first: `{\"glob\": [\"Projects/*.md\", {\"var\": \"path\"}]}`. Backlinks (\"what links here\") have no dedicated tool; find them this way: `{\"regexp\": [\"\\\\[\\\\[Target Note(\\\\\\\\?\\\\||#|\\\\]\\\\])\", {\"var\": \"content\"}]}` finds every readable note whose body wikilinks or embeds `Target Note`, in plain, aliased (`|`, or the table-safe `\\|`), or section form. `obsidian_get_note` with `includeLinks: true` covers the outgoing direction.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "maxMatchesPerHit": {
+    "default": 10,
+    "description": "Cap on match locations returned per file in text mode. A phrase whose tokens share one location counts once. When clipped, the hit carries `truncated: true` and `totalMatches`.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "mode": {
+    "description": "Which search algorithm to run. `text` splits `query` on whitespace and requires every token, each matched case-insensitively as a substring of the filename or note body. Quotes are literal characters, not a phrase operator. Each hit returns match locations with surrounding context windows; tokens that sit close together, such as the words of a phrase, share one location. `jsonlogic` evaluates a JSONLogic tree against each note, with `var` paths into `path`, `content`, `frontmatter.<key>`, `tags`, and `stat.{ctime,mtime,size}`, plus `glob` and `regexp` operators \u2014 both take their arguments as `[PATTERN, VALUE]`, so the pattern comes first and the `{\"var\": ...}` reference second.",
+    "enum": [
+     "text",
+     "jsonlogic"
+    ],
+    "type": "string"
+   },
+   "pathPrefix": {
+    "description": "Filter returned filenames by prefix (text mode only, applied after matching \u2014 does not narrow the search itself).",
+    "type": "string"
+   },
+   "query": {
+    "description": "The query string. Required for `text` and `omnisearch` modes; ignored in `jsonlogic` mode (use `logic` instead \u2014 this field must be a string, so passing a JSONLogic tree here is rejected). In `text` mode it is split on whitespace and every token must appear; quotes stay part of the tokens, so a quoted phrase matches nothing unless the note contains the quote characters.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "mode"
+  ],
+  "type": "object"
+ },
+ "name": "obsidian_search_notes",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "result"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "effectiveQuery": {
+    "description": "The query string as submitted (text and omnisearch modes only).",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `path_prefix_invalid_mode`: `pathPrefix` was provided in a non-text mode (only `text` supports prefix filtering). `query_required`: `query` is missing for `text` or `omnisearch` mode (required for both). `context_length_too_large`: The Local REST API exhausted its string capacity building one context window per match, so the whole text search failed. `logic_required`: `logic` is missing for `jsonlogic` mode. `logic_invalid`: The Local REST API rejected the JSONLogic tree \u2014 an unrecognized operator, or an operand it could not evaluate (an uncompilable `regexp` pattern). A mis-arity operator is not rejected: it evaluates to false and the search returns zero hits. `omnisearch_unreachable`: Omnisearch was reachable at startup but is now unreachable (Obsidian quit, plugin disabled, or mobile session). Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "path_prefix_invalid_mode",
+         "query_required",
+         "context_length_too_large",
+         "logic_required",
+         "logic_invalid",
+         "omnisearch_unreachable"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Recovery guidance when the search returned no hits.",
+    "type": "string"
+   },
+   "result": {
+    "description": "Mode-discriminated search payload.",
+    "oneOf": [
+     {
+      "additionalProperties": false,
+      "description": "Text-search results.",
+      "properties": {
+       "hits": {
+        "description": "Matching files with their match locations.",
+        "items": {
+         "additionalProperties": false,
+         "description": "A file with one or more text-search match locations.",
+         "properties": {
+          "filename": {
+           "description": "Vault-relative path of the matching note.",
+           "type": "string"
+          },
+          "matches": {
+           "description": "Match locations with their context windows, in document order. Capped per file by `maxMatchesPerHit`.",
+           "items": {
+            "additionalProperties": false,
+            "description": "A match location within a file: one token occurrence, or several query tokens close enough to share one context window (a phrase).",
+            "properties": {
+             "context": {
+              "description": "Surrounding text around the location.",
+              "type": "string"
+             },
+             "match": {
+              "additionalProperties": false,
+              "description": "Where the location sits, on two origins: `start`/`end` index the matched subject, `contextStart`/`contextEnd` index the accompanying `context` window.",
+              "properties": {
+               "contextEnd": {
+                "description": "Location end offset within `context`.",
+                "type": "number"
+               },
+               "contextStart": {
+                "description": "Location start offset within `context`. `context.slice(contextStart, contextEnd)` is the matched text, from the first matched token through the last.",
+                "type": "number"
+               },
+               "end": {
+                "description": "Location end offset within the same subject `start` indexes.",
+                "type": "number"
+               },
+               "start": {
+                "description": "Location start offset within the subject upstream matched \u2014 the note body in the usual case, or the note basename (extension stripped) when the filename itself matched, in which case `context` is that basename. This is not an offset into `context`; use `contextStart` for that. Note-body values index the same string `obsidian_get_note` returns.",
+                "type": "number"
+               }
+              },
+              "required": [
+               "start",
+               "end",
+               "contextStart",
+               "contextEnd"
+              ],
+              "type": "object"
+             }
+            },
+            "required": [
+             "context",
+             "match"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "totalMatches": {
+           "description": "Total match locations in this file. Present only when `matches` was clipped to `maxMatchesPerHit`.",
+           "type": "number"
+          },
+          "truncated": {
+           "description": "True when `matches` was clipped to `maxMatchesPerHit` locations. Use `obsidian_get_note` to read the full file when more context is needed.",
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "filename",
+          "matches"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "mode": {
+        "const": "text",
+        "description": "Echoed mode.",
+        "type": "string"
+       },
+       "nextCursor": {
+        "description": "Opaque cursor for the next page. Omitted on the last page (do not treat absent as null).",
+        "type": "string"
+       },
+       "totalCount": {
+        "description": "Total post-path-policy hit count across all pages, before pagination.",
+        "type": "number"
+       }
+      },
+      "required": [
+       "mode",
+       "hits",
+       "totalCount"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "description": "JSONLogic results.",
+      "properties": {
+       "hits": {
+        "description": "Matching files with the JSONLogic result per file.",
+        "items": {
+         "additionalProperties": false,
+         "description": "A file with a structured (Dataview/JSONLogic) result value.",
+         "properties": {
+          "filename": {
+           "description": "Vault-relative path of the matching note.",
+           "type": "string"
+          },
+          "result": {
+           "description": "The query result for this file \u2014 shape determined by the query."
+          }
+         },
+         "required": [
+          "filename",
+          "result"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "mode": {
+        "const": "jsonlogic",
+        "description": "Echoed mode.",
+        "type": "string"
+       },
+       "nextCursor": {
+        "description": "Opaque cursor for the next page. Omitted on the last page (do not treat absent as null).",
+        "type": "string"
+       },
+       "totalCount": {
+        "description": "Total post-path-policy hit count across all pages, before pagination.",
+        "type": "number"
+       }
+      },
+      "required": [
+       "mode",
+       "hits",
+       "totalCount"
+      ],
+      "type": "object"
+     }
+    ]
+   }
+  },
+  "type": "object"
+ },
+ "title": "Obsidian Search Notes"
+}

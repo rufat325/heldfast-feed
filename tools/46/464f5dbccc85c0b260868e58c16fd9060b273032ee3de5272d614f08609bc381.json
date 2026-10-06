@@ -1,0 +1,319 @@
+{
+ "_meta": {
+  "securitySchemes": [
+   {
+    "scopes": [
+     "mcp.read"
+    ],
+    "type": "oauth2"
+   }
+  ]
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Backtest a Condition"
+ },
+ "description": "What happened AFTER a condition in the past, on one symbol and timeframe \u2014 \"how did BTC do after RSI dropped below 30 on 4h\", \"is a golden cross on ETH daily actually bullish\", \"what usually follows a \u22125% day on SOL\". Runs an event study over the whole stored tape (up to 1000 candles: ~41 days on 1h, ~166 days on 4h, ~3 years on 1d): occurrences, average / median forward return, win rate, average best and worst excursion per horizon, the unconditional baseline over the same tape and the EDGE the condition adds over it, the last five episodes, and whether the condition is active on the latest bar. Same condition vocabulary as screen_symbols. Quote the edge and the sample size together \u2014 a 3-sample stat is an anecdote.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conditions": {
+    "description": "Up to 3 conditions, AND-ed. Examples: RSI oversold = {\"metric\":\"rsi\",\"op\":\"lt\",\"value\":30}; above the 200 EMA = {\"metric\":\"priceVsEma\",\"op\":\"gt\",\"value\":0,\"period\":200}; golden cross = {\"metric\":\"emaSpread\",\"op\":\"crossAbove\",\"value\":0,\"period\":50,\"period2\":200}; MACD bullish cross = {\"metric\":\"macdHistogram\",\"op\":\"crossAbove\",\"value\":0}; dumped 5% in a day = {\"metric\":\"changePct\",\"op\":\"lt\",\"value\":-5,\"period\":24}.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "metric": {
+       "description": "Metric. Defaults in brackets. rsi(14): RSI, 0\u2013100; stochastic(14,3): Slow stochastic %K (period, %D smoothing), 0\u2013100; cci(20): Commodity Channel Index; mfi(14): Money Flow Index, 0\u2013100; williamsR(14): Williams %R, \u2212100\u20130; adx(14): Average Directional Index; roc(12): Rate of change in %; macdHistogram(12,26): MACD histogram (fast, slow; signal 9); atrPct(14): ATR as % of price; volumeRatio(20): Bar volume \u00f7 average of the previous N bars; bbPercentB(20): Position inside Bollinger (20, 2): 0 = lower band, 1 = upper band; bbWidthPct(20): Bollinger band width as % of the middle band; priceVsEma(50): % distance of close from EMA(period); > 0 = above; emaSpread(50,200): % of EMA(period) over EMA(period2); crossAbove 0 = golden cross; supertrend(10): +1 in an up-trend, \u22121 in a down-trend (ATR period, multiplier 3); changePct(24): % change of close over the last N bars; price: Close price",
+       "enum": [
+        "rsi",
+        "stochastic",
+        "cci",
+        "mfi",
+        "williamsR",
+        "adx",
+        "roc",
+        "macdHistogram",
+        "atrPct",
+        "volumeRatio",
+        "bbPercentB",
+        "bbWidthPct",
+        "priceVsEma",
+        "emaSpread",
+        "supertrend",
+        "changePct",
+        "price"
+       ],
+       "type": "string"
+      },
+      "op": {
+       "description": "lt / gt compare the latest value; crossAbove / crossBelow are one-bar events (previous bar on the other side).",
+       "enum": [
+        "lt",
+        "gt",
+        "crossAbove",
+        "crossBelow"
+       ],
+       "type": "string"
+      },
+      "period": {
+       "description": "Override the metric's primary period (RSI length, EMA period, bars for changePct)",
+       "maximum": 200,
+       "minimum": 2,
+       "type": "integer"
+      },
+      "period2": {
+       "description": "Second period where the metric has one: slow EMA for emaSpread, slow MACD, stochastic %D",
+       "maximum": 200,
+       "minimum": 2,
+       "type": "integer"
+      },
+      "value": {
+       "description": "Threshold, in the metric's own unit (RSI 30, %B 0, spread 0, change \u22125 \u2026)",
+       "type": "number"
+      }
+     },
+     "required": [
+      "metric",
+      "op",
+      "value"
+     ],
+     "type": "object"
+    },
+    "maxItems": 3,
+    "type": "array"
+   },
+   "horizons": {
+    "description": "Bars ahead to measure returns over (\u2264 4). Default per interval \u2248 4h / 1d / 3d: 1h \u2192 [4, 24, 72], 4h \u2192 [6, 18, 42], 1d \u2192 [1, 3, 7].",
+    "items": {
+     "maximum": 200,
+     "minimum": 1,
+     "type": "integer"
+    },
+    "maxItems": 4,
+    "minItems": 1,
+    "type": "array"
+   },
+   "interval": {
+    "default": "4h",
+    "description": "Candle timeframe",
+    "enum": [
+     "1m",
+     "5m",
+     "15m",
+     "1h",
+     "4h",
+     "1d"
+    ],
+    "type": "string"
+   },
+   "symbol": {
+    "description": "Trading pair, e.g. BTCUSDT (a bare \"BTC\" is read as its USDT perpetual)",
+    "type": "string"
+   }
+  },
+  "required": [
+   "symbol",
+   "conditions"
+  ],
+  "type": "object"
+ },
+ "name": "backtest_condition",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "activeNow": {
+    "description": "Conditions hold on the latest closed bar",
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "bars": {
+    "description": "Candles the study ran on (the whole stored tape)",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "conditions": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "coverageHours": {
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "currentValues": {
+    "anyOf": [
+     {
+      "additionalProperties": true,
+      "properties": {},
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Latest value of every metric involved"
+   },
+   "evaluableBars": {
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "from": {
+    "anyOf": [
+     {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "number"
+       },
+       {
+        "format": "date-time",
+        "type": "string"
+       }
+      ]
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "horizonHours": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "number"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "horizons": {
+    "anyOf": [
+     {
+      "items": {
+       "additionalProperties": true,
+       "properties": {},
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Per look-ahead: { bars, samples, avgReturnPct, medianReturnPct, winRatePct, avgMaxUpPct, avgMaxDownPct, bestPct, worstPct, baselineAvgReturnPct, edgePct } \u2014 edge = avg \u2212 unconditional baseline"
+   },
+   "interval": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "lastOccurrence": {
+    "anyOf": [
+     {
+      "additionalProperties": true,
+      "properties": {},
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "{ openTime, barsAgo, price }"
+   },
+   "occurrences": {
+    "description": "Episodes \u2014 the FIRST bar of each run where the conditions held",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "recent": {
+    "anyOf": [
+     {
+      "items": {
+       "additionalProperties": true,
+       "properties": {},
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Newest episodes first: { openTime, barsAgo, price, returnsPct { \"<bars>\": pct } }"
+   },
+   "symbol": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "to": {
+    "anyOf": [
+     {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "number"
+       },
+       {
+        "format": "date-time",
+        "type": "string"
+       }
+      ]
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "warnings": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   }
+  },
+  "type": "object"
+ }
+}

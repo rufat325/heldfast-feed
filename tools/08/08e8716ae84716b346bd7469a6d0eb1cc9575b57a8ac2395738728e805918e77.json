@@ -1,0 +1,1595 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Song registration check"
+ },
+ "description": "ISRC lookup and music royalties registration check for one recording, with the song's rights data. Give exactly one of: an ISRC, a Spotify track link, a song title (optionally with the artist), or a YouTube link. Returns candidate recordings and MLC works, how each was matched and how confidently, and a verdict per recording: registered, partial (a share is unclaimed), nobody (no MLC work is linked), conflict, or unknown. Each verdict carries dated evidence (as_of, from The MLC's bulk data snapshot) and a factual next step. Also returns what MusicBrainz records for the recording: the linked works with their ISWCs, the writers and publishers with their IPI and ISNI numbers, the earliest release's album, date, label and catalogue number, and the MusicBrainz page. With full_record true it adds every release (label, catalogue number, country and date), performer and producer credits and related recordings; that answer is many times larger. When several matches are equally likely, ambiguous is true and all are returned. Findings from registration data, not legal advice or a statement of song ownership.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "artist": {
+    "description": "Optional artist name; only together with title.",
+    "maxLength": 300,
+    "type": "string"
+   },
+   "full_record": {
+    "default": false,
+    "description": "True to add MusicBrainz's full record of the recording: every release with its label, catalogue number, country and date, the credits, and related recordings. Only for an ISRC or a Spotify link that resolves to one recording. Leave it out unless that detail is needed: the answer is many times larger.",
+    "type": "boolean"
+   },
+   "isrc": {
+    "description": "ISRC, 12 characters, e.g. USIR20400274 (hyphens and spaces allowed).",
+    "maxLength": 32,
+    "type": "string"
+   },
+   "spotify_url": {
+    "description": "Spotify track link (https://open.spotify.com/track/...) or spotify:track:... URI. Album and playlist links are not accepted.",
+    "maxLength": 500,
+    "type": "string"
+   },
+   "title": {
+    "description": "Song title, when no ISRC or link is available.",
+    "maxLength": 300,
+    "type": "string"
+   },
+   "youtube_url": {
+    "description": "YouTube video link; resolved from the video title, so matches are low confidence.",
+    "maxLength": 500,
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "lookup_recording",
+ "outputSchema": {
+  "$defs": {
+   "Conflict": {
+    "properties": {
+     "field": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Field"
+     },
+     "mlc": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Mlc"
+     },
+     "musicbrainz": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Musicbrainz"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Note"
+     },
+     "severity": {
+      "default": "info",
+      "title": "Severity",
+      "type": "string"
+     },
+     "spotify": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Spotify"
+     }
+    },
+    "title": "Conflict",
+    "type": "object"
+   },
+   "ISRCResult": {
+    "properties": {
+     "conflicts": {
+      "default": [],
+      "items": {
+       "$ref": "#/$defs/Conflict"
+      },
+      "title": "Conflicts",
+      "type": "array"
+     },
+     "health": {
+      "default": "clean",
+      "title": "Health",
+      "type": "string"
+     },
+     "health_reasons": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Health Reasons",
+      "type": "array"
+     },
+     "isrc": {
+      "title": "Isrc",
+      "type": "string"
+     },
+     "mlc": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/MLCData"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "mlc_lookup": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/MLCLookup"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "musicbrainz": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/MusicBrainzData"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "registrations": {
+      "additionalProperties": {
+       "anyOf": [
+        {
+         "type": "boolean"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "default": {},
+      "title": "Registrations",
+      "type": "object"
+     },
+     "spotify": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/SpotifyData"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "verdict": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/Verdict"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "required": [
+     "isrc"
+    ],
+    "title": "ISRCResult",
+    "type": "object"
+   },
+   "MLCData": {
+    "properties": {
+     "artist": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Artist"
+     },
+     "isrc_in_matched_recordings": {
+      "default": false,
+      "title": "Isrc In Matched Recordings",
+      "type": "boolean"
+     },
+     "iswc": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Iswc"
+     },
+     "labels": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Labels"
+     },
+     "matched_recording_count": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Matched Recording Count"
+     },
+     "mlc_song_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Mlc Song Code"
+     },
+     "other_song_codes": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Other Song Codes",
+      "type": "array"
+     },
+     "other_works": {
+      "default": [],
+      "items": {
+       "$ref": "#/$defs/MLCOtherWork"
+      },
+      "title": "Other Works",
+      "type": "array"
+     },
+     "publishers": {
+      "default": [],
+      "items": {
+       "$ref": "#/$defs/MLCPublisher"
+      },
+      "title": "Publishers",
+      "type": "array"
+     },
+     "share_in_dispute": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Share In Dispute"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Title"
+     },
+     "unclaimed_share_pct": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Unclaimed Share Pct"
+     },
+     "unclaimed_song_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Unclaimed Song Code"
+     },
+     "writers": {
+      "default": [],
+      "items": {
+       "$ref": "#/$defs/MLCWriter"
+      },
+      "title": "Writers",
+      "type": "array"
+     },
+     "writers_vs_discogs": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/WriterMatch"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "writers_vs_musicbrainz": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/WriterMatch"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "title": "MLCData",
+    "type": "object"
+   },
+   "MLCLookup": {
+    "description": "The audit trail for an MLC lookup \u2014 always present, even on failure.",
+    "properties": {
+     "as_of": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "As Of"
+     },
+     "attempts": {
+      "default": 0,
+      "title": "Attempts",
+      "type": "integer"
+     },
+     "bwarm_state": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Bwarm State"
+     },
+     "confidence": {
+      "$ref": "#/$defs/MLCLookupConfidence",
+      "default": "none"
+     },
+     "detail": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Detail"
+     },
+     "indeterminate": {
+      "default": false,
+      "title": "Indeterminate",
+      "type": "boolean"
+     },
+     "query": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/MLCQueryKind"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "source": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Source"
+     },
+     "status": {
+      "$ref": "#/$defs/MLCLookupStatus"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "title": "MLCLookup",
+    "type": "object"
+   },
+   "MLCLookupConfidence": {
+    "description": "How firmly the returned work is tied to the ISRC that was searched.",
+    "enum": [
+     "high",
+     "medium",
+     "low",
+     "none"
+    ],
+    "title": "MLCLookupConfidence",
+    "type": "string"
+   },
+   "MLCLookupStatus": {
+    "description": "Why an MLC lookup produced (or failed to produce) a work.\n\nMLC answers come from TrackForge's copy of The MLC's bulk data feed\n(BWARM), never from The MLC's API, so every status is true *as of* the\nsnapshot date carried in ``MLCLookup.as_of``.\n\n``NOT_FOUND`` and ``UNRESOLVED`` are negative statements about MLC's data:\nno MLC work is linked to this recording in the snapshot. Neither says the\nwork is unregistered: a registered work whose recording has not been\nmatched looks the same, which is why the verdict adds a title check. Every\nindeterminate value is a statement about *our* ability to read the snapshot\ncopy and must be surfaced as inconclusive.",
+    "enum": [
+     "matched",
+     "recording_unmatched",
+     "not_found",
+     "unresolved",
+     "empty_response",
+     "error",
+     "timeout",
+     "rate_limited",
+     "not_configured",
+     "not_attempted"
+    ],
+    "title": "MLCLookupStatus",
+    "type": "string"
+   },
+   "MLCOtherWork": {
+    "description": "Another MLC work tied to the same recording as the one in ``MLCData``.",
+    "properties": {
+     "iswc": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Iswc"
+     },
+     "linked": {
+      "default": false,
+      "title": "Linked",
+      "type": "boolean"
+     },
+     "matched_recording_count": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Matched Recording Count"
+     },
+     "mlc_song_code": {
+      "title": "Mlc Song Code",
+      "type": "string"
+     },
+     "publishers": {
+      "default": [],
+      "items": {
+       "$ref": "#/$defs/MLCPublisher"
+      },
+      "title": "Publishers",
+      "type": "array"
+     },
+     "share_in_dispute": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Share In Dispute"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Title"
+     },
+     "unclaimed_share_pct": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Unclaimed Share Pct"
+     },
+     "writers": {
+      "default": [],
+      "items": {
+       "$ref": "#/$defs/MLCWriter"
+      },
+      "title": "Writers",
+      "type": "array"
+     },
+     "writers_vs_discogs": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/WriterMatch"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "writers_vs_musicbrainz": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/WriterMatch"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     }
+    },
+    "required": [
+     "mlc_song_code"
+    ],
+    "title": "MLCOtherWork",
+    "type": "object"
+   },
+   "MLCPublisher": {
+    "properties": {
+     "ipi": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Ipi"
+     },
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Name"
+     },
+     "role": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Role"
+     },
+     "share": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Share"
+     }
+    },
+    "title": "MLCPublisher",
+    "type": "object"
+   },
+   "MLCQueryKind": {
+    "description": "Which query established the result.",
+    "enum": [
+     "title_writer",
+     "title",
+     "isrc"
+    ],
+    "title": "MLCQueryKind",
+    "type": "string"
+   },
+   "MLCSource": {
+    "description": "How current the MLC answers in a response are.",
+    "properties": {
+     "as_of": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "As Of"
+     },
+     "caveat": {
+      "default": "MLC answers come from The MLC's bulk data feed as of the date shown, not a live query. Registrations and matches made since then are not reflected.",
+      "title": "Caveat",
+      "type": "string"
+     },
+     "kind": {
+      "default": "bwarm_snapshot",
+      "title": "Kind",
+      "type": "string"
+     },
+     "snapshot": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Snapshot"
+     }
+    },
+    "title": "MLCSource",
+    "type": "object"
+   },
+   "MLCWriter": {
+    "properties": {
+     "first_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "First Name"
+     },
+     "ipi": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Ipi"
+     },
+     "last_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Last Name"
+     },
+     "role": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Role"
+     }
+    },
+    "title": "MLCWriter",
+    "type": "object"
+   },
+   "MusicBrainzData": {
+    "description": "The ISRC's recording on MusicBrainz, from TrackForge's copy.\n\nSeveral recordings can carry one ISRC; the fields describe the first (the\nlowest MusicBrainz id). Until the full copy's dossier is on the server,\nonly ``title`` and ``artist`` are filled. Everything here comes from\nMusicBrainz's core data, which it dedicates to the public domain (CC0).",
+    "properties": {
+     "album": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Album"
+     },
+     "artist": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Artist"
+     },
+     "catalogue_number": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Catalogue Number"
+     },
+     "duration": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Duration"
+     },
+     "label": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Label"
+     },
+     "recording_count": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Recording Count"
+     },
+     "recording_mbid": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Recording Mbid"
+     },
+     "recordings": {
+      "anyOf": [
+       {
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Recordings"
+     },
+     "release_count": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Release Count"
+     },
+     "release_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Release Date"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Title"
+     },
+     "url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Url"
+     },
+     "works": {
+      "default": [],
+      "items": {
+       "$ref": "#/$defs/MusicBrainzWork"
+      },
+      "title": "Works",
+      "type": "array"
+     }
+    },
+    "title": "MusicBrainzData",
+    "type": "object"
+   },
+   "MusicBrainzParty": {
+    "description": "A writer or publisher MusicBrainz credits on a work.",
+    "properties": {
+     "ipis": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Ipis",
+      "type": "array"
+     },
+     "isnis": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Isnis",
+      "type": "array"
+     },
+     "mbid": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Mbid"
+     },
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Name"
+     },
+     "role": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Role"
+     }
+    },
+    "title": "MusicBrainzParty",
+    "type": "object"
+   },
+   "MusicBrainzWork": {
+    "description": "A musical work MusicBrainz links to the recording, with its rights holders.",
+    "properties": {
+     "iswcs": {
+      "default": [],
+      "items": {
+       "type": "string"
+      },
+      "title": "Iswcs",
+      "type": "array"
+     },
+     "mbid": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Mbid"
+     },
+     "publishers": {
+      "default": [],
+      "items": {
+       "$ref": "#/$defs/MusicBrainzParty"
+      },
+      "title": "Publishers",
+      "type": "array"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Title"
+     },
+     "writers": {
+      "default": [],
+      "items": {
+       "$ref": "#/$defs/MusicBrainzParty"
+      },
+      "title": "Writers",
+      "type": "array"
+     }
+    },
+    "title": "MusicBrainzWork",
+    "type": "object"
+   },
+   "ResolutionMethod": {
+    "description": "How a candidate was reached from the input.",
+    "enum": [
+     "isrc_input",
+     "spotify_track_isrc",
+     "mlc_recording_title",
+     "mlc_work_title",
+     "mlc_alternative_work_title",
+     "musicbrainz_recording_search",
+     "youtube_oembed_title"
+    ],
+    "title": "ResolutionMethod",
+    "type": "string"
+   },
+   "ResolveCandidate": {
+    "description": "One recording or work the input may refer to.",
+    "properties": {
+     "artist": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Artist"
+     },
+     "confidence": {
+      "$ref": "#/$defs/VerdictConfidence"
+     },
+     "isrc": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Isrc"
+     },
+     "iswc": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Iswc"
+     },
+     "kind": {
+      "title": "Kind",
+      "type": "string"
+     },
+     "mlc_song_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Mlc Song Code"
+     },
+     "note": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Note"
+     },
+     "resolved_via": {
+      "items": {
+       "$ref": "#/$defs/ResolutionMethod"
+      },
+      "title": "Resolved Via",
+      "type": "array"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Title"
+     },
+     "verdict": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/Verdict"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "work_title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Work Title"
+     }
+    },
+    "required": [
+     "kind",
+     "resolved_via",
+     "confidence"
+    ],
+    "title": "ResolveCandidate",
+    "type": "object"
+   },
+   "ResolveInputKind": {
+    "enum": [
+     "isrc",
+     "spotify_url",
+     "title",
+     "youtube_url"
+    ],
+    "title": "ResolveInputKind",
+    "type": "string"
+   },
+   "ResolvedQuery": {
+    "description": "What the input was turned into before searching.",
+    "properties": {
+     "artist": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Artist"
+     },
+     "isrc": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Isrc"
+     },
+     "spotify_track_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Spotify Track Id"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Title"
+     },
+     "youtube_video_id": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Youtube Video Id"
+     }
+    },
+    "title": "ResolvedQuery",
+    "type": "object"
+   },
+   "SpotifyData": {
+    "description": "The track as Spotify lists it. Wherever these fields or the artwork are\nshown, show Spotify's logo and link to ``url``: Spotify's Developer Policy\nrequires both.",
+    "properties": {
+     "album": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Album"
+     },
+     "album_images": {
+      "default": [],
+      "items": {
+       "$ref": "#/$defs/SpotifyImage"
+      },
+      "title": "Album Images",
+      "type": "array"
+     },
+     "artist": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Artist"
+     },
+     "duration": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Duration"
+     },
+     "label": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Label"
+     },
+     "markets": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Markets"
+     },
+     "release_date": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Release Date"
+     },
+     "title": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Title"
+     },
+     "url": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Url"
+     }
+    },
+    "title": "SpotifyData",
+    "type": "object"
+   },
+   "SpotifyImage": {
+    "description": "One size of an album's cover art, on Spotify's image CDN.",
+    "properties": {
+     "height": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Height"
+     },
+     "url": {
+      "title": "Url",
+      "type": "string"
+     },
+     "width": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Width"
+     }
+    },
+    "required": [
+     "url"
+    ],
+    "title": "SpotifyImage",
+    "type": "object"
+   },
+   "Verdict": {
+    "description": "A finding about one recording or work, never advice.\n\nStates what the registration data shows as of ``as_of`` and, in\n``next_step``, the registered process that applies. It never says who owns\nanything or what anyone may do.",
+    "properties": {
+     "as_of": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "As Of"
+     },
+     "confidence": {
+      "$ref": "#/$defs/VerdictConfidence"
+     },
+     "evidence": {
+      "default": [],
+      "items": {
+       "$ref": "#/$defs/VerdictEvidence"
+      },
+      "title": "Evidence",
+      "type": "array"
+     },
+     "next_step": {
+      "title": "Next Step",
+      "type": "string"
+     },
+     "secondary_states": {
+      "default": [],
+      "items": {
+       "$ref": "#/$defs/VerdictState"
+      },
+      "title": "Secondary States",
+      "type": "array"
+     },
+     "state": {
+      "$ref": "#/$defs/VerdictState"
+     }
+    },
+    "required": [
+     "state",
+     "confidence",
+     "next_step"
+    ],
+    "title": "Verdict",
+    "type": "object"
+   },
+   "VerdictConfidence": {
+    "enum": [
+     "high",
+     "medium",
+     "low"
+    ],
+    "title": "VerdictConfidence",
+    "type": "string"
+   },
+   "VerdictEvidence": {
+    "description": "One short factual item behind a verdict.",
+    "properties": {
+     "as_of": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "As Of"
+     },
+     "fact": {
+      "title": "Fact",
+      "type": "string"
+     },
+     "source": {
+      "title": "Source",
+      "type": "string"
+     }
+    },
+    "required": [
+     "source",
+     "fact"
+    ],
+    "title": "VerdictEvidence",
+    "type": "object"
+   },
+   "VerdictState": {
+    "description": "What the registration data shows for a recording, in one word.\n\nPrecedence when several apply: unknown > conflict > nobody > partial >\nregistered (``app/services/isrc/verdict.py``). Only a snapshot that was\nread can produce ``nobody``; an unreadable copy is ``unknown``.",
+    "enum": [
+     "registered",
+     "partial",
+     "nobody",
+     "conflict",
+     "unknown"
+    ],
+    "title": "VerdictState",
+    "type": "string"
+   },
+   "WriterMatch": {
+    "description": "How an MLC work's writers compare with the writers MusicBrainz credits\nfor the recording (``app/services/isrc/writer_check.py``).\n\nA comparison of names and identifiers as the two sources list them. It\nsays nothing about who owns a work.",
+    "enum": [
+     "shared_ipi",
+     "shared_name",
+     "same_person",
+     "none_shared"
+    ],
+    "title": "WriterMatch",
+    "type": "string"
+   }
+  },
+  "properties": {
+   "ambiguous": {
+    "default": false,
+    "title": "Ambiguous",
+    "type": "boolean"
+   },
+   "candidates": {
+    "default": [],
+    "items": {
+     "$ref": "#/$defs/ResolveCandidate"
+    },
+    "title": "Candidates",
+    "type": "array"
+   },
+   "input_kind": {
+    "$ref": "#/$defs/ResolveInputKind"
+   },
+   "mlc_source": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/MLCSource"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "notes": {
+    "default": [],
+    "items": {
+     "type": "string"
+    },
+    "title": "Notes",
+    "type": "array"
+   },
+   "query": {
+    "$ref": "#/$defs/ResolvedQuery"
+   },
+   "results": {
+    "default": [],
+    "items": {
+     "$ref": "#/$defs/ISRCResult"
+    },
+    "title": "Results",
+    "type": "array"
+   }
+  },
+  "required": [
+   "input_kind",
+   "query"
+  ],
+  "title": "ResolveResponse",
+  "type": "object"
+ },
+ "title": "Song registration check: MLC registration, unclaimed shares, writers, publishers and ISWCs"
+}

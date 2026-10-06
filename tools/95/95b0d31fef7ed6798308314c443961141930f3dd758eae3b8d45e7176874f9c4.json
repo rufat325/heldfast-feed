@@ -1,0 +1,292 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Given a batch of vulnerability findings already flagged elsewhere (e.g. from batch_query_vulnerabilities, analyze_transitive_dependencies, or query_vulnerabilities across a whole package.json/lockfile audit), ranks them by what to actually fix first. Combines CISA KEV status (confirmed active exploitation in the wild \u2014 an automatic top-priority override), FIRST.org EPSS (probability of exploitation in the next 30 days \u2014 the primary ranking signal, since it measures likelihood rather than just impact), and severity (a secondary/fallback signal, most useful for a GHSA finding with no CVE alias) into one composite score and a remove-now/patch-now/patch-soon/scheduled/monitor tier per finding. A finding with `findingType: \"malware\"` (or an advisoryId that is a malware advisory \u2014 a MAL-* id, or a GHSA whose OSV record carries CWE-506 / a MAL-* alias, looked up automatically) always lands in `remove-now` \u2014 the tier above patch-now \u2014 regardless of score: a confirmed-malicious package needs removal/replacement, not an \"urgent patch\" (there often isn't a fixed version to patch TO), and EPSS/severity don't meaningfully apply to \"how malicious\" the way they do to a genuine vulnerability. When EPSS data isn't available at all (no CVE id, or a real CVE that just isn't in FIRST.org's database) severity becomes the sole usable signal and is scored on its own scale instead of being diluted to a ~10% sliver of the composite \u2014 a bare CRITICAL/HIGH GHSA finding with no CVE alias lands in patch-soon/scheduled, not monitor, the way it would if severity kept its normal secondary weight with nothing else to combine it with. An EPSS of 10% or more always ranks at least patch-soon. Pass in the severity/CVE id/advisoryId findings other tools already returned; it adds KEV/EPSS enrichment (the same data get_cve returns per-CVE) plus the per-advisory malware lookup, and ranks the batch (malwareCheckFailedAdvisoryIds lists any advisory whose malware status is unknown). A CVE id shared by multiple findings in the same call is only looked up once. The tier is a fix-ORDER ranking across a backlog, not a severity verdict or a merge/admission gate: a CRITICAL CVE with low EPSS and no KEV listing can legitimately land in `monitor` (minimist's CVE-2021-44906 has ranked there). Do not report a `monitor`/`scheduled` finding as \"low severity\", and when deciding whether a change that INTRODUCES a vulnerability is acceptable, judge it on severity, not on this tier.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "findings": {
+    "description": "1-200 previously-flagged vulnerability findings to rank",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "advisoryId": {
+       "description": "GHSA/OSV advisory id \u2014 looked up on OSV.dev: a MAL-* id, or a GHSA whose record is a malware advisory (CWE-506 / MAL-* alias), is auto-detected as malware even without findingType set",
+       "maxLength": 64,
+       "type": "string"
+      },
+      "currentVersion": {
+       "description": "Currently installed version, passed through unchanged",
+       "maxLength": 128,
+       "type": "string"
+      },
+      "cveId": {
+       "description": "Exact CVE ID, e.g. \"CVE-2024-12345\" \u2014 enables CISA KEV + FIRST.org EPSS enrichment. Omit for a GHSA advisory with no CVE alias; the finding is still ranked by severity alone.",
+       "pattern": "^CVE-\\d{4}-\\d{4,}$",
+       "type": "string"
+      },
+      "findingType": {
+       "description": "\"malware\" forces the remove-now tier regardless of score/CVE/severity \u2014 set this (or pass a MAL-* advisoryId) for a confirmed-malicious package. Omit for an ordinary vulnerability finding.",
+       "enum": [
+        "malware",
+        "vulnerability",
+        "supply-chain",
+        "install-script"
+       ],
+       "type": "string"
+      },
+      "fixedVersion": {
+       "description": "Version that fixes this finding, passed through unchanged",
+       "maxLength": 128,
+       "type": "string"
+      },
+      "packageName": {
+       "description": "npm package name this finding was flagged against",
+       "maxLength": 214,
+       "minLength": 1,
+       "type": "string"
+      },
+      "severity": {
+       "description": "Severity from the source finding (OSV/GHSA: CRITICAL/HIGH/MODERATE/LOW, or NVD: CRITICAL/HIGH/MEDIUM/LOW) \u2014 used as a fallback/secondary signal",
+       "maxLength": 32,
+       "type": "string"
+      }
+     },
+     "required": [
+      "packageName"
+     ],
+     "type": "object"
+    },
+    "maxItems": 200,
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "required": [
+   "findings"
+  ],
+  "type": "object"
+ },
+ "name": "prioritize_remediation",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "malwareCheckFailedAdvisoryIds": {
+    "description": "advisoryIds whose OSV record could not be fetched, so whether they are malware is unknown \u2014 not confirmed safe.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "ranked": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "advisoryId": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "currentVersion": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "cveId": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "cveNpmscanUrl": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "epss": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "date": {
+           "type": "string"
+          },
+          "percentile": {
+           "type": "number"
+          },
+          "score": {
+           "type": "number"
+          }
+         },
+         "required": [
+          "score",
+          "percentile",
+          "date"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "findingType": {
+       "enum": [
+        "malware",
+        "vulnerability",
+        "supply-chain",
+        "install-script"
+       ],
+       "type": "string"
+      },
+      "fixedVersion": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "kev": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "dateAdded": {
+           "type": "string"
+          },
+          "dueDate": {
+           "type": "string"
+          },
+          "knownRansomwareCampaignUse": {
+           "type": "string"
+          },
+          "requiredAction": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "dateAdded",
+          "dueDate",
+          "knownRansomwareCampaignUse",
+          "requiredAction"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "npmscanUrl": {
+       "type": "string"
+      },
+      "packageName": {
+       "type": "string"
+      },
+      "rank": {
+       "type": "number"
+      },
+      "reason": {
+       "type": "string"
+      },
+      "score": {
+       "type": "number"
+      },
+      "severity": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "tier": {
+       "enum": [
+        "remove-now",
+        "patch-now",
+        "patch-soon",
+        "scheduled",
+        "monitor"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "rank",
+      "packageName",
+      "cveId",
+      "advisoryId",
+      "currentVersion",
+      "fixedVersion",
+      "severity",
+      "kev",
+      "epss",
+      "score",
+      "tier",
+      "findingType",
+      "reason",
+      "npmscanUrl",
+      "cveNpmscanUrl"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "summary": {
+    "additionalProperties": false,
+    "properties": {
+     "kevListedCount": {
+      "type": "number"
+     },
+     "monitor": {
+      "type": "number"
+     },
+     "patchNow": {
+      "type": "number"
+     },
+     "patchSoon": {
+      "type": "number"
+     },
+     "removeNow": {
+      "type": "number"
+     },
+     "scheduled": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "removeNow",
+     "patchNow",
+     "patchSoon",
+     "scheduled",
+     "monitor",
+     "kevListedCount"
+    ],
+    "type": "object"
+   },
+   "totalFindings": {
+    "type": "number"
+   },
+   "uniqueCveCount": {
+    "type": "number"
+   }
+  },
+  "required": [
+   "totalFindings",
+   "uniqueCveCount",
+   "summary",
+   "ranked",
+   "malwareCheckFailedAdvisoryIds"
+  ],
+  "type": "object"
+ },
+ "title": "Rank a batch of flagged vulnerabilities by what to fix first"
+}

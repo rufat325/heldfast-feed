@@ -1,0 +1,441 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Sample terrain elevation at evenly spaced points along a route (a polyline of 2\u20131,000 vertices) and summarize it. Returns total distance, cumulative ascent and descent, start, end, minimum, and maximum elevation, and the steepest climb and descent grades, plus the per-sample profile with each sample's dataset unless include_samples is false. Ascent and descent are summed between samples, so they depend on the sample spacing reported in the result: denser sampling captures more small climbs, down to the source's resolution. Over open water, Mapzen samples are sea-floor depths. Each USGS 3DEP sample is a separate upstream request, so up to 250 samples take roughly 10\u201330 seconds.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "include_samples": {
+    "default": true,
+    "description": "Return the per-sample profile (default true). false omits samples and the sample table; the summary, spacing, coverage counts, datasets, notices, and attribution are unchanged, still computed from every sample.",
+    "type": "boolean"
+   },
+   "path": {
+    "description": "Route vertices in travel order, 2\u20131,000 {lat, lon} objects in decimal degrees (WGS84). Consecutive duplicate vertices are ignored.",
+    "items": {
+     "description": "A point as {lat, lon} in decimal degrees (WGS84).",
+     "properties": {
+      "lat": {
+       "description": "Latitude in decimal degrees (WGS84), -90 to 90.",
+       "maximum": 90,
+       "minimum": -90,
+       "type": "number"
+      },
+      "lon": {
+       "description": "Longitude in decimal degrees (WGS84), -180 to 180.",
+       "maximum": 180,
+       "minimum": -180,
+       "type": "number"
+      }
+     },
+     "required": [
+      "lat",
+      "lon"
+     ],
+     "type": "object"
+    },
+    "maxItems": 1000,
+    "minItems": 2,
+    "type": "array"
+   },
+   "samples": {
+    "default": 100,
+    "description": "Number of evenly spaced samples along the route, endpoints included (2\u2013250, default 100). More samples catch more relief and take longer; spacing finer than the source resolution adds no detail. For a large count where only the summary matters, set include_samples to false.",
+    "maximum": 250,
+    "minimum": 2,
+    "type": "integer"
+   },
+   "source": {
+    "default": "auto",
+    "description": "Elevation source: auto (default) uses USGS 3DEP where it has data and Open Topo Data (SRTM, with Mapzen terrain tiles where SRTM has no data) for the rest; usgs_3dep uses 3DEP only; opentopodata uses Open Topo Data only. Case is ignored and spaces or hyphens read as underscores, so USGS-3DEP and open topo data are accepted; 3dep, usgs, and epqs are also aliases for usgs_3dep.",
+    "enum": [
+     "auto",
+     "usgs_3dep",
+     "opentopodata"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "path"
+  ],
+  "type": "object"
+ },
+ "name": "elevation_get_profile",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "summary",
+     "sample_interval_m",
+     "vertices",
+     "samples_with_data",
+     "missing_samples",
+     "datasets_used",
+     "source_mode",
+     "attribution"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "attribution": {
+    "description": "Sources to credit for the returned values, one line per dataset that answered.",
+    "type": "string"
+   },
+   "datasets_used": {
+    "additionalProperties": false,
+    "description": "Number of values each dataset answered.",
+    "properties": {
+     "mapzen": {
+      "description": "Values answered by Mapzen terrain tiles via Open Topo Data.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "srtm30m": {
+      "description": "Values answered by SRTM via Open Topo Data.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "usgs_3dep": {
+      "description": "Values answered by USGS 3DEP.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "usgs_3dep",
+     "srtm30m",
+     "mapzen"
+    ],
+    "type": "object"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `degenerate_path`: After dropping consecutive duplicate vertices, fewer than 2 vertices remain, or the route is under 1 m long. `no_coverage`: No sample along the route returned an elevation. `usgs_unavailable`: USGS 3DEP failed: a server error, rate limit, network error, or timeout that outlasted the retries (retryable), or a client error or unexpected status that retrying cannot fix (not retryable). `opentopodata_unavailable`: Open Topo Data failed: a server error, network error, timeout, or unreadable response that outlasted the retries (retryable), or an unexpected status that retrying cannot fix (not retryable). `opentopodata_rate_limited`: Open Topo Data kept answering HTTP 429 through the retries, or asked for a wait over 8 s. `opentopodata_daily_limit`: Only on the public Open Topo Data instance: this server has sent it 1,000 requests in the trailing 24 hours, so no request was sent. `opentopodata_config_rejected`: The Open Topo Data instance answered 401, 403, or 404, a redirect from a self-hosted instance, a 400 naming a dataset it lacks or a location limit below 100, or a 200 naming a dataset this server did not request. `sampling_deadline_exceeded`: The call's 45 s sampling budget ran out (a retry deadline, or a wait in either provider's request queue), or the USGS 3DEP lookups other calls had queued, plus this call's, would not drain within the calls' budgets, so it sent none and data.retryAfter gives the seconds until the queued lookups drain. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "degenerate_path",
+         "no_coverage",
+         "usgs_unavailable",
+         "opentopodata_unavailable",
+         "opentopodata_rate_limited",
+         "opentopodata_daily_limit",
+         "opentopodata_config_rejected",
+         "sampling_deadline_exceeded"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "missing_samples": {
+    "description": "Samples no queried dataset answered.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "notice": {
+    "description": "Guidance on samples without data, routes crossing the USGS 3DEP coverage edge, Mapzen sea-floor values, and sample spacing against the source resolution.",
+    "type": "string"
+   },
+   "resolution_m_range": {
+    "additionalProperties": false,
+    "description": "Range of source resolutions over values that report one; absent when none does (all Mapzen).",
+    "properties": {
+     "max_m": {
+      "description": "Coarsest source resolution in meters.",
+      "type": "number"
+     },
+     "min_m": {
+      "description": "Finest source resolution in meters.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "min_m",
+     "max_m"
+    ],
+    "type": "object"
+   },
+   "sample_interval_m": {
+    "description": "Distance between consecutive samples, meters: route length / (samples \u2212 1).",
+    "type": "number"
+   },
+   "samples": {
+    "description": "Every sample in route order, endpoints included. Absent when include_samples is false.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One sample along the route, in route order.",
+     "properties": {
+      "dataset": {
+       "description": "Dataset that answered this sample. Absent when no dataset had data.",
+       "enum": [
+        "usgs_3dep",
+        "srtm30m",
+        "mapzen"
+       ],
+       "type": "string"
+      },
+      "distance_m": {
+       "description": "Cumulative distance along the route from the first vertex, meters.",
+       "type": "number"
+      },
+      "elevation_m": {
+       "description": "Terrain elevation in meters. Absent when no queried dataset had data.",
+       "type": "number"
+      },
+      "grade_pct": {
+       "description": "Grade in percent from the previous sample with data to this one (negative downhill). Absent on the first sample with data and on samples without data.",
+       "type": "number"
+      },
+      "lat": {
+       "description": "Sample latitude, decimal degrees.",
+       "type": "number"
+      },
+      "lon": {
+       "description": "Sample longitude, decimal degrees.",
+       "type": "number"
+      },
+      "resolution_m": {
+       "description": "Approximate ground spacing of the answering raster, meters. Absent without data and for mapzen.",
+       "type": "number"
+      }
+     },
+     "required": [
+      "distance_m",
+      "lat",
+      "lon"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "samples_with_data": {
+    "description": "Samples with an elevation.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "source_mode": {
+    "description": "The source the call used (auto unless the caller chose one).",
+    "enum": [
+     "auto",
+     "usgs_3dep",
+     "opentopodata"
+    ],
+    "type": "string"
+   },
+   "summary": {
+    "additionalProperties": false,
+    "description": "Route statistics over the samples with data, bridging samples without data.",
+    "properties": {
+     "ascent_ft": {
+      "description": "Cumulative climb, international feet.",
+      "type": "number"
+     },
+     "ascent_m": {
+      "description": "Cumulative climb between samples with data, meters.",
+      "type": "number"
+     },
+     "descent_ft": {
+      "description": "Cumulative drop, international feet, reported positive.",
+      "type": "number"
+     },
+     "descent_m": {
+      "description": "Cumulative drop between samples with data, meters, reported positive.",
+      "type": "number"
+     },
+     "end_elevation_m": {
+      "description": "Elevation of the last sample with data, meters.",
+      "type": "number"
+     },
+     "highest_point": {
+      "additionalProperties": false,
+      "description": "The highest sample (first occurrence on ties).",
+      "properties": {
+       "distance_m": {
+        "description": "Distance along the route from the first vertex, meters.",
+        "type": "number"
+       },
+       "elevation_m": {
+        "description": "Elevation in meters.",
+        "type": "number"
+       },
+       "lat": {
+        "description": "Latitude, decimal degrees.",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude, decimal degrees.",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon",
+       "distance_m",
+       "elevation_m"
+      ],
+      "type": "object"
+     },
+     "lowest_point": {
+      "additionalProperties": false,
+      "description": "The lowest sample (first occurrence on ties).",
+      "properties": {
+       "distance_m": {
+        "description": "Distance along the route from the first vertex, meters.",
+        "type": "number"
+       },
+       "elevation_m": {
+        "description": "Elevation in meters.",
+        "type": "number"
+       },
+       "lat": {
+        "description": "Latitude, decimal degrees.",
+        "type": "number"
+       },
+       "lon": {
+        "description": "Longitude, decimal degrees.",
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon",
+       "distance_m",
+       "elevation_m"
+      ],
+      "type": "object"
+     },
+     "max_elevation_ft": {
+      "description": "Highest sampled elevation, international feet.",
+      "type": "number"
+     },
+     "max_elevation_m": {
+      "description": "Highest sampled elevation, meters.",
+      "type": "number"
+     },
+     "max_grade_distance_m": {
+      "description": "Distance along the route of the sample max_grade_pct leads to (first on ties), meters; the grade runs from the previous sample with data. Present with max_grade_pct.",
+      "type": "number"
+     },
+     "max_grade_pct": {
+      "description": "Largest grade in percent: the steepest climb, or the gentlest descent (negative) on a route that only descends. Absent with fewer than 2 samples with data.",
+      "type": "number"
+     },
+     "min_elevation_ft": {
+      "description": "Lowest sampled elevation, international feet.",
+      "type": "number"
+     },
+     "min_elevation_m": {
+      "description": "Lowest sampled elevation, meters.",
+      "type": "number"
+     },
+     "min_grade_distance_m": {
+      "description": "Distance along the route of the sample min_grade_pct leads to (first on ties), meters; the grade runs from the previous sample with data. Present with min_grade_pct.",
+      "type": "number"
+     },
+     "min_grade_pct": {
+      "description": "Smallest grade in percent: the steepest descent (negative), or the gentlest climb on a route that only climbs. Absent with fewer than 2 samples with data.",
+      "type": "number"
+     },
+     "net_change_m": {
+      "description": "End minus start elevation, meters.",
+      "type": "number"
+     },
+     "start_elevation_m": {
+      "description": "Elevation of the first sample with data, meters.",
+      "type": "number"
+     },
+     "total_distance_m": {
+      "description": "Route length along its great-circle segments, meters.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "total_distance_m",
+     "start_elevation_m",
+     "end_elevation_m",
+     "net_change_m",
+     "ascent_m",
+     "descent_m",
+     "ascent_ft",
+     "descent_ft",
+     "min_elevation_m",
+     "max_elevation_m",
+     "min_elevation_ft",
+     "max_elevation_ft",
+     "highest_point",
+     "lowest_point"
+    ],
+    "type": "object"
+   },
+   "vertices": {
+    "description": "Route vertices after dropping consecutive duplicates.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Get Route Elevation Profile"
+}

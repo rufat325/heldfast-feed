@@ -1,0 +1,721 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Find companies across the Austrian Firmenbuch and the German Handelsregister -\n        START HERE for any company lookup. Read-only.\n\n        Parameters:\n        - filters (optional): every field optional, AND-combined. Shared core (both\n          countries): name (substring), query (MEANING-based hybrid search over the\n          registered purpose - both countries), status (active|inactive|all, default all),\n          legal_form, bundesland, city, postal_code (prefix; AT PLZ 4-digit, DE 5-digit),\n          near {place | postal_code, radius_km} (radius search, matches from EVERY queried\n          country within the radius - works across the border), nace_section (A-U; OENACE\n          == WZ == NACE Rev. 2, so one industry code filters both countries), gegenstand\n          (literal substring over the registered activity text), manager_name (person\n          search), company_ids (prefixed watchlist, e.g. [\"AT:123456a\",\n          \"DE:D2601_HRB135076\"], max 100). AT-only today (see describe_fields\n          capabilities): nace_division/group, size_gkl, bilanzsumme/revenue/equity_ratio/\n          employees ranges, growth_profile, has_guv(_latest), last_filing_year_min,\n          founded_year_min/max, gf_age_min, event_signal/since/until. DE-only:\n          registergericht, capital_min/max (Stammkapital). Country aliases\n          (geschaeftszweig, oenace_*, wz_section, fnrs, stammkapital_*) are accepted.\n        - sort (optional): {field, descending}. AT fields: bilanzsumme (default), revenue,\n          equity_ratio, employees, last_filing_year, revenue_growth_1y/3y/5y, distance.\n          DE fields: name, register_nummer, capital. A country that cannot sort by the\n          requested field returns its default order (reported in notices).\n        - page (default 1), page_size (default 25).\n        - after (optional): KEYSET paging for bulk extraction - single country only\n          (cursors are per register). Pass \"\" to start, then the country's next_after\n          from per_country.\n        - exact_count (optional, default false): force exact totals (costs a full scan).\n        - country (optional, default \"all\"): \"AT\" | \"DE\" | \"all\".\n\n        Returns {countries, total: {AT, DE, combined}, results, per_country, notices}.\n        ``results`` are compact cards, each with ``country`` and the prefixed\n        ``company_id``; with country=\"all\" the list is AT block then DE block - each\n        country keeps its own ranking (no fake interleave). ``per_country`` carries each\n        register's own envelope (exact totals or lower bounds, applied_filters,\n        relaxations on zero hits, query_mode, next_after). A filter one country does not\n        support excludes that country and says so in ``notices`` - it is never silently\n        dropped; an unreachable backend appears in ``countries_unavailable`` instead of\n        failing the call. Never report a German company's financials as zero - DE\n        financial data is not covered yet (see get_coverage).\n\n        For one company's full profile use get_company_details; for a downloadable list\n        use export_companies_csv; for dataset completeness use get_coverage.\n        ",
+ "inputSchema": {
+  "$defs": {
+   "NearFilter": {
+    "description": "Radius anchor: EXACTLY ONE of ``place`` (town name) or ``postal_code``.\nAT postal codes are 4 digits, DE 5 digits - in a cross-country query the postal-code\nanchor therefore pins the anchor country, but matches still come from every queried\ncountry within the radius.",
+    "properties": {
+     "place": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Place"
+     },
+     "postal_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Postal Code"
+     },
+     "radius_km": {
+      "default": 25.0,
+      "title": "Radius Km",
+      "type": "number"
+     }
+    },
+    "title": "NearFilter",
+    "type": "object"
+   },
+   "Sort": {
+    "description": "Sort request; fields are validated per country (see capabilities.SORT_FIELDS).",
+    "properties": {
+     "descending": {
+      "default": true,
+      "title": "Descending",
+      "type": "boolean"
+     },
+     "field": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Field"
+     }
+    },
+    "title": "Sort",
+    "type": "object"
+   },
+   "UnifiedSearchFilters": {
+    "description": "Every field optional, AND-combined. A filter a country does not support excludes\nthat country from a country=\"all\" fan-out (with an explicit notice); on an explicit\nsingle-country query it is rejected with the capability notice instead.",
+    "properties": {
+     "bilanzsumme_max": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Bilanzsumme Max"
+     },
+     "bilanzsumme_min": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Bilanzsumme Min"
+     },
+     "bundesland": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Bundesland"
+     },
+     "capital_max": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Capital Max"
+     },
+     "capital_min": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Capital Min"
+     },
+     "city": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "City"
+     },
+     "company_ids": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Company Ids"
+     },
+     "employees_max": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Employees Max"
+     },
+     "employees_min": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Employees Min"
+     },
+     "equity_ratio_max": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Equity Ratio Max"
+     },
+     "equity_ratio_min": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Equity Ratio Min"
+     },
+     "event_signal": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Event Signal"
+     },
+     "event_since": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Event Since"
+     },
+     "event_until": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Event Until"
+     },
+     "fnrs": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Fnrs"
+     },
+     "founded_year_max": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Founded Year Max"
+     },
+     "founded_year_min": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Founded Year Min"
+     },
+     "gegenstand": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Gegenstand"
+     },
+     "geschaeftszweig": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Geschaeftszweig"
+     },
+     "gf_age_min": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Gf Age Min"
+     },
+     "growth_profile": {
+      "anyOf": [
+       {
+        "enum": [
+         "shrinking",
+         "stable",
+         "growing",
+         "fast_growing"
+        ],
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Growth Profile"
+     },
+     "has_guv": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Has Guv"
+     },
+     "has_guv_latest": {
+      "anyOf": [
+       {
+        "type": "boolean"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Has Guv Latest"
+     },
+     "last_filing_year_min": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Last Filing Year Min"
+     },
+     "legal_form": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Legal Form"
+     },
+     "manager_name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Manager Name"
+     },
+     "nace_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Nace Class"
+     },
+     "nace_division": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Nace Division"
+     },
+     "nace_group": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Nace Group"
+     },
+     "nace_section": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Nace Section"
+     },
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Name"
+     },
+     "near": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/NearFilter"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null
+     },
+     "oenace_class": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Oenace Class"
+     },
+     "oenace_division": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Oenace Division"
+     },
+     "oenace_group": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Oenace Group"
+     },
+     "oenace_section": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Oenace Section"
+     },
+     "postal_code": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Postal Code"
+     },
+     "query": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Query"
+     },
+     "registergericht": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Registergericht"
+     },
+     "revenue_max": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Revenue Max"
+     },
+     "revenue_min": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Revenue Min"
+     },
+     "size_gkl": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Size Gkl"
+     },
+     "stammkapital_max": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Stammkapital Max"
+     },
+     "stammkapital_min": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Stammkapital Min"
+     },
+     "status": {
+      "default": "all",
+      "enum": [
+       "active",
+       "inactive",
+       "all"
+      ],
+      "title": "Status",
+      "type": "string"
+     },
+     "wz_confidence_min": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Wz Confidence Min"
+     },
+     "wz_section": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "title": "Wz Section"
+     }
+    },
+    "title": "UnifiedSearchFilters",
+    "type": "object"
+   }
+  },
+  "properties": {
+   "after": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "After"
+   },
+   "country": {
+    "default": "all",
+    "title": "Country",
+    "type": "string"
+   },
+   "exact_count": {
+    "default": false,
+    "title": "Exact Count",
+    "type": "boolean"
+   },
+   "filters": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/UnifiedSearchFilters"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "page": {
+    "default": 1,
+    "title": "Page",
+    "type": "integer"
+   },
+   "page_size": {
+    "default": 25,
+    "title": "Page Size",
+    "type": "integer"
+   },
+   "sort": {
+    "anyOf": [
+     {
+      "$ref": "#/$defs/Sort"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   }
+  },
+  "title": "search_companiesArguments",
+  "type": "object"
+ },
+ "name": "search_companies",
+ "outputSchema": {
+  "additionalProperties": true,
+  "title": "search_companiesDictOutput",
+  "type": "object"
+ },
+ "title": "Search companies (AT + DE)"
+}

@@ -1,0 +1,632 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Given a package and a current/target version, tells you whether that specific upgrade is a safe patch/minor bump or a likely-breaking major bump, before you actually run npm install. Natural follow-up to prioritize_remediation: pass its `packageName` + `currentVersion` + `fixedVersion` straight in to check whether the suggested fix is a drop-in patch or something that needs a review pass. Classifies the jump by semver (major/minor/patch/prerelease), treats a minor bump between two pre-1.0 (0.x) versions as breaking-risk per semver's own \"the API isn't stable yet\" convention, and flags skipping over multiple major versions in one jump (e.g. 2.x -> 5.x) as needing a per-major changelog review rather than just a diff against the final target. Beyond semver, it also checks the registry for real signals the version number alone won't tell you: whether the target version is marked deprecated, whether it introduces a preinstall/install/postinstall script the current version didn't have (`installScriptKeysIntroduced` also lists a new `prepare`, which never runs on a registry install and so doesn't raise the tier), whether it tightens its engines.node requirement, and whether it is itself a prerelease. Finally it batch-checks both versions against OSV.dev and reports vulnerabilityDelta (introduced/fixed/still-vulnerable/still-clean) \u2014 catching the case where a suggested \"fix\" version doesn't actually clear every open CVE. Combines all of this into one riskTier (safe/low-risk/review-recommended/breaking-change-likely/unknown/do-not-upgrade) with a reasons list explaining exactly which signals drove it. `do-not-upgrade` means the target is known malware, or was pulled from npm while OSV still carries advisories for it (the target is still checked against OSV when the registry no longer lists it). This does NOT read the package's changelog/release notes or scan the target tarball's source diff for actual breaking API usage \u2014 it's a fast, deterministic pre-check, not a substitute for reading the release notes on a flagged major bump. For simulating more than one upgrade at once \u2014 e.g. every \"patch-now\" finding prioritize_remediation just ranked \u2014 pass `packages: [{packageName, currentVersion, targetVersion?}, ...]` (1-100 items) instead of `packageName`/`currentVersion`/`targetVersion`, not both. Registry fetches are deduped/parallelized and all OSV checks for the whole batch run as one call, so this is not the same cost as N single-item calls. A package that can't be resolved at all (typo, unpublished, registry error) shows up as its own `results` entry with `fetchError` set instead of failing the whole batch.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "currentVersion": {
+    "description": "Currently installed version \u2014 an exact version (e.g. \"4.17.20\"), a semver range (e.g. \"^4.17.0\"), or a dist-tag. Required when `packageName` is used.",
+    "maxLength": 128,
+    "minLength": 1,
+    "type": "string"
+   },
+   "packageName": {
+    "description": "Exact npm package name, e.g. \"lodash\" or \"@scope/name\". Use this (with currentVersion) OR `packages`, not both.",
+    "maxLength": 214,
+    "minLength": 1,
+    "type": "string"
+   },
+   "packages": {
+    "description": "Batch of upgrades to simulate (1-100 items), each mirroring the single-item packageName/currentVersion/targetVersion fields. Use this OR packageName/currentVersion, not both. Natural pairing with prioritize_remediation: pass its ranked findings straight in as one call instead of one simulate_dependency_upgrade call per finding.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "currentVersion": {
+       "description": "Currently installed version \u2014 an exact version, a semver range, or a dist-tag",
+       "maxLength": 128,
+       "minLength": 1,
+       "type": "string"
+      },
+      "packageName": {
+       "description": "Exact npm package name, e.g. \"lodash\" or \"@scope/name\"",
+       "maxLength": 214,
+       "minLength": 1,
+       "type": "string"
+      },
+      "targetVersion": {
+       "description": "Version to simulate upgrading to \u2014 exact version, range, or dist-tag. Omit to use the registry's \"latest\" dist-tag.",
+       "maxLength": 128,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "required": [
+      "packageName",
+      "currentVersion"
+     ],
+     "type": "object"
+    },
+    "maxItems": 100,
+    "minItems": 1,
+    "type": "array"
+   },
+   "targetVersion": {
+    "description": "Version to simulate upgrading to \u2014 exact version, range, or dist-tag (e.g. the fixedVersion a prioritize_remediation finding named). Omit to use the registry's \"latest\" dist-tag. Only applies to the single-item `packageName` form.",
+    "maxLength": 128,
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "simulate_dependency_upgrade",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "batchSummary": {
+    "additionalProperties": false,
+    "properties": {
+     "fetchFailedCount": {
+      "type": "number"
+     },
+     "riskTierCounts": {
+      "additionalProperties": false,
+      "properties": {
+       "breakingChangeLikely": {
+        "type": "number"
+       },
+       "doNotUpgrade": {
+        "type": "number"
+       },
+       "lowRisk": {
+        "type": "number"
+       },
+       "reviewRecommended": {
+        "type": "number"
+       },
+       "safe": {
+        "type": "number"
+       },
+       "unknown": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "safe",
+       "lowRisk",
+       "reviewRecommended",
+       "breakingChangeLikely",
+       "unknown",
+       "doNotUpgrade"
+      ],
+      "type": "object"
+     },
+     "totalRequested": {
+      "type": "number"
+     },
+     "vulnQueryFailedCount": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "totalRequested",
+     "fetchFailedCount",
+     "riskTierCounts",
+     "vulnQueryFailedCount"
+    ],
+    "type": "object"
+   },
+   "currentIsVulnerable": {
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "currentVersionNote": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "direction": {
+    "enum": [
+     "upgrade",
+     "downgrade",
+     "same",
+     "unresolved"
+    ],
+    "type": "string"
+   },
+   "engineChange": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "after": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "before": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "tightened": {
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "before",
+       "after",
+       "tightened"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "installScriptIntroduced": {
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "installScriptKeysIntroduced": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "isBreakingBySemver": {
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "majorVersionsSkipped": {
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "npmscanUrl": {
+    "type": "string"
+   },
+   "packageName": {
+    "type": "string"
+   },
+   "reasons": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "requestedCurrentVersion": {
+    "type": "string"
+   },
+   "requestedTargetVersion": {
+    "type": "string"
+   },
+   "resolvedCurrentVersion": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "resolvedTargetVersion": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "results": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "currentIsVulnerable": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "currentVersionNote": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "direction": {
+       "enum": [
+        "upgrade",
+        "downgrade",
+        "same",
+        "unresolved"
+       ],
+       "type": "string"
+      },
+      "engineChange": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "after": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "before": {
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "tightened": {
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "before",
+          "after",
+          "tightened"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "fetchError": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "installScriptIntroduced": {
+       "description": "A preinstall/install/postinstall script is new in the target (prepare excluded: it never runs on a registry install).",
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "installScriptKeysIntroduced": {
+       "anyOf": [
+        {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Every lifecycle key new in the target, prepare included."
+      },
+      "isBreakingBySemver": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "majorVersionsSkipped": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "npmscanUrl": {
+       "type": "string"
+      },
+      "packageName": {
+       "type": "string"
+      },
+      "reasons": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "requestedCurrentVersion": {
+       "type": "string"
+      },
+      "requestedTargetVersion": {
+       "type": "string"
+      },
+      "resolvedCurrentVersion": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "resolvedTargetVersion": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "riskTier": {
+       "enum": [
+        "safe",
+        "low-risk",
+        "review-recommended",
+        "breaking-change-likely",
+        "unknown",
+        "do-not-upgrade"
+       ],
+       "type": "string"
+      },
+      "semverBump": {
+       "anyOf": [
+        {
+         "enum": [
+          "major",
+          "premajor",
+          "minor",
+          "preminor",
+          "patch",
+          "prepatch",
+          "prerelease"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "targetDeprecated": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "targetIsPrerelease": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "targetIsVulnerable": {
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "targetVersionNote": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "targetVulnerabilities": {
+       "items": {
+        "$ref": "#/properties/targetVulnerabilities/items"
+       },
+       "type": "array"
+      },
+      "verdict": {
+       "type": "string"
+      },
+      "vulnerabilityDelta": {
+       "anyOf": [
+        {
+         "enum": [
+          "introduced",
+          "fixed",
+          "still-vulnerable",
+          "still-clean",
+          "unknown"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "zeroMajorNote": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "packageName",
+      "npmscanUrl",
+      "requestedCurrentVersion",
+      "requestedTargetVersion",
+      "resolvedCurrentVersion",
+      "resolvedTargetVersion",
+      "currentVersionNote",
+      "targetVersionNote",
+      "direction",
+      "semverBump",
+      "isBreakingBySemver",
+      "majorVersionsSkipped",
+      "zeroMajorNote",
+      "targetIsPrerelease",
+      "targetDeprecated",
+      "installScriptIntroduced",
+      "installScriptKeysIntroduced",
+      "engineChange",
+      "currentIsVulnerable",
+      "targetIsVulnerable",
+      "vulnerabilityDelta",
+      "targetVulnerabilities",
+      "riskTier",
+      "reasons",
+      "verdict",
+      "fetchError"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "riskTier": {
+    "enum": [
+     "safe",
+     "low-risk",
+     "review-recommended",
+     "breaking-change-likely",
+     "unknown",
+     "do-not-upgrade"
+    ],
+    "type": "string"
+   },
+   "semverBump": {
+    "anyOf": [
+     {
+      "enum": [
+       "major",
+       "premajor",
+       "minor",
+       "preminor",
+       "patch",
+       "prepatch",
+       "prerelease"
+      ],
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "targetDeprecated": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "targetIsPrerelease": {
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "targetIsVulnerable": {
+    "type": [
+     "boolean",
+     "null"
+    ]
+   },
+   "targetVersionNote": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "targetVulnerabilities": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "aliases": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "fixedVersion": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "id": {
+       "type": "string"
+      },
+      "isMalware": {
+       "description": "Confirmed-malicious package (MAL-* id/alias or CWE-506), not an ordinary vulnerability: remove it, do not patch.",
+       "type": "boolean"
+      },
+      "npmscanUrl": {
+       "type": "string"
+      },
+      "publishedAt": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "severity": {
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "summary": {
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "id",
+      "summary",
+      "severity",
+      "aliases",
+      "publishedAt",
+      "fixedVersion",
+      "isMalware",
+      "npmscanUrl"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "verdict": {
+    "type": "string"
+   },
+   "vulnerabilityDelta": {
+    "anyOf": [
+     {
+      "enum": [
+       "introduced",
+       "fixed",
+       "still-vulnerable",
+       "still-clean",
+       "unknown"
+      ],
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "zeroMajorNote": {
+    "type": [
+     "string",
+     "null"
+    ]
+   }
+  },
+  "type": "object"
+ },
+ "title": "Simulate an npm dependency upgrade"
+}

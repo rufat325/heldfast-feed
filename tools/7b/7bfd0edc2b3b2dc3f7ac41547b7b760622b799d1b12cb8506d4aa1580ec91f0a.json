@@ -1,0 +1,926 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "permission": "none",
+  "readOnlyHint": true
+ },
+ "description": "Get token positions for a wallet address: share balances + cost-basis ledger (totalSpent/totalReceived in collateral smallest units, per-outcome cost basis, sell-realized P&L). Pass include=\"valuation\" to add per-position currentPrices (0-1 scale) and markValue (collateral smallest units) marked at the canonical indexer price \u2014 may lag the chain. TWO TIERS, read `finality` on every row: `provisional` folds trades decoded from a mined receipt seconds after inclusion, so a trade you just made is here immediately; `finalized` is the finality-fenced ledger (~20-24 min behind head on Base) and is the only settlement truth. Provisional rows move share balances only \u2014 their cost-basis columns and the response `aggregates` stay finalized-tier.",
+ "inputSchema": {
+  "properties": {
+   "chainId": {
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "cursor": {
+    "maxLength": 2048,
+    "type": "string"
+   },
+   "include": {
+    "description": "Set to \"valuation\" to add currentPrices (0-1) and markValue per position.",
+    "enum": [
+     "valuation"
+    ],
+    "type": "string"
+   },
+   "limit": {
+    "default": 100,
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "marketAddress": {
+    "type": "string"
+   },
+   "walletAddress": {
+    "type": "string"
+   }
+  },
+  "required": [
+   "walletAddress"
+  ],
+  "type": "object"
+ },
+ "name": "problee_get_positions",
+ "outputSchema": {
+  "$defs": {
+   "ExactTradingRatio": {
+    "additionalProperties": false,
+    "properties": {
+     "denominator": {
+      "maxLength": 4096,
+      "pattern": "^[1-9][0-9]*$",
+      "type": "string"
+     },
+     "numerator": {
+      "maxLength": 4096,
+      "pattern": "^-?(0|[1-9][0-9]*)$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "numerator",
+     "denominator"
+    ],
+    "type": "object"
+   },
+   "IndexerReadMetadata": {
+    "additionalProperties": false,
+    "properties": {
+     "degradedReason": {
+      "anyOf": [
+       {
+        "const": "INDEXER_UNHEALTHY",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "finalizedThroughBlock": {
+      "anyOf": [
+       {
+        "pattern": "^\\d+$",
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "lastCheckedAt": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/IsoTimestamp"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "minedTierAvailable": {
+      "type": "boolean"
+     },
+     "source": {
+      "const": "indexer",
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "ok",
+       "degraded"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "source",
+     "status",
+     "lastCheckedAt",
+     "degradedReason"
+    ],
+    "type": "object"
+   },
+   "IsoTimestamp": {
+    "format": "date-time",
+    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+    "type": "string"
+   },
+   "PositionAggregates": {
+    "additionalProperties": false,
+    "properties": {
+     "complete": {
+      "const": true,
+      "type": "boolean"
+     },
+     "monetaryAttributionComplete": {
+      "type": "boolean"
+     },
+     "monetaryByCollateral": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "basisMethod": {
+         "anyOf": [
+          {
+           "const": "inventory-weighted-average-v1",
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "chainId": {
+         "exclusiveMinimum": 0,
+         "maximum": 9007199254740991,
+         "type": "integer"
+        },
+        "collateralDecimals": {
+         "maximum": 255,
+         "minimum": 0,
+         "type": "integer"
+        },
+        "collateralToken": {
+         "pattern": "^0x[a-fA-F0-9]{40}$",
+         "type": "string"
+        },
+        "positionCount": {
+         "maximum": 9007199254740991,
+         "minimum": 0,
+         "type": "integer"
+        },
+        "realizedPnlBaseUnits": {
+         "type": "null"
+        },
+        "totalReceivedBaseUnits": {
+         "$ref": "#/$defs/SignedWeiString"
+        },
+        "totalSpentBaseUnits": {
+         "$ref": "#/$defs/SignedWeiString"
+        }
+       },
+       "required": [
+        "chainId",
+        "collateralToken",
+        "collateralDecimals",
+        "positionCount",
+        "totalSpentBaseUnits",
+        "totalReceivedBaseUnits",
+        "realizedPnlBaseUnits"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "nominalSharesRaw": {
+      "additionalProperties": false,
+      "properties": {
+       "outcome1": {
+        "$ref": "#/$defs/SignedWeiString"
+       },
+       "outcome2": {
+        "$ref": "#/$defs/SignedWeiString"
+       },
+       "outcome3": {
+        "$ref": "#/$defs/SignedWeiString"
+       },
+       "scope": {
+        "const": "cross_market_nominal",
+        "type": "string"
+       }
+      },
+      "required": [
+       "outcome1",
+       "outcome2",
+       "outcome3",
+       "scope"
+      ],
+      "type": "object"
+     },
+     "source": {
+      "const": "materialized_positions",
+      "type": "string"
+     },
+     "unattributedPositionCount": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "nominalSharesRaw",
+     "monetaryByCollateral",
+     "unattributedPositionCount",
+     "monetaryAttributionComplete",
+     "complete",
+     "source"
+    ],
+    "type": "object"
+   },
+   "PositionValuationItem": {
+    "additionalProperties": false,
+    "properties": {
+     "currentPrices": {
+      "anyOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "outcome1": {
+          "anyOf": [
+           {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "outcome2": {
+          "anyOf": [
+           {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "outcome3": {
+          "anyOf": [
+           {
+            "maximum": 1,
+            "minimum": 0,
+            "type": "number"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         }
+        },
+        "required": [
+         "outcome1",
+         "outcome2"
+        ],
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "markValue": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/WeiString"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "status": {
+      "enum": [
+       "available",
+       "unavailable",
+       "not_applicable"
+      ],
+      "type": "string"
+     },
+     "updatedAt": {
+      "anyOf": [
+       {
+        "$ref": "#/$defs/IsoTimestamp"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "status",
+     "currentPrices",
+     "markValue",
+     "updatedAt"
+    ],
+    "type": "object"
+   },
+   "PositionsResponse": {
+    "additionalProperties": false,
+    "properties": {
+     "aggregates": {
+      "$ref": "#/$defs/PositionAggregates"
+     },
+     "hasMore": {
+      "type": "boolean"
+     },
+     "indexer": {
+      "$ref": "#/$defs/IndexerReadMetadata"
+     },
+     "nextCursor": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "pageSize": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "positions": {
+      "items": {
+       "additionalProperties": {},
+       "properties": {
+        "basisMethod": {
+         "anyOf": [
+          {
+           "const": "inventory-weighted-average-v1",
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "buySharesOutcome1": {
+         "$ref": "#/$defs/WeiString"
+        },
+        "buySharesOutcome2": {
+         "$ref": "#/$defs/WeiString"
+        },
+        "buySharesOutcome3": {
+         "$ref": "#/$defs/WeiString"
+        },
+        "chainId": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "costBasisOutcome1": {
+         "$ref": "#/$defs/WeiString"
+        },
+        "costBasisOutcome2": {
+         "$ref": "#/$defs/WeiString"
+        },
+        "costBasisOutcome3": {
+         "$ref": "#/$defs/WeiString"
+        },
+        "createdAt": {
+         "anyOf": [
+          {
+           "format": "date-time",
+           "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+           "type": "string"
+          },
+          {
+           "format": "date-time",
+           "type": "string"
+          }
+         ]
+        },
+        "explorerUrl": {
+         "format": "uri",
+         "type": "string"
+        },
+        "finality": {
+         "$ref": "#/$defs/TradeFinality"
+        },
+        "id": {
+         "type": "string"
+        },
+        "marketAddress": {
+         "type": "string"
+        },
+        "marketReference": {
+         "pattern": "^mkt_[\\da-f]{8}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{4}-[\\da-f]{12}$",
+         "type": "string"
+        },
+        "outcome1Shares": {
+         "$ref": "#/$defs/WeiString"
+        },
+        "outcome2Shares": {
+         "$ref": "#/$defs/WeiString"
+        },
+        "outcome3Shares": {
+         "$ref": "#/$defs/WeiString"
+        },
+        "outcomes": {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "outcome": {
+            "type": "string"
+           },
+           "shares": {
+            "pattern": "^(?:0|[1-9]\\d*)(?:\\.\\d{1,6})?$",
+            "type": "string"
+           }
+          },
+          "required": [
+           "outcome",
+           "shares"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "realizedPnl": {
+         "anyOf": [
+          {
+           "$ref": "#/$defs/SignedWeiString"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "realizedPnlPm": {
+         "anyOf": [
+          {
+           "pattern": "^-?(?:0|[1-9]\\d*)(?:\\.\\d{1,6})?$",
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "remainingCostBasisOutcome1": {
+         "anyOf": [
+          {
+           "$ref": "#/$defs/WeiString"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "remainingCostBasisOutcome2": {
+         "anyOf": [
+          {
+           "$ref": "#/$defs/WeiString"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "remainingCostBasisOutcome3": {
+         "anyOf": [
+          {
+           "$ref": "#/$defs/WeiString"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "totalReceived": {
+         "$ref": "#/$defs/WeiString"
+        },
+        "totalSpent": {
+         "$ref": "#/$defs/WeiString"
+        },
+        "tradingPerformance": {
+         "anyOf": [
+          {
+           "additionalProperties": false,
+           "properties": {
+            "basis": {
+             "anyOf": [
+              {
+               "$ref": "#/$defs/ExactTradingRatio"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "completeness": {
+             "enum": [
+              "complete",
+              "incomplete"
+             ],
+             "type": "string"
+            },
+            "feesWei": {
+             "anyOf": [
+              {
+               "maxLength": 256,
+               "pattern": "^-?(0|[1-9][0-9]*)$",
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "headlinePrice": {
+             "anyOf": [
+              {
+               "$ref": "#/$defs/ExactTradingRatio"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "markMethod": {
+             "const": "displayed-market-price-v1",
+             "type": "string"
+            },
+            "measurement": {
+             "additionalProperties": false,
+             "properties": {
+              "asOf": {
+               "format": "date-time",
+               "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+               "type": "string"
+              },
+              "sourceRevision": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "asOf",
+              "sourceRevision"
+             ],
+             "type": "object"
+            },
+            "methodVersion": {
+             "const": "committed-pm-trading-account-v2",
+             "type": "string"
+            },
+            "outcomes": {
+             "items": {
+              "additionalProperties": false,
+              "properties": {
+               "averagePrice": {
+                "anyOf": [
+                 {
+                  "$ref": "#/$defs/ExactTradingRatio"
+                 },
+                 {
+                  "type": "null"
+                 }
+                ]
+               },
+               "basis": {
+                "anyOf": [
+                 {
+                  "$ref": "#/$defs/ExactTradingRatio"
+                 },
+                 {
+                  "type": "null"
+                 }
+                ]
+               },
+               "markPrice": {
+                "anyOf": [
+                 {
+                  "$ref": "#/$defs/ExactTradingRatio"
+                 },
+                 {
+                  "type": "null"
+                 }
+                ]
+               },
+               "pnl": {
+                "anyOf": [
+                 {
+                  "$ref": "#/$defs/ExactTradingRatio"
+                 },
+                 {
+                  "type": "null"
+                 }
+                ]
+               },
+               "priceMovement": {
+                "anyOf": [
+                 {
+                  "$ref": "#/$defs/ExactTradingRatio"
+                 },
+                 {
+                  "type": "null"
+                 }
+                ]
+               },
+               "priceObservedAt": {
+                "anyOf": [
+                 {
+                  "format": "date-time",
+                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+                  "type": "string"
+                 },
+                 {
+                  "type": "null"
+                 }
+                ]
+               },
+               "priceSource": {
+                "type": [
+                 "string",
+                 "null"
+                ]
+               },
+               "quantityWei": {
+                "pattern": "^\\d+$",
+                "type": "string"
+               },
+               "side": {
+                "maximum": 2,
+                "minimum": 0,
+                "type": "integer"
+               },
+               "stale": {
+                "type": "boolean"
+               },
+               "state": {
+                "enum": [
+                 "Open",
+                 "Closed",
+                 "Won",
+                 "Lost",
+                 "Void"
+                ],
+                "type": "string"
+               },
+               "value": {
+                "anyOf": [
+                 {
+                  "$ref": "#/$defs/ExactTradingRatio"
+                 },
+                 {
+                  "type": "null"
+                 }
+                ]
+               }
+              },
+              "required": [
+               "side",
+               "quantityWei",
+               "value",
+               "basis",
+               "pnl",
+               "averagePrice",
+               "markPrice",
+               "state",
+               "priceObservedAt",
+               "priceSource",
+               "stale"
+              ],
+              "type": "object"
+             },
+             "type": "array"
+            },
+            "ownershipAligned": {
+             "type": "boolean"
+            },
+            "pnl": {
+             "anyOf": [
+              {
+               "$ref": "#/$defs/ExactTradingRatio"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "realizedPnl": {
+             "anyOf": [
+              {
+               "$ref": "#/$defs/ExactTradingRatio"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "scope": {
+             "const": "committed_trading_market",
+             "type": "string"
+            },
+            "settlementReceivedWei": {
+             "anyOf": [
+              {
+               "maxLength": 256,
+               "pattern": "^-?(0|[1-9][0-9]*)$",
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "state": {
+             "enum": [
+              "Open",
+              "Closed",
+              "Won",
+              "Lost",
+              "Void",
+              "Mixed"
+             ],
+             "type": "string"
+            },
+            "unavailableReasons": {
+             "items": {
+              "type": "string"
+             },
+             "type": "array"
+            },
+            "unit": {
+             "additionalProperties": false,
+             "properties": {
+              "cashValue": {
+               "const": false,
+               "type": "boolean"
+              },
+              "decimals": {
+               "maximum": 9007199254740991,
+               "minimum": 0,
+               "type": "integer"
+              },
+              "symbol": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "symbol",
+              "decimals",
+              "cashValue"
+             ],
+             "type": "object"
+            },
+            "unrealizedPnl": {
+             "anyOf": [
+              {
+               "$ref": "#/$defs/ExactTradingRatio"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "value": {
+             "anyOf": [
+              {
+               "$ref": "#/$defs/ExactTradingRatio"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "volumeWei": {
+             "anyOf": [
+              {
+               "maxLength": 256,
+               "pattern": "^-?(0|[1-9][0-9]*)$",
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            }
+           },
+           "required": [
+            "methodVersion",
+            "markMethod",
+            "unit",
+            "scope",
+            "measurement",
+            "completeness",
+            "unavailableReasons",
+            "value",
+            "basis",
+            "pnl",
+            "realizedPnl",
+            "unrealizedPnl",
+            "volumeWei",
+            "feesWei",
+            "state",
+            "outcomes"
+           ],
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "updatedAt": {
+         "anyOf": [
+          {
+           "format": "date-time",
+           "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$",
+           "type": "string"
+          },
+          {
+           "format": "date-time",
+           "type": "string"
+          }
+         ]
+        },
+        "userId": {
+         "type": "string"
+        },
+        "valuation": {
+         "$ref": "#/$defs/PositionValuationItem"
+        },
+        "valuePm": {
+         "anyOf": [
+          {
+           "pattern": "^(?:0|[1-9]\\d*)(?:\\.\\d{1,6})?$",
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        }
+       },
+       "required": [
+        "marketAddress",
+        "chainId"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "total": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "positions",
+     "total",
+     "pageSize",
+     "hasMore",
+     "nextCursor",
+     "aggregates"
+    ],
+    "type": "object"
+   },
+   "SignedWeiString": {
+    "pattern": "^-?\\d+$",
+    "type": "string"
+   },
+   "TradeFinality": {
+    "enum": [
+     "provisional",
+     "finalized"
+    ],
+    "type": "string"
+   },
+   "WeiString": {
+    "pattern": "^\\d+$",
+    "type": "string"
+   }
+  },
+  "additionalProperties": false,
+  "properties": {
+   "result": {
+    "$ref": "#/$defs/PositionsResponse"
+   }
+  },
+  "required": [
+   "result"
+  ],
+  "type": "object"
+ },
+ "title": "List open positions for a wallet (ledger + optional mark-to-market valuation)"
+}

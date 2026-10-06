@@ -1,0 +1,347 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Validate a mixed batch of medical codes against their source terminologies. Useful for retrospective analysis of legacy databases \u2014 flag codes that no longer exist, surface ICD-10 \u2192 ICD-11 replacements, and grade activity status where the terminology exposes it.\n\nFor each input `{ code, terminology }`, returns:\n- **valid**: whether the code exists in the source terminology.\n- **active**: whether the code is currently active. Null when the source doesn't expose an explicit active/inactive distinction at category level (CID-10, ATC, ICD-11, RxNorm, MeSH all return null today; LOINC returns a real boolean).\n- **title**: the official label/name when available.\n- **replaced_by**: a successor code, populated today only for ICD-10 codes that have a primary ICD-11 mapping in the bundled WHO transition tables.\n- **source**: human-readable provenance of the validation (terminology + release/version).\n- **error**: non-null only when validation couldn't be performed (network error, upstream outage, etc.). `valid: false` + `error: null` means \"code not found\"; `valid: false` + `error: set` means \"couldn't validate\".\n\nTerminology is **required per code** \u2014 auto-detection isn't supported because category codes like \"A00\" exist in both ICD-10 and CID-10. Accepted values: `icd11`, `icd10`, `loinc`, `rxnorm`, `mesh`, `atc`, `cid10`.\n\nHard cap of 50 codes per call; codes are validated in parallel through their respective clients, so total wall time scales with the slowest upstream + its rate limit (worst case ~10 s for a full batch hitting ICD-11).",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "codes": {
+    "description": "List of code+terminology pairs to validate. Hard cap of 50 per call to keep total latency under ~10 s given upstream rate limits.",
+    "items": {
+     "properties": {
+      "code": {
+       "description": "The code to validate (raw, as it appears in your data).",
+       "minLength": 1,
+       "type": "string"
+      },
+      "terminology": {
+       "description": "Which terminology this code belongs to. Required \u2014 auto-detection isn't supported because category-level codes like \"A00\" exist in both ICD-10 and CID-10.",
+       "enum": [
+        "icd11",
+        "icd10",
+        "loinc",
+        "rxnorm",
+        "mesh",
+        "atc",
+        "cid10"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "code",
+      "terminology"
+     ],
+     "type": "object"
+    },
+    "maxItems": 50,
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "required": [
+   "codes"
+  ],
+  "type": "object"
+ },
+ "name": "validate_codes",
+ "outputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "attribution": {
+    "description": "Canonical source URLs of this response (attribution list)",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "error_count": {
+    "description": "How many couldn't be validated due to upstream/network errors.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "invalid_count": {
+    "description": "How many were not found.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "provenance": {
+    "description": "One provenance block per upstream source that contributed to this response (contract v1.1; licenses are never merged; each block carries the origin diagnostics of ITS source)",
+    "items": {
+     "additionalProperties": false,
+     "description": "Bloco de proveni\u00eancia (contrato v1.2): fonte, URL, compet\u00eancia, extra\u00e7\u00e3o, diagn\u00f3stico de origem, cita\u00e7\u00e3o e licen\u00e7a; e, s\u00f3 quando a resposta junta partes de origens ou momentos distintos, de onde veio cada parte",
+     "properties": {
+      "citation": {
+       "description": "Ready-to-use citation/attribution string",
+       "type": "string"
+      },
+      "data_vintage": {
+       "description": "Version/release of the data as exposed by the source; null when not exposed",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "field_sources": {
+       "description": "Present only when the response joins parts from different origins or extraction instants (contract v1.2): for each group of fields, its URL, extraction instant and whether it came from cache. Absent in single-origin responses",
+       "items": {
+        "additionalProperties": false,
+        "description": "Proveni\u00eancia de um grupo de campos da resposta: de onde veio e quando foi extra\u00eddo",
+        "properties": {
+         "data_vintage": {
+          "description": "Vintage/compet\u00eancia da sub-fonte",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "dataset_id": {
+          "description": "Identificador do conjunto da sub-fonte",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "fields": {
+          "description": "Campos do payload atribu\u00eddos a esta sub-fonte",
+          "items": {
+           "type": "string"
+          },
+          "minItems": 1,
+          "type": "array"
+         },
+         "retrieved_at": {
+          "description": "ISO-8601 da extra\u00e7\u00e3o desta sub-fonte na origem",
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "served_from_cache": {
+          "description": "true se esta sub-fonte veio do cache do servidor (retrieved_at \u00e9 o da extra\u00e7\u00e3o original); false se foi buscada nesta chamada; null se o servidor n\u00e3o distingue",
+          "type": [
+           "boolean",
+           "null"
+          ]
+         },
+         "source_url": {
+          "description": "URL can\u00f4nica da sub-fonte que originou estes campos",
+          "type": "string"
+         }
+        },
+        "required": [
+         "fields",
+         "source_url",
+         "dataset_id",
+         "data_vintage",
+         "retrieved_at"
+        ],
+        "type": "object"
+       },
+       "minItems": 1,
+       "type": "array"
+      },
+      "license": {
+       "description": "License / legal regime of the data",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "retrieval": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "anomalies": {
+           "description": "Anomalias superadas at\u00e9 o sucesso, somadas por classe, em ordem fixa; [] se nenhuma",
+           "items": {
+            "additionalProperties": false,
+            "properties": {
+             "count": {
+              "description": "Ocorr\u00eancias desta classe na chamada",
+              "maximum": 9007199254740991,
+              "minimum": 1,
+              "type": "integer"
+             },
+             "kind": {
+              "description": "Classe da anomalia (vocabul\u00e1rio fechado do contrato)",
+              "enum": [
+               "timeout",
+               "network",
+               "http_4xx",
+               "http_5xx",
+               "rate_limited",
+               "malformed_body"
+              ],
+              "type": "string"
+             }
+            },
+            "required": [
+             "kind",
+             "count"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          },
+          "attempts": {
+           "description": "Tentativas somadas, incluindo as repetidas (>= requests)",
+           "maximum": 9007199254740991,
+           "minimum": 1,
+           "type": "integer"
+          },
+          "requests": {
+           "description": "Idas distintas \u00e0 origem que comp\u00f5em esta resposta (fatias, p\u00e1ginas)",
+           "maximum": 9007199254740991,
+           "minimum": 1,
+           "type": "integer"
+          },
+          "unstable": {
+           "description": "true se houve repeti\u00e7\u00e3o (attempts > requests) ou alguma anomalia",
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "requests",
+          "attempts",
+          "anomalies",
+          "unstable"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Origin diagnostics of THIS source in this call (contract v1.1): requests made to the upstream, attempts summed across retries, anomalies worked around (kind + count); unstable=true when any anomaly happened. null when nothing was measured (bundled dataset, or response served entirely from cache)"
+      },
+      "retrieved_at": {
+       "description": "Real instant of the upstream extraction (ISO-8601, UTC). Responses served from cache keep the ORIGINAL fetch instant.",
+       "type": "string"
+      },
+      "source": {
+       "description": "Official upstream source of this data",
+       "type": "string"
+      },
+      "source_url": {
+       "description": "Canonical URL of the source (API base or dataset release)",
+       "type": "string"
+      }
+     },
+     "required": [
+      "source",
+      "source_url",
+      "data_vintage",
+      "retrieved_at",
+      "retrieval",
+      "citation",
+      "license"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "results": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "active": {
+       "description": "Whether the code is currently active. Null when the source terminology doesn't expose an explicit active/inactive distinction at the category level (e.g. CID-10, ATC).",
+       "type": [
+        "boolean",
+        "null"
+       ]
+      },
+      "code": {
+       "description": "The code as submitted.",
+       "type": "string"
+      },
+      "error": {
+       "description": "When the upstream call failed (timeout, server error, feature flag off), this holds the failure message. Distinct from valid=false: valid=false + error=null means \"code not found\"; valid=false + error set means \"couldn't validate\".",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "replaced_by": {
+       "description": "When the code has been superseded by another code, this holds the replacement. Populated today only for ICD-10 codes that have a primary ICD-11 mapping in the bundled WHO transition tables; null otherwise.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "source": {
+       "description": "Human-readable identifier of the data source used for validation (terminology + release/version where applicable).",
+       "type": "string"
+      },
+      "terminology": {
+       "enum": [
+        "icd11",
+        "icd10",
+        "loinc",
+        "rxnorm",
+        "mesh",
+        "atc",
+        "cid10"
+       ],
+       "type": "string"
+      },
+      "title": {
+       "description": "Official label/title for the code, when available.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "valid": {
+       "description": "True when the upstream API or bundled dataset confirms the code exists.",
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "code",
+      "terminology",
+      "valid",
+      "active",
+      "title",
+      "replaced_by",
+      "source",
+      "error"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "total": {
+    "description": "Number of codes submitted.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "valid_count": {
+    "description": "How many were confirmed valid.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "total",
+   "valid_count",
+   "invalid_count",
+   "error_count",
+   "results",
+   "provenance",
+   "attribution"
+  ],
+  "type": "object"
+ },
+ "title": "Validate Medical Codes"
+}

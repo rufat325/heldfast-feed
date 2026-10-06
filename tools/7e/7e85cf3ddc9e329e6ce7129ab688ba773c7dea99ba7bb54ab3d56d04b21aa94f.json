@@ -1,0 +1,129 @@
+{
+ "description": "Prices a swap between `sell` and `buy` across the indexed venues and stores it under a `quoteId`.\n\n- **Cost:** 0.01 USDC per call over x402: the first call gets a 402 with payment requirements in the `PAYMENT-REQUIRED` header (base64 JSON); sign them and retry with a `PAYMENT-SIGNATURE` header carrying the payment payload.\n- **`sell` / `buy`:** two different assets (native and ERC-20 USDC count as the same asset; either side may be USDC). Resolve a ticker with POST /trade/v1/search first.\n- **Response shape:** when one side is USDC, `best.type` is `direct`/`two_hop`/`split` and `best.legs` lists one leg per path actually used; `routes[]` lists every discovery candidate. When neither side is USDC, or when a USDC-side allocation can't be expressed as legs, `best.type` is `graph`, `best.legs` is empty, and the execution plan is in `best.graph`. Both shapes support `side: exactIn` and `exactOut`, and both execute the same way through POST /trade/v1/swap.\n- **`amount`:** a human-readable decimal string in the token's own units, e.g. \"1.5\" for 1.5 USDC, not base units. It is the `sell` amount for `side: exactIn` and the `buy` amount for `side: exactOut`.\n- **Optional:** `side` (exactIn/exactOut), `slippageBps`, split and hop limits, `venues`/`excludeVenues` (ids from GET /trade/v1/venues), `taker`, `ttlSec`.\n- **Executability:** POST /trade/v1/swap executes every quote through ArcgateRouter. `best.executable` is `false`, with warning `graph_execution_unavailable`, when no ArcgateRouter is configured (or, for an Aerodrome edge, no Aerodrome router), or when the operator has disabled a selected path's venue - even with both routers configured. In that last case, POST /trade/v1/swap may still fall back to an executable candidate the quote already priced instead of failing outright.\n- **Readiness:** name the wallet that will trade in `taker` and the answer carries `readiness`, read at the quote's block: whether that wallet holds the input (`balance`), which approval or Permit2 signature POST /trade/v1/swap will need (`approval` for the default permit2, `approve` for `approval: \"approve\"`), enough native USDC for gas (`gas`), and whether this call's x402 payer can pay the swap fee (`fees`). `totalCostUsdc` is the swap fee plus gas: what finishing costs. When `ready` is false, `next` is `stop`. Without `taker` there is no `readiness`.\n- **Lifetime:** the `quoteId` is good for `ttlSec` seconds (default and max 120).\n- **Next:** POST /trade/v1/swap with the returned `quoteId`. Costs 10000 base units (0.01 USDC) per call. Payment goes in params._meta[\"x402/payment\"]; use an x402-aware MCP client (see https://docs.arcgate.dev/#arcgate/description/mcp-for-agents).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "allowSplits": {
+    "default": true,
+    "type": "boolean"
+   },
+   "amount": {
+    "maxLength": 80,
+    "minLength": 1,
+    "type": "string"
+   },
+   "buy": {
+    "maxLength": 128,
+    "minLength": 1,
+    "type": "string"
+   },
+   "excludeVenues": {
+    "default": [],
+    "items": {
+     "maxLength": 64,
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 16,
+    "type": "array"
+   },
+   "maxHops": {
+    "anyOf": [
+     {
+      "const": 1,
+      "type": "number"
+     },
+     {
+      "const": 2,
+      "type": "number"
+     }
+    ],
+    "default": 2
+   },
+   "maxSplits": {
+    "default": 3,
+    "maximum": 5,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "sell": {
+    "maxLength": 128,
+    "minLength": 1,
+    "type": "string"
+   },
+   "side": {
+    "default": "exactIn",
+    "enum": [
+     "exactIn",
+     "exactOut"
+    ],
+    "type": "string"
+   },
+   "slippageBps": {
+    "default": 100,
+    "maximum": 5000,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "sources": {
+    "default": [
+     "native"
+    ],
+    "items": {
+     "maxLength": 32,
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 4,
+    "minItems": 1,
+    "type": "array"
+   },
+   "taker": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "ttlSec": {
+    "default": 120,
+    "description": "How long the stored quote (and this response's expiresAt) stays live, in seconds (1-120, default 120). A caller may shorten it to re-quote sooner; it can never lengthen past 120s. Safe to shorten or leave at default: POST /trade/v1/swap always re-quotes and re-simulates at the current block and 409s quote_stale below the stored minAmountOut, so this bounds staleness risk, not price risk. The on-chain execution deadline is a separate parameter (deadlineSec, POST /trade/v1/swap).",
+    "maximum": 120,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "venues": {
+    "anyOf": [
+     {
+      "items": {
+       "maxLength": 64,
+       "minLength": 1,
+       "type": "string"
+      },
+      "maxItems": 16,
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   }
+  },
+  "required": [
+   "sell",
+   "buy",
+   "amount"
+  ],
+  "type": "object"
+ },
+ "name": "tradeQuote"
+}

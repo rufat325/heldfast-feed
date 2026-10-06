@@ -1,0 +1,454 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Read a note from the vault \u2014 by path, the active file, or a periodic note. Choose a `format` projection: raw body, full object, structural document map, or a single section. A `path` with no exact match but a single case-insensitive match in its folder reads that file instead and reports the path as sent in `requestedPath`; write and delete tools match paths exactly.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "format": {
+    "description": "Which projection to return. `content` \u2014 raw markdown body. `full` \u2014 content plus parsed frontmatter, tags, and file metadata. `document-map` \u2014 catalog of headings, block IDs, and frontmatter field names (use to discover patch targets). `section` \u2014 a single heading, block, or frontmatter section (requires `section`); heading sections include the full subtree under that heading and use `Parent::Child` syntax for nesting.",
+    "enum": [
+     "content",
+     "full",
+     "document-map",
+     "section"
+    ],
+    "type": "string"
+   },
+   "includeLinks": {
+    "default": false,
+    "description": "When true with `format: \"full\"`, parses outgoing wiki and markdown link references from the note body. Skipped for other formats.",
+    "type": "boolean"
+   },
+   "section": {
+    "description": "Required when `format` is `\"section\"`. Identifies the heading/block/frontmatter to extract.",
+    "properties": {
+     "target": {
+      "description": "Heading, block, or frontmatter locator. Heading: the full `Parent::Child` path as `obsidian_get_note` `format: \"document-map\"` lists it, or a bare leaf name matched at any depth. A leaf shared by several headings reads the first (every full path comes back in `candidates`); a write rejects it with `ambiguous_section`, unless one of them has no parent heading, in which case the write targets that one. A full path that occurs more than once in the note reads the first; a write rejects it with `ambiguous_section`. Block: the reference ID without the caret (e.g. \"2d9b4a\", not \"^2d9b4a\"). Frontmatter: the field name.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "type": {
+      "description": "Heading by name, block by reference, or frontmatter field by key.",
+      "enum": [
+       "heading",
+       "block",
+       "frontmatter"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "type",
+     "target"
+    ],
+    "type": "object"
+   },
+   "target": {
+    "description": "Where the note lives.",
+    "oneOf": [
+     {
+      "description": "Address a note by its vault-relative path.",
+      "properties": {
+       "path": {
+        "description": "Vault-relative path including extension, e.g. \"Projects/foo.md\".",
+        "minLength": 1,
+        "type": "string"
+       },
+       "type": {
+        "const": "path",
+        "description": "Address by vault-relative path.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "path"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "Address whichever file is currently active in the Obsidian UI.",
+      "properties": {
+       "type": {
+        "const": "active",
+        "description": "Address the file currently open in Obsidian.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "Address a periodic note (current or dated).",
+      "properties": {
+       "date": {
+        "description": "ISO date YYYY-MM-DD. Omit for the current period.",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+       },
+       "period": {
+        "description": "Periodic note granularity.",
+        "enum": [
+         "daily",
+         "weekly",
+         "monthly",
+         "quarterly",
+         "yearly"
+        ],
+        "type": "string"
+       },
+       "type": {
+        "const": "periodic",
+        "description": "Address a daily/weekly/monthly/etc. periodic note.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "period"
+      ],
+      "type": "object"
+     }
+    ]
+   }
+  },
+  "required": [
+   "format",
+   "target"
+  ],
+  "type": "object"
+ },
+ "name": "obsidian_get_note",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "result"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `section_required`: `format` is \"section\" but no `section` locator was provided. `path_forbidden`: The target path is outside OBSIDIAN_READ_PATHS (and OBSIDIAN_WRITE_PATHS, since write paths imply read access). `note_missing`: The vault path does not resolve to an existing note. `ambiguous_path`: The parent directory contains multiple files whose names differ only in case (case-sensitive filesystems only). `no_active_file`: Target was `active` but no file is currently open in Obsidian. `periodic_unsupported`: Target was `periodic` and this vault runs Local REST API v5.0.2 or later without the companion periodic-notes extension, so the `/periodic/` routes are not served at all. `periodic_not_found`: Target was `periodic`, the `/periodic/` routes are served on this vault, and no note exists for the requested period. `periodic_disabled`: Target was `periodic` but the requested period is not enabled in Obsidian's Periodic Notes plugin settings. `section_missing`: `format` was `\"section\"` and the named heading, block reference, or frontmatter field does not exist in the resolved note. `path_is_directory`: The supplied path names a folder rather than a note file. `path_traversal`: The path contains a `.` or `..` segment, which is rejected to prevent vault escape. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "section_required",
+         "path_forbidden",
+         "note_missing",
+         "ambiguous_path",
+         "no_active_file",
+         "periodic_unsupported",
+         "periodic_not_found",
+         "periodic_disabled",
+         "section_missing",
+         "path_is_directory",
+         "path_traversal"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Guidance when the read substituted a case-insensitive path match (names both paths), when a heading locator matched several headings (names the path that was read and points at `candidates` for the rest), or both.",
+    "type": "string"
+   },
+   "requestedPath": {
+    "description": "The `target.path` as sent. Present only when it had no exact match and its single case-insensitive match in the same folder, `result.path`, was read instead \u2014 write and delete tools need `result.path`.",
+    "type": "string"
+   },
+   "result": {
+    "description": "Mode-discriminated projection of the requested note.",
+    "oneOf": [
+     {
+      "additionalProperties": false,
+      "description": "Content-only projection.",
+      "properties": {
+       "content": {
+        "description": "Raw markdown body.",
+        "type": "string"
+       },
+       "format": {
+        "const": "content",
+        "description": "Echoed format discriminator.",
+        "type": "string"
+       },
+       "path": {
+        "description": "Resolved vault-relative path of the note.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "format",
+       "path",
+       "content"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "description": "Full projection \u2014 content plus parsed metadata.",
+      "properties": {
+       "content": {
+        "description": "Raw markdown body.",
+        "type": "string"
+       },
+       "format": {
+        "const": "full",
+        "description": "Echoed format discriminator.",
+        "type": "string"
+       },
+       "frontmatter": {
+        "additionalProperties": {},
+        "description": "Parsed YAML frontmatter. Values are strings, numbers, booleans, arrays, or nested objects.",
+        "propertyNames": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       "outgoingLinks": {
+        "description": "Outgoing link references parsed from the note body. Present when `includeLinks` is true. Vault-internal references only \u2014 external URLs (http, mailto, etc.) are filtered out.",
+        "items": {
+         "additionalProperties": false,
+         "description": "A single outgoing link reference.",
+         "properties": {
+          "target": {
+           "description": "Link target \u2014 a vault path or basename. A wikilink gives it as Obsidian reads it, without its `#heading` or `|alias` (`\\|alias` in a table); a markdown link gives its URL as written. No existence check.",
+           "type": "string"
+          },
+          "type": {
+           "description": "Source syntax.",
+           "enum": [
+            "wikilink",
+            "markdown"
+           ],
+           "type": "string"
+          }
+         },
+         "required": [
+          "target",
+          "type"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "path": {
+        "description": "Resolved vault-relative path of the note.",
+        "type": "string"
+       },
+       "stat": {
+        "additionalProperties": false,
+        "description": "File metadata.",
+        "properties": {
+         "ctime": {
+          "description": "Created time, ms since epoch.",
+          "type": "number"
+         },
+         "mtime": {
+          "description": "Modified time, ms since epoch.",
+          "type": "number"
+         },
+         "size": {
+          "description": "File size in bytes.",
+          "type": "number"
+         }
+        },
+        "required": [
+         "ctime",
+         "mtime",
+         "size"
+        ],
+        "type": "object"
+       },
+       "tags": {
+        "description": "Tags from frontmatter and inline #tag syntax.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "format",
+       "path",
+       "content",
+       "frontmatter",
+       "tags",
+       "stat"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "description": "Document-map projection \u2014 catalog of patch targets.",
+      "properties": {
+       "blocks": {
+        "description": "All block reference IDs.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "format": {
+        "const": "document-map",
+        "description": "Echoed format discriminator.",
+        "type": "string"
+       },
+       "frontmatterFields": {
+        "description": "All frontmatter field keys.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "headings": {
+        "description": "All headings in document order.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "path": {
+        "description": "Resolved vault-relative path of the note.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "format",
+       "path",
+       "headings",
+       "blocks",
+       "frontmatterFields"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "description": "Single-section projection.",
+      "properties": {
+       "candidates": {
+        "description": "Every full heading path `section.target` could name, in document order: each heading sharing a bare leaf name, or each repeat of a full path that occurs more than once in the note (the strings are then identical). Present only when more than one heading matched; the read still returns the first. Same field the write tools carry as `ambiguous_section` error data \u2014 re-issue with a distinct path from this list to pin the section.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "format": {
+        "const": "section",
+        "description": "Echoed format discriminator.",
+        "type": "string"
+       },
+       "path": {
+        "description": "Resolved vault-relative path of the note.",
+        "type": "string"
+       },
+       "section": {
+        "additionalProperties": false,
+        "description": "Echoed section locator.",
+        "properties": {
+         "target": {
+          "description": "Heading, block, or frontmatter locator. Heading: the full `Parent::Child` path as `obsidian_get_note` `format: \"document-map\"` lists it, or a bare leaf name matched at any depth. A leaf shared by several headings reads the first (every full path comes back in `candidates`); a write rejects it with `ambiguous_section`, unless one of them has no parent heading, in which case the write targets that one. A full path that occurs more than once in the note reads the first; a write rejects it with `ambiguous_section`. Block: the reference ID without the caret (e.g. \"2d9b4a\", not \"^2d9b4a\"). Frontmatter: the field name.",
+          "minLength": 1,
+          "type": "string"
+         },
+         "type": {
+          "description": "Heading by name, block by reference, or frontmatter field by key.",
+          "enum": [
+           "heading",
+           "block",
+           "frontmatter"
+          ],
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "target"
+        ],
+        "type": "object"
+       },
+       "sectionTarget": {
+        "description": "Section locator the read was resolved against. For headings this is the resolved locator \u2014 a bare leaf name is reported back as its full `Parent::Child` path.",
+        "type": "string"
+       },
+       "valueJson": {
+        "description": "Section value as the JSON-typed frontmatter value (frontmatter sections only)."
+       },
+       "valueText": {
+        "description": "Section value as raw markdown (heading/block sections).",
+        "type": "string"
+       }
+      },
+      "required": [
+       "format",
+       "path",
+       "section"
+      ],
+      "type": "object"
+     }
+    ]
+   }
+  },
+  "type": "object"
+ },
+ "title": "Obsidian Get Note"
+}

@@ -1,0 +1,135 @@
+{
+ "description": "Record one or more structured metric snapshots for time-series analysis. Use this whenever you cite a metric in an insight, weekly digest, or benchmark \u2014 instead of (or in addition to) burying it in prose. Each snapshot is queryable later via query_metric_snapshots, e.g. 'show CVR for UK over the last 6 months'. Always pass canonical metric keys from the registry (call query_metric_snapshots with no args to list them, or see the error hint when you pass an unknown key). Provide both a current value and, ideally, a baseline value so trajectories can be plotted. When a snapshot was produced by a specific tool call, include sourceParams (the tool name + the exact args you used) so the value can be reproduced later without guesswork. IDEMPOTENCY: re-recording the same logical measurement does NOT append a duplicate. The identity tuple is (metric, periodStart, periodEnd, store, segment, source, periodKind, periodLength) \u2014 periodKind and periodLength are part of the identity so 'April 2026 calendar+month' and 'rolling+month' don't collide. The existing row is updated: latest value wins, and metadata fields (sourceParams, baseline, confidence, confidenceReason, notes) merge \u2014 newer non-empty replaces, missing preserves the prior. INSIGHT LINKAGE is many-to-many and PURELY ADDITIVE here \u2014 both insightId (single) and insightIds (array) UNION with any existing links and never remove. The same snapshot can serve as evidence for parent + child + 30-day-check simultaneously. To remove a link, use update_insight(insightId, unlinkSnapshotIds: [...]).",
+ "inputSchema": {
+  "properties": {
+   "snapshots": {
+    "description": "Array of metric snapshots to record",
+    "items": {
+     "properties": {
+      "baselinePeriodEnd": {
+       "description": "Baseline period end",
+       "type": "string"
+      },
+      "baselinePeriodStart": {
+       "description": "Baseline period start",
+       "type": "string"
+      },
+      "baselineValue": {
+       "description": "Optional comparison baseline \u2014 typically the prior-period value of the same metric.",
+       "type": "number"
+      },
+      "confidence": {
+       "description": "Trust signal for this snapshot. Default: omit (treated as 'high'). Drop to 'medium' or 'low' when a known caveat applies \u2014 e.g. EU country-level GA4 data is thresholded/sampled, Triple Whale recent-window data hasn't settled, currency may be mislabelled. Survives aggregation, so 'show me high-confidence CVR snapshots only' becomes a real query.",
+       "enum": [
+        "high",
+        "medium",
+        "low"
+       ],
+       "type": "string"
+      },
+      "confidenceReason": {
+       "description": "Optional one-line caveat explaining a non-high confidence, e.g. 'GA4 country thresholding', 'TW <72h window unstable', 'currency may be GBP mislabel'. Use the SAME phrasing for the same caveat across snapshots so the AI can group them.",
+       "type": "string"
+      },
+      "currency": {
+       "description": "ISO currency code when unit == 'currency', e.g. 'GBP', 'USD'.",
+       "type": "string"
+      },
+      "insightId": {
+       "description": "Optional \u2014 link this snapshot to an existing insight. ADDITIVE: re-recording with a different insightId adds the link without removing any prior links. The same snapshot can serve as evidence for multiple insights.",
+       "type": "string"
+      },
+      "insightIds": {
+       "description": "Optional \u2014 link this snapshot to multiple insights at once. ADDITIVE: this UNIONS with any existing links; it never removes links. To remove a link, use update_insight(insightId, unlinkSnapshotIds: [...]).",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "metric": {
+       "description": "Canonical metric key (e.g. 'cvr', 'aov', 'roas', 'repeat_purchase_rate'). Must match the registry \u2014 unknown keys are rejected with a suggestion.",
+       "type": "string"
+      },
+      "notes": {
+       "description": "Optional free-text context the registry CAN'T already capture \u2014 scope, exclusions, sampling caveats. Good: 'excludes wholesale orders', 'country-filtered to GB only', 'branded + non-branded queries combined'. Don't bother restating things the registry/legend already provides \u2014 unit, direction (lower-is-better), or what the metric measures. For trust caveats (sampling/thresholding/window flakiness) prefer setting confidence + confidenceReason; reserve notes for the rest.",
+       "type": "string"
+      },
+      "periodEnd": {
+       "description": "Period end (YYYY-MM-DD or ISO timestamp)",
+       "type": "string"
+      },
+      "periodKind": {
+       "description": "How the period is anchored. 'rolling' = trailing window ending at periodEnd (last 30 days, last 7 days, trailing 90d). 'calendar' = a discrete calendar bucket (April 2026, ISO week 18, Q1 2026, YTD). 'custom' = arbitrary range. Pair with periodLength so 'last 30 days' (rolling+month) is distinguishable from 'April 2026' (calendar+month) \u2014 otherwise time-series comparisons will silently mix the two.",
+       "enum": [
+        "rolling",
+        "calendar",
+        "custom"
+       ],
+       "type": "string"
+      },
+      "periodLength": {
+       "description": "Size of the period bucket. Omit when periodKind is 'custom' (arbitrary range). Examples: 'last 30 days' = month, 'last 7 days' = week, 'Q1 2026' = quarter, 'YTD' = year (with periodKind: calendar).",
+       "enum": [
+        "day",
+        "week",
+        "month",
+        "quarter",
+        "year"
+       ],
+       "type": "string"
+      },
+      "periodStart": {
+       "description": "Period start (YYYY-MM-DD or ISO timestamp)",
+       "type": "string"
+      },
+      "segment": {
+       "description": "Optional segment dimension, e.g. 'new', 'returning', 'GB', 'mobile'.",
+       "type": "string"
+      },
+      "source": {
+       "description": "Where the number came from: 'shopify', 'ga4', 'tw', 'klaviyo', 'search-console', etc.",
+       "type": "string"
+      },
+      "sourceParams": {
+       "description": "Optional \u2014 the exact tool/report params that produced this value, for reproducibility. E.g. {tool: 'get_connector_data', connector: 'google-search-console', siteUrl: 'https://...', report: 'summary', startDate: '2025-12-01', endDate: '2025-12-31'}. Future-you can copy these straight into a new tool call to verify the number.",
+       "type": "object"
+      },
+      "store": {
+       "description": "Optional sub-store / region key, e.g. 'acme-store-uk' or 'acme-store-uk.myshopify.com'. Either form is accepted and normalized to the short form for storage, so writes and reads always align.",
+       "type": "string"
+      },
+      "unit": {
+       "description": "Optional override; defaults to the registry unit for the metric. Use 'position' for ranks where 1.0 is best (e.g. avg_position) \u2014 distinct from 'count' (a quantity) and 'ratio' (a normalised number).",
+       "enum": [
+        "percent",
+        "currency",
+        "count",
+        "days",
+        "ratio",
+        "position"
+       ],
+       "type": "string"
+      },
+      "value": {
+       "description": "Numeric value in the metric's canonical unit. percent: 0\u2013100, currency: major units (e.g. 1500.50 GBP), count: integer, ratio: e.g. 4.2 for 4.2x ROAS.",
+       "type": "number"
+      }
+     },
+     "required": [
+      "metric",
+      "value",
+      "periodStart",
+      "periodEnd"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "snapshots"
+  ],
+  "type": "object"
+ },
+ "name": "record_metric_snapshot"
+}

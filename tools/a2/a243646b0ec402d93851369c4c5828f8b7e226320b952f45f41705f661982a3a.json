@@ -1,0 +1,52 @@
+{
+ "description": "Turns a stored quote into unsigned transactions for the taker to sign and send. arcgate never signs, broadcasts or holds funds.\n\n- **Cost:** 0.01 USDC under $1,000; 0.05 USDC from $1,000 to $10,000; above that 0.05 USDC plus 0.5 bps of the amount over $10,000, capped at 5 USDC, size-tiered by the quote's USD notional (the USDC side for a USDC pair, or a token-to-token quote's USD valuation; a quote with no valuation prices at tier 1), over x402 (402 with `PAYMENT-REQUIRED`, retry with `PAYMENT-SIGNATURE`). Charged once per quote: POST /trade/v1/swap/tx, the Permit2 second round below, is free.\n- **Key inputs:** `quoteId` (from POST /trade/v1/quote), `taker`; optional `recipient` (defaults to `taker`), `deadlineSec`, `approval`. Never `permit` - that belongs to POST /trade/v1/swap/tx; sending one here is 400 `invalid_request` (the strict schema rejects the unknown key).\n- **Every quote executes through ArcgateRouter:** it is always the Permit2 `spender` and the ERC-20 `approve` spender below. When every source pool of the route being executed trades native USDC, the swap is funded by `value` instead - no approval transaction and no signature at all.\n- **Permit2 (default, one or two calls):**\n  - Returns `transactions` - an unlimited ERC-20 `approve(Permit2, type(uint256).max)` first, if the token's ERC-20 allowance to Permit2 is below the amount, then the swap, which carries an empty Permit2 signature and is only directly sendable as-is when a Permit2 allowance to ArcgateRouter already covers the amount, in which case `signatures` is empty too. Otherwise it also returns `signatures: [{ kind: \"permit2\", typedData }]`; sign `typedData` with the taker's key (EIP-712, e.g. viem's `signTypedData`).\n  - **Sign, then call POST /trade/v1/swap/tx** with the same `quoteId`, `taker` and `recipient`, and `permit: { message: typedData.message, signature }`, while the quote is live: free, because this call already paid the swap fee. The first call to it that succeeds uses the round up; a failed one doesn't.\n  - Send that response's `transactions` in order.\n- **`approval: \"approve\"` (one call):** returns at most one ERC-20 `approve(ArcgateRouter, amountIn)` transaction instead of a permit to sign - an exact amount, never Permit2, never a signature - and only when the taker's current allowance is below it.\n- **Freshness:** the quote lives for the `ttlSec` the quote call asked for (default/max 120s); after that `quoteId` is 410 `quote_expired`. Every call re-quotes and re-simulates at the current block and returns 409 `quote_stale` when the fresh re-quote fails or falls below the stored `minAmountOut`, when the pre-flight simulation reverts on slippage, or when the simulated delivery is below `minAmountOut`. A 409 or 410 carries a free fresh quote in `quote`, with `next: \"requote\"`: the original quote request (same amount, tokens, side, `slippageBps` and venues, default `ttlSec`) quoted again through the same pipeline, exactly as POST /trade/v1/quote answers it; when the original named a `taker`, the fresh quote is for this call's `taker`, the wallet swapping now. Nothing executes on it: check its price, `safety.verdict` and `readiness`, then swap its `quoteId`. When the fresh quote can't be traded (`no_route`, `insufficient_liquidity`, `unsupported_venue` or `buy_reverts`, a `cannot_sell` or `illiquid` verdict, not executable, or the taker isn't ready) the answer is `next: \"stop\"` with no `quote`, and `error.hint` says why. One fresh quote per paid quote: a second 409/410 for the same `quoteId`, a quote that itself came from a 409/410, or a quote expired over 5 minutes ago gets plain `requote` with no `quote`, as does one whose re-quote couldn't run or failed on the server's side; then quote again yourself.\n- **Fallback:** A stored route on a disabled/undeployed venue falls back to the best executable candidate the quote already priced (warning `route_not_executable`), or 422 `not_executable` when no such candidate exists, none re-quotes, or no ArcgateRouter is configured at all.\n- **Attempts:** a quote gets at most 5 failed calls here; the next call on that `quoteId` is 429 `swap_attempts_exhausted` (`next: \"requote\"`), answered without running the swap pipeline. A failed call is a 409, a 410 (its fresh quote may run), a 422, 500 or 503, or a successful pipeline whose payment settlement or delivery fails. An attempt stays reserved until its 200 is delivered (after settlement when paid); that delivery, a 404, or a 400 (at parse, or a reserved `taker`/`recipient`) uses none. A delivered 200 does not reset this quote's previous failures. POST /trade/v1/swap/tx counts its own, per permit round.\n- **Next:** a 200 with `signatures` non-empty needs POST /trade/v1/swap/tx before sending anything (`next: \"sign_permit\"`); otherwise sign and send `transactions` in order, then confirm the fill with POST /trade/v1/receipt (free). Costs 0.01 USDC under $1,000; 0.05 USDC from $1,000 to $10,000; above that 0.05 USDC plus 0.5 bps of the amount over $10,000, capped at 5 USDC; the exact amount for your quoteId comes back in the payment-required result. Payment goes in params._meta[\"x402/payment\"]; use an x402-aware MCP client (see https://docs.arcgate.dev/#arcgate/description/mcp-for-agents).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "approval": {
+    "default": "permit2",
+    "enum": [
+     "permit2",
+     "approve"
+    ],
+    "type": "string"
+   },
+   "deadlineSec": {
+    "default": 60,
+    "maximum": 600,
+    "minimum": 10,
+    "type": "integer"
+   },
+   "quoteId": {
+    "pattern": "^q_[0-9a-f]{16,}$",
+    "type": "string"
+   },
+   "recipient": {
+    "anyOf": [
+     {
+      "pattern": "^0x[0-9a-fA-F]{40}$",
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "taker": {
+    "pattern": "^0x[0-9a-fA-F]{40}$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "quoteId",
+   "taker"
+  ],
+  "type": "object"
+ },
+ "name": "tradeSwap"
+}

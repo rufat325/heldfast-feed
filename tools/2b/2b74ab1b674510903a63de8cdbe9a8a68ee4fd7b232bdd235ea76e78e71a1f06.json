@@ -1,0 +1,488 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Read records from any IANA XML registry by id, e.g. registry \"tls-parameters\" with subregistry \"tls-parameters-4\" (TLS Cipher Suites), \"protocol-numbers\", \"http-methods\", or \"cbor-tags\"; an iana.org/assignments URL also works. Filter with `value` (exact match on the key column, or on the column `field` names; digits compare by number with a cell of digits (\"0443\" finds \"443\") and one 0x token with a one-token 0x cell (\"0x5\" finds \"0x05\"), each also matching its own kind of range row (\"105-199\", \"0x11-0xff\"); other 0x forms compare their digits as written, in any comma, space, or brace spelling) and `contains` (words in any field; records with a field equal to the words come first). When a registry has several sub-registries and none is given, the response lists them instead of records; a table that nests tables lists them too. Field names are the registry's XML element names (e.g. \"rec\" is the Recommended column). Large registries page through `cursor`. Find ids with iana_search_registries.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "contains": {
+    "description": "Words matched as whole tokens against every field and reference id, e.g. \"chacha20\". Records with a field equal to the words come first.",
+    "maxLength": 100,
+    "minLength": 2,
+    "type": "string"
+   },
+   "cursor": {
+    "description": "next_cursor from the previous page; reuse it only with the same registry, subregistry, value, field, and contains.",
+    "maxLength": 1000,
+    "type": "string"
+   },
+   "field": {
+    "description": "Column for value to match instead of the key column, case-insensitive, one of the names in columns: e.g. \"type\" for a DNS RR type mnemonic, or \"name\" for every row of a service name. Ignored without value.",
+    "maxLength": 100,
+    "type": "string"
+   },
+   "limit": {
+    "default": 25,
+    "description": "Maximum number of results to return, 1\u2013100. Default 25.",
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "registry": {
+    "description": "Registry id, e.g. \"tls-parameters\", or its https://www.iana.org/assignments/<id> URL (a #fragment selects the sub-registry when subregistry is unset).",
+    "maxLength": 200,
+    "pattern": "^(?:[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}|https?:\\/\\/(?:www\\.)?iana\\.org\\/assignments\\/[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}(?:\\/[^\\s#]*)?(?:#[A-Za-z0-9_][A-Za-z0-9_.-]{0,99})?)$",
+    "type": "string"
+   },
+   "subregistry": {
+    "description": "Sub-registry id, case-insensitive, e.g. \"tls-parameters-4\". Omit to read the only sub-registry, or to list them when there are several.",
+    "pattern": "^[A-Za-z0-9_][A-Za-z0-9_.-]{0,99}$",
+    "type": "string"
+   },
+   "value": {
+    "description": "Exact match on the key column named by value_field (value, else number, else the first column), or on field when set; case and whitespace are ignored. A value of digits compares by number with a cell of digits, so \"0443\" finds \"443\", and also matches range rows such as \"105-199\"; it never matches a 0x cell. One 0x token compares by number with a one-token 0x cell, so \"0x5\" finds \"0x05\", and also matches range rows such as \"0x11-0xff\". Any other pair of 0x forms compares the digits as written: \"0x1301\", \"{0x13,0x01}\", and \"0x13 0x01\" all find \"0x13,0x01\", while \"0x13\" never finds \"0x00,0x13\".",
+    "maxLength": 100,
+    "type": "string"
+   }
+  },
+  "required": [
+   "registry"
+  ],
+  "type": "object"
+ },
+ "name": "iana_get_registry_records",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "registry_id",
+     "registry_title",
+     "notes",
+     "columns",
+     "records",
+     "source",
+     "totalCount",
+     "shown",
+     "cap",
+     "truncated"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cap": {
+    "description": "The limit applied.",
+    "type": "number"
+   },
+   "columns": {
+    "description": "Field (XML element) names seen, first-seen order, the first 50.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "description": {
+    "description": "Description of the table read, or of the registry when listing; a YANG module registry names its module file here. At most 2,000 characters.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `unknown_registry`: The registry XML returns 404 and no case-insensitive index match exists, or the index is unavailable. `unknown_subregistry`: The subregistry id is not in this registry. `unknown_field`: The field, given with value, is not a column of the table read. `non_xml_registry`: The registry, or the sub-registry read, holds no XML records and points at a file published separately, such as plain text or a MIB module. `invalid_cursor`: The cursor is not one this tool returned: malformed, corrupted, or carrying an offset or limit that is not a whole number of zero or more. `cursor_mismatch`: The cursor was minted for a different registry, subregistry, value, field, or contains. `upstream_unreadable`: The registry XML could not be read, was not XML, or was larger than this server accepts. `pacer_shed`: This server's own iana.org request queue is too full for the call to start in time. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "unknown_registry",
+         "unknown_subregistry",
+         "unknown_field",
+         "non_xml_registry",
+         "invalid_cursor",
+         "cursor_mismatch",
+         "upstream_unreadable",
+         "pacer_shed"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "next_cursor": {
+    "description": "Pass as cursor, with the same filters, for the next page.",
+    "type": "string"
+   },
+   "notes": {
+    "description": "Notes of the table read (of the registry, when listing), first page only. With registry_notes: the first 25 and 4,000 characters at most, these first.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One registry note.",
+     "properties": {
+      "anchor": {
+       "description": "Anchor that note references point at.",
+       "type": "string"
+      },
+      "text": {
+       "description": "Note text.",
+       "type": "string"
+      },
+      "title": {
+       "description": "Note title, e.g. \"WARNING\".",
+       "type": "string"
+      }
+     },
+     "required": [
+      "text"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "notes_truncated": {
+    "description": "True when notes or registry_notes were cut at 4,000 characters.",
+    "type": "boolean"
+   },
+   "notice": {
+    "description": "Guidance on a miss, a cut list, or another condition.",
+    "type": "string"
+   },
+   "offset": {
+    "description": "Matching records before this page, on pages after the first.",
+    "type": "number"
+   },
+   "records": {
+    "description": "Records in registry order (with contains, records with a field equal to the words first), up to limit and a 48,000-character page budget.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One registry record.",
+     "properties": {
+      "cut_fields": {
+       "description": "Fields cut at 2,000 characters (ending in \u2026) or past the 16-field cap, the first 32.",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "fields": {
+       "additionalProperties": {
+        "type": "string"
+       },
+       "description": "Values keyed by XML element name, each capped at 2,000 characters.",
+       "propertyNames": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "references": {
+       "description": "References on the record, the first 25.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A defining reference.",
+        "properties": {
+         "id": {
+          "description": "E.g. \"RFC 9110\", a draft name, a registry id, or a URL.",
+          "type": "string"
+         },
+         "label": {
+          "description": "Label text, when it adds to id and section.",
+          "type": "string"
+         },
+         "section": {
+          "description": "Section, e.g. \"15.5.5\".",
+          "type": "string"
+         },
+         "type": {
+          "description": "Reference kind.",
+          "enum": [
+           "rfc",
+           "draft",
+           "uri",
+           "registry",
+           "rfc-errata",
+           "note",
+           "text"
+          ],
+          "type": "string"
+         },
+         "url": {
+          "description": "URL of the reference.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "id"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "registered": {
+       "description": "Registration date.",
+       "type": "string"
+      },
+      "updated": {
+       "description": "Last-updated date.",
+       "type": "string"
+      },
+      "value": {
+       "description": "The record's value_field cell; absent when the record has none.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "fields",
+      "references"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "references": {
+    "description": "The documents that define the table read, the first 25.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A defining reference.",
+     "properties": {
+      "id": {
+       "description": "E.g. \"RFC 9110\", a draft name, a registry id, or a URL.",
+       "type": "string"
+      },
+      "label": {
+       "description": "Label text, when it adds to id and section.",
+       "type": "string"
+      },
+      "section": {
+       "description": "Section, e.g. \"15.5.5\".",
+       "type": "string"
+      },
+      "type": {
+       "description": "Reference kind.",
+       "enum": [
+        "rfc",
+        "draft",
+        "uri",
+        "registry",
+        "rfc-errata",
+        "note",
+        "text"
+       ],
+       "type": "string"
+      },
+      "url": {
+       "description": "URL of the reference.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "type",
+      "id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "registration_procedure": {
+    "description": "Registration rule of the table read, or of the registry when listing; at most 2,000 characters.",
+    "type": "string"
+   },
+   "registration_ranges": {
+    "description": "Allocation ranges, when the table defines them: the first 25, each text at most 2,000 characters.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One allocation range.",
+     "properties": {
+      "note": {
+       "description": "Note on the range.",
+       "type": "string"
+      },
+      "procedure": {
+       "description": "Registration procedure.",
+       "type": "string"
+      },
+      "range": {
+       "description": "Allocation range, e.g. \"0x0000-0xBFFF\".",
+       "type": "string"
+      }
+     },
+     "required": [
+      "range"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "registry_id": {
+    "description": "Registry id.",
+    "type": "string"
+   },
+   "registry_notes": {
+    "description": "The registry root's notes and footnotes, on the first page of a sub-registry read; records cite them by anchor. Shares the notes caps, after notes.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One registry note.",
+     "properties": {
+      "anchor": {
+       "description": "Anchor that note references point at.",
+       "type": "string"
+      },
+      "text": {
+       "description": "Note text.",
+       "type": "string"
+      },
+      "title": {
+       "description": "Note title, e.g. \"WARNING\".",
+       "type": "string"
+      }
+     },
+     "required": [
+      "text"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "registry_title": {
+    "description": "Registry title.",
+    "type": "string"
+   },
+   "shown": {
+    "description": "Results returned.",
+    "type": "number"
+   },
+   "source": {
+    "additionalProperties": false,
+    "description": "Provenance and freshness of the answer.",
+    "properties": {
+     "fetched_at": {
+      "description": "ISO 8601 time of the last successful fetch or revalidation.",
+      "type": "string"
+     },
+     "registry_id": {
+      "description": "Id of the registry file that answered.",
+      "type": "string"
+     },
+     "registry_updated": {
+      "description": "The registry's own last-updated date; absent for the protocol index.",
+      "type": "string"
+     },
+     "stale": {
+      "description": "True when a refresh failed and a cached copy up to 7 days old answered.",
+      "type": "boolean"
+     },
+     "url": {
+      "description": "The file fetched from iana.org.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "registry_id",
+     "url",
+     "fetched_at",
+     "stale"
+    ],
+    "type": "object"
+   },
+   "subregistries": {
+    "description": "Tables to read next, the first 250: every sub-registry when one must be chosen (records is then empty), or the tables nested directly in the table read, on its first page.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One sub-registry.",
+     "properties": {
+      "id": {
+       "description": "Pass as subregistry.",
+       "type": "string"
+      },
+      "record_count": {
+       "description": "Records it holds.",
+       "type": "number"
+      },
+      "title": {
+       "description": "Sub-registry title.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "id",
+      "title",
+      "record_count"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "subregistry_id": {
+    "description": "Id of the sub-registry the records come from.",
+    "type": "string"
+   },
+   "subregistry_title": {
+    "description": "Title of that sub-registry.",
+    "type": "string"
+   },
+   "totalCount": {
+    "description": "Matches before the limit was applied.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when more matches exist than were returned.",
+    "type": "boolean"
+   },
+   "value_field": {
+    "description": "The table's key column: each record's value comes from it, and the value filter matches it unless field names another.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Read IANA registry records"
+}

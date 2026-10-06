@@ -1,0 +1,596 @@
+{
+ "description": "Generate ready-to-render chart code for a dataset via the BIC backend: the data shape is profiled locally, the backend picks a suitable chart type (or honors chart_type), and returns code that has passed the backend's eligibility gates and quality checks. Requires a trial or paid BIC account (license env vars / credentials file). The returned D3 code is a portable render(container, data, options) function meant to be MERGED into your own app; an integration contract describes exactly how to call it. A standalone HTML preview and file output are optional.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "chart_type": {
+    "description": "Preferred chart type by name (honored unless the data shape disqualifies it).",
+    "type": "string"
+   },
+   "csv_path": {
+    "description": "Path to a CSV file (header row required).",
+    "type": "string"
+   },
+   "csv_text": {
+    "description": "Inline CSV text (alternative to csv_path).",
+    "type": "string"
+   },
+   "culture": {
+    "description": "The language the chart's own text should be written in - titles, axis labels, legends, notes - as a BCP 47 tag such as 'de-DE', 'fr' or 'ja-JP'. Default 'en-US'. Set it from the end user's locale when you know it; it does not translate the data.",
+    "maxLength": 35,
+    "pattern": "^[A-Za-z]{2,3}(?:-[A-Za-z0-9]{1,8})*$",
+    "type": "string"
+   },
+   "data": {
+    "additionalProperties": false,
+    "description": "A pre-typed {columns, rows} table \u2014 the shape a Fabric DAX query / dataframe already has. Alternative to csv_path/csv_text; when columns carry isMeasure/format/description the shape matches PBI fidelity with no guessing.",
+    "properties": {
+     "columns": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "dataType": {
+         "description": "Known type (DAX/semantic-model callers have it); omit to infer from values.",
+         "enum": [
+          "String",
+          "Integer",
+          "Decimal",
+          "DateTime"
+         ],
+         "type": "string"
+        },
+        "description": {
+         "description": "Column description from the model \u2192 modelDesc.",
+         "type": "string"
+        },
+        "format": {
+         "description": "Format string from the model (e.g. \"$#,##0\") \u2192 modelFormat.",
+         "type": "string"
+        },
+        "isMeasure": {
+         "description": "Known measure/dimension role; omit to apply the numeric-non-identifier heuristic. A semantic-model caller should set this.",
+         "type": "boolean"
+        },
+        "name": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "name"
+       ],
+       "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+     },
+     "rows": {
+      "description": "Rows as positional arrays aligned to columns, OR objects keyed by column name.",
+      "items": {
+       "anyOf": [
+        {
+         "type": "array"
+        },
+        {
+         "additionalProperties": {},
+         "type": "object"
+        }
+       ]
+      },
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "columns",
+     "rows"
+    ],
+    "type": "object"
+   },
+   "descriptions": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "description": "Per-column human DESCRIPTION \u2014 gives the model semantic context the bare column name lacks.",
+    "type": "object"
+   },
+   "dimensions": {
+    "description": "Columns to treat as DIMENSIONS (a PBI category/axis well \u2014 fields to group/break by). Use for numeric codes/years that should NOT be aggregated.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "font_family": {
+    "description": "CSS font family for the chart's own text \u2014 titles, axis labels, tick labels, legends (e.g. 'Segoe UI' or a stack like 'Segoe UI, Arial, sans-serif'). Pass this ONLY when the user has named a font or you are matching a stated house style \u2014 do NOT infer one from the data, the project, or your own preference. Omitting it is a proven no-op: the engine picks. Applies to whichever renderer is chosen (D3, Plotly, matplotlib and Vega each get an equivalent instruction), and an unavailable family falls back to a web-safe stack rather than failing.",
+    "type": "string"
+   },
+   "forbid_derived_columns": {
+    "description": "True = show only fields present in the data (plus required_columns) \u2014 no per-capita, share-of-total, index, rank or z-score columns the engine would otherwise add. Use when your app owns the analytics and the chart is only the display.",
+    "type": "boolean"
+   },
+   "formats": {
+    "additionalProperties": {
+     "type": "string"
+    },
+    "description": "Per-column number/date FORMAT STRING (e.g. {\"Revenue\":\"$#,##0\",\"Margin\":\"0.0%\"}). PBI supplies these from its model; a CSV can't, so provide them to steer number formatting.",
+    "type": "object"
+   },
+   "group_by": {
+    "description": "Columns that are the PRIMARY series/breakdown (the PBI 'Group by' well); the backend leads the visualization with these.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "height": {
+    "type": "number"
+   },
+   "include_code": {
+    "description": "Include the full code in the response \u2014 governs BOTH the text block and structuredContent.code. Default: true, or FALSE when out_dir is given (the code is then already on disk, and a large chart's code can overflow a client's tool-output limit). Set it explicitly to override either default.",
+    "type": "boolean"
+   },
+   "language": {
+    "description": "Project source language: with no concrete `renderer`, the backend auto-picks a renderer WITHIN this language (javascript/typescript \u2192 D3/Vega, python \u2192 Plotly/matplotlib). Omit to AUTO-DETECT from the working dir.",
+    "enum": [
+     "javascript",
+     "typescript",
+     "python",
+     ""
+    ],
+    "type": "string"
+   },
+   "level_of_detail": {
+    "description": "How much of the data the user wants to SEE. ASK THEM \u2014 do not infer it from the data or from your own preference; it is a question about what they want, and they can answer it in one word. 'High' = every observation drawn as its own mark (scatter, beeswarm, strip). 'Medium' = every row used, but shown as a distribution (box, violin, histogram). 'Low' = one mark per category (bars, cards, pies). Omit ONLY if the user has genuinely expressed no preference \u2014 omitting it is a proven no-op and the engine decides. This is a strong nudge, not a filter: it reorders charts that already fit, and an explicit chart_type still wins.",
+    "enum": [
+     "High",
+     "Medium",
+     "Low",
+     ""
+    ],
+    "type": "string"
+   },
+   "measures": {
+    "description": "Columns to treat as MEASURES (the PBI 'Values' well \u2014 fields the chart aggregates). Numeric non-identifier columns are measures by default.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "model": {
+    "description": "Model code; empty = backend default.",
+    "type": "string"
+   },
+   "non_additive": {
+    "description": "MEASURE columns that must NOT be summed (a ratio/average/rate \u2014 use mean, never stack). Usually auto-detected; this is an authoritative override.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "out_dir": {
+    "description": "Optional directory to write chart.js/py, a data.sample.json, and (if preview_html) preview.html.",
+    "type": "string"
+   },
+   "preview_html": {
+    "description": "Also emit a standalone D3 preview (needs out_dir). Default false \u2014 the code is meant to be merged, not run as an index.html.",
+    "type": "boolean"
+   },
+   "privacy_level": {
+    "description": "How much detail to compute/share: 0 names only, 10 +counts, 20 +detailed stats (default), 30 +obfuscated sample rows.",
+    "enum": [
+     "0",
+     "10",
+     "20",
+     "30"
+    ],
+    "type": "string"
+   },
+   "project_dir": {
+    "description": "Directory to auto-detect the project language from (default: the folder setup_fabric_app used, else the working directory or the one project folder directly inside it).",
+    "type": "string"
+   },
+   "prompt": {
+    "description": "Freeform guidance for the generation \u2014 the same 'user commentary' lane the Power BI visual uses. Steer encoding/axes/emphasis in plain language, e.g. 'put Year on the x-axis, color by Division', 'render citations as a chord diagram', 'log scale on revenue', 'annotate the peak'.",
+    "type": "string"
+   },
+   "reasoning_mode": {
+    "description": "LLM pass structure; empty = backend heuristic.",
+    "enum": [
+     "",
+     "1P",
+     "2P",
+     "3P",
+     "CP"
+    ],
+    "type": "string"
+   },
+   "renderer": {
+    "description": "Force a specific renderer (overrides `language`). Omit to use `language`/auto-detection; 'VISUAL'/'' = let the backend choose.",
+    "enum": [
+     "D3",
+     "PLOTLY",
+     "PYMATPLOT",
+     "VISUAL",
+     ""
+    ],
+    "type": "string"
+   },
+   "required_columns": {
+    "description": "Fields that MUST be visible in the output, each as its own column/channel. AUTHORITATIVE and VERIFIED: if the generated code never references one, the server regenerates automatically rather than returning a chart that silently dropped it.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "rows_policy": {
+    "description": "'auto' (default) = the engine decides how to summarize. 'all' = render EXACTLY one mark/row per source row, with no Top-N, no 'Other' rollup and no sampling. Use 'all' when your app depends on every row being present (a row-per-entity table, a point per location).",
+    "enum": [
+     "auto",
+     "all"
+    ],
+    "type": "string"
+   },
+   "width": {
+    "type": "number"
+   },
+   "wrap": {
+    "description": "Code form: 'none' (default) = the raw render() function to merge; 'esm' = same code plus `export { render };` so the file can be `import`ed. Both forms are accepted everywhere - @bicharts/chart-host strips the export clause before compiling - so this is a convenience, never a compatibility choice.",
+    "enum": [
+     "none",
+     "esm"
+    ],
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "generate_chart",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "binding": {
+    "additionalProperties": false,
+    "description": "How `data` was built from your rows. Hand all three to @bicharts/chart-host - <BicChartGroup geo point destination> or createChartGroup(columns, rows, { geo, point, destination }) - and it builds the payload again from LIVE rows with the same columns; never rebuild __rowIdx__ or __geo* columns by hand.",
+    "properties": {
+     "destination": {
+      "anyOf": [
+       {
+        "additionalProperties": {},
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The same for a route's far end (an origin-destination flow map); point is then the origin. Null otherwise."
+     },
+     "geo": {
+      "anyOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "column": {
+          "type": "string"
+         },
+         "kind": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "column",
+         "kind"
+        ],
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "The choropleth join: the column matched to the geometry and its kind. Null when nothing joins."
+     },
+     "point": {
+      "anyOf": [
+       {
+        "additionalProperties": {},
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Which columns place a point (lat/lon, city, state, zip, country) and the map's gazetteer scope. Null when the chart places no points."
+     }
+    },
+    "required": [
+     "geo",
+     "point",
+     "destination"
+    ],
+    "type": "object"
+   },
+   "build": {
+    "description": "MCP server build stamp \u2014 the bundle actually serving this call.",
+    "type": "string"
+   },
+   "chartName": {
+    "description": "The chart type the backend produced.",
+    "type": "string"
+   },
+   "code": {
+    "description": "The render() source. Omitted when include_code is false.",
+    "type": "string"
+   },
+   "codeSummary": {
+    "description": "The backend's own one-line description of what it built.",
+    "type": "string"
+   },
+   "correlationId": {
+    "description": "Ties this generation to the server-side log \u2014 quote it in any support request.",
+    "type": "string"
+   },
+   "creditCost": {
+    "description": "Credits billed, when the server reported them.",
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "data": {
+    "description": "The render payload {columns, rows, \u2026} to hand render() \u2014 INCLUDING any __geoIso__/__geoLat__/__geoLon__ columns the caller cannot reconstruct. Present only when out_dir was NOT given; otherwise read files.data."
+   },
+   "dropLines": {
+    "additionalProperties": false,
+    "description": "A 3D scatter's optional hover drop lines (a line from a hovered point to each back wall). requested: on, because the request asked; on/off: the user's answer, already applied to the generated component; ask: put askUser to the user ONCE before finishing, then pass hoverDropLines: true in the chart's options on a yes. Absent for every other chart.",
+    "properties": {
+     "askUser": {
+      "type": "string"
+     },
+     "state": {
+      "enum": [
+       "requested",
+       "on",
+       "off",
+       "ask"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "state"
+    ],
+    "type": "object"
+   },
+   "files": {
+    "additionalProperties": false,
+    "description": "Absolute paths written, when out_dir was given.",
+    "properties": {
+     "code": {
+      "type": "string"
+     },
+     "component": {
+      "description": "chart.component.tsx: the React host written with a D3 chart - the group, the binding, the plugins and the click contract wired, plus rowsFromTable for a query result. Render it instead of writing one.",
+      "type": "string"
+     },
+     "data": {
+      "type": "string"
+     },
+     "geo": {
+      "type": "string"
+     },
+     "preview": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "geo": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "column": {
+        "description": "Column joined to the geometry; null for a basemap-only point map.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "hasGeometry": {
+        "description": "False means no bundled geometry matched this kind: the map will draw no land.",
+        "type": "boolean"
+       },
+       "kind": {
+        "description": "Geometry asset kind \u2014 pass the matching geometry as options.geo.",
+        "type": "string"
+       },
+       "unmatched": {
+        "description": "Regions in the data with no geometry match.",
+        "type": "number"
+       },
+       "unmatchedExamples": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "column",
+       "kind",
+       "hasGeometry",
+       "unmatched",
+       "unmatchedExamples"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Region/basemap wiring; null for non-geo charts."
+   },
+   "geoPoint": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "ambiguousExamples": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "ambiguousRows": {
+        "description": "Rows whose place name matched several places and was therefore NOT placed.",
+        "type": "number"
+       },
+       "placed": {
+        "type": "number"
+       },
+       "precision": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "total": {
+        "type": "number"
+       },
+       "unplaced": {
+        "type": "number"
+       },
+       "unplacedExamples": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "placed",
+       "total",
+       "precision",
+       "unplaced",
+       "unplacedExamples",
+       "ambiguousRows",
+       "ambiguousExamples"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Point-geocoding outcome (a route's ORIGIN end when geoPointDest is present). `placed` counts only rows with a coordinate: neither an unplaced nor an ambiguous name is plotted. Null when the chart geocodes no points."
+   },
+   "geoPointDest": {
+    "additionalProperties": false,
+    "description": "A route's DESTINATION end (an origin-destination flow map), geocoded apart from geoPoint, which is then the origin. `placed` counts only rows with a destination coordinate: neither an unplaced nor an ambiguous name is plotted. Present only for a route.",
+    "properties": {
+     "ambiguousExamples": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "ambiguousRows": {
+      "description": "Rows whose destination name matched several places and was therefore NOT placed.",
+      "type": "number"
+     },
+     "placed": {
+      "type": "number"
+     },
+     "precision": {
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "total": {
+      "type": "number"
+     },
+     "unplaced": {
+      "type": "number"
+     },
+     "unplacedExamples": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "placed",
+     "total",
+     "precision",
+     "unplaced",
+     "unplacedExamples",
+     "ambiguousRows",
+     "ambiguousExamples"
+    ],
+    "type": "object"
+   },
+   "hostContract": {
+    "description": "Host contract version the code targets; a host on a different MAJOR may not interoperate.",
+    "type": "string"
+   },
+   "integrationContract": {
+    "description": "HOW TO RUN THIS CHART IN YOUR APP - the same integration contract the text block carries, here because a host that shows the model only this structured result would otherwise never see it: the payload and option shapes, the reference host (@bicharts/chart-host) with its React bindings AND its framework-free group (createChartGroup + createChartHost + attach) for a plain page or a UI framework reached through interop, this chart's d3 plugins and geometry, and the host-page prerequisites. Read it before wiring the chart in.",
+    "type": "string"
+   },
+   "language": {
+    "description": "Renderer/language of the code (D3, PYTHON, \u2026).",
+    "type": "string"
+   },
+   "optionsRead": {
+    "description": "The option names THIS chart's code reads (sorted). A chart honours nothing it does not read, so a live restyle - host.setOptions({...}), never a regeneration - can only move these. Some are the host's to supply (width, height, geo, geoPoint, uiState, setUiState, themeFg/themeBg); the integration contract says what each one does. Empty for a non-D3 language.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "outputHash": {
+    "description": "The server's identity for this exact code: the same code always carries the same hash. Keep it with the chart; it names the delivered code in a support request or a later report. Absent when the server sent none.",
+    "type": "string"
+   },
+   "recoveredAfterMs": {
+    "description": "Present when the response stream was cut after the server accepted the request and this chart was then fetched back by its correlation: milliseconds from the start of the call to delivery. creditCost is null then, because the generation was charged as usual and the fetch that delivered it added the cached-serve fee.",
+    "type": "number"
+   },
+   "requiredD3Plugins": {
+    "description": "D3 plugin PACKAGES this code calls (e.g. [\"d3-sankey\"]) \u2014 install them and pass the host ONE d3 that carries them, built with assembleD3(d3, { ...plugins }) from @bicharts/chart-host (assigning onto an ES-module d3 namespace throws), or the chart throws mid-render. Empty for core-only d3 and for non-D3 languages.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "version": {
+    "description": "Server-side version number of this generation.",
+    "type": "number"
+   },
+   "warningMessage": {
+    "description": "Present when the chart drawn is NOT the chart requested: names the requested type, the reason it was overruled, and what was drawn instead. Surface it to the user verbatim \u2014 never suppress it because the chart rendered fine.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "chartName",
+   "language",
+   "version",
+   "creditCost",
+   "correlationId",
+   "requiredD3Plugins",
+   "geo",
+   "geoPoint",
+   "hostContract",
+   "build"
+  ],
+  "type": "object"
+ },
+ "title": "Generate chart code"
+}

@@ -1,0 +1,106 @@
+{
+ "description": "The free Permit2 second round: finishes a POST /trade/v1/swap call whose `signatures` asked the taker to sign a Permit2 `PermitSingle`.\n\n- **Cost:** free, never x402-gated - a payment header, if one is sent anyway, is ignored and nobody is charged. Only reachable once, right after the paid call that opened it.\n- **Key inputs:** the SAME `quoteId`, `taker` and `recipient` (defaults to `taker`) as the paid POST /trade/v1/swap call, plus `deadlineSec` and the required `permit: { message: signatures[0].typedData.message, signature }` (sign `typedData` with the taker's key, EIP-712, e.g. viem's `signTypedData`). `permit` accepts only `message` and `signature`, end to end - any other field, at any level, is 400 `invalid_request` at parse. The service rebuilds the Permit2 domain itself and checks the signer, spender, token, amount, nonce and both deadlines: a mismatched spender or token, or an amount below `amountIn` (a larger amount is accepted), is 400 `invalid_request`; a stale nonce, an expired `sigDeadline`/`expiration`, or an invalid signature (verified via ERC-1271 on chain for a contract taker) is 422 `swap_reverts`. A contract taker can swap, but POST /trade/v1/receipt only reads transactions the taker sends itself, so it answers `invalid_request` for a Safe, ERC-4337 or batching EIP-7702 wallet: check your own transaction receipt instead.\n- **No pending round:** 409 `no_pending_swap` when this `quoteId`/`taker`/`recipient` never paid, named a different taker or recipient, or already used its one free call - call POST /trade/v1/swap first, which is paid and returns the permit this call takes.\n- **Freshness:** re-quotes and re-simulates exactly like POST /trade/v1/swap, and can answer the SAME 410 `quote_expired`/409 `quote_stale` it would - but never with a fresh `quote` (issue #124's free re-quote is /trade/v1/swap's own paid-quote courtesy, not this free route's).\n- **Attempts:** a permit round (`quoteId`, `taker`, `recipient`) gets at most 5 failed calls; the next one is 429 `swap_attempts_exhausted` (`next: \"requote\"`), answered without running the swap pipeline. A failed call is a 400 from the permit checks above, a 409, 422, 500 or 503, or an undelivered 200; a delivered 200, a 400 at parse, a 404, a 410 or `no_pending_swap` uses none. Failed POST /trade/v1/swap calls don't count here. A new POST /trade/v1/swap permit response resets this round's attempts only once delivered (after settlement when paid).\n- **Next:** sign and send `transactions` in order, then confirm the fill with POST /trade/v1/receipt (free). This is the last call in search -> quote -> swap -> swap/tx.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "deadlineSec": {
+    "default": 60,
+    "maximum": 600,
+    "minimum": 10,
+    "type": "integer"
+   },
+   "permit": {
+    "additionalProperties": false,
+    "properties": {
+     "message": {
+      "additionalProperties": false,
+      "properties": {
+       "details": {
+        "additionalProperties": false,
+        "properties": {
+         "amount": {
+          "pattern": "^\\d+$",
+          "type": "string"
+         },
+         "expiration": {
+          "pattern": "^\\d+$",
+          "type": "string"
+         },
+         "nonce": {
+          "pattern": "^\\d+$",
+          "type": "string"
+         },
+         "token": {
+          "pattern": "^0x[0-9a-fA-F]{40}$",
+          "type": "string"
+         }
+        },
+        "required": [
+         "token",
+         "amount",
+         "expiration",
+         "nonce"
+        ],
+        "type": "object"
+       },
+       "sigDeadline": {
+        "pattern": "^\\d+$",
+        "type": "string"
+       },
+       "spender": {
+        "pattern": "^0x[0-9a-fA-F]{40}$",
+        "type": "string"
+       }
+      },
+      "required": [
+       "details",
+       "spender",
+       "sigDeadline"
+      ],
+      "type": "object"
+     },
+     "signature": {
+      "pattern": "^0x[0-9a-fA-F]+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "message",
+     "signature"
+    ],
+    "type": "object"
+   },
+   "quoteId": {
+    "pattern": "^q_[0-9a-f]{16,}$",
+    "type": "string"
+   },
+   "recipient": {
+    "anyOf": [
+     {
+      "pattern": "^0x[0-9a-fA-F]{40}$",
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null
+   },
+   "taker": {
+    "pattern": "^0x[0-9a-fA-F]{40}$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "quoteId",
+   "taker",
+   "permit"
+  ],
+  "type": "object"
+ },
+ "name": "tradeSwapTx"
+}

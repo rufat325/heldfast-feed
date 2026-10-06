@@ -1,0 +1,735 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Rechnungsdaten aus PDF auslesen"
+ },
+ "description": "Extrahiert EN-16931-Rechnungsdaten aus einer hochgeladenen PDF (Formularfelder) plus Validierungs-Issues, als Korrekturschritt vor create_zugferd: Felder und Issues dem Nutzer zeigen, korrigieren lassen, danach create_zugferd mit dem korrigierten invoice und derselben upload_id aufrufen. Unsichere Felder stehen als Platzhalter 'KORRIGIEREN' (Text) bzw. '1900-01-01' (Datum) drin und werden als Issue mit Code EXTRACTION_UNCERTAIN gemeldet \u2014 diese Felder m\u00fcssen vor create_zugferd korrigiert werden. Enth\u00e4lt die PDF bereits eine eingebettete E-Rechnung (ZUGFeRD/Factur-X), kommen die Felder deterministisch aus der XML (source='xml') statt aus einer Sprachmodell-Lesung des Druckbilds. Erfordert ein Konto mit aktivem Abo oder Guthaben.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "pdf_base64": {
+    "contentEncoding": "base64",
+    "contentMediaType": "application/pdf",
+    "description": "Die zu extrahierende PDF-Rechnung, Base64-kodiert (max. 25 MB). Alternativ 'upload_id' angeben. Chat-Clients, die eine angeh\u00e4ngte Datei nicht zuverl\u00e4ssig als Base64 \u00fcbergeben k\u00f6nnen, rufen zuerst request_upload_link auf.",
+    "type": "string"
+   },
+   "upload_id": {
+    "description": "Referenz auf eine zuvor \u00fcber request_upload_link hochgeladene Datei, anstelle von pdf_base64. Genau eines von beiden angeben. Wird im Ergebnis erneut zur\u00fcckgegeben und kann anschlie\u00dfend bei create_zugferd als 'upload_id' verwendet werden, damit dieselbe Quell-PDF eingebettet wird.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "extract_invoice",
+ "outputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "expires_at": {
+    "description": "ISO-8601-Zeitpunkt, ab dem upload_id verf\u00e4llt. Danach erneut request_upload_link und extract_invoice aufrufen.",
+    "type": "string"
+   },
+   "invoice": {
+    "$schema": "http://json-schema.org/draft-07/schema#",
+    "additionalProperties": false,
+    "description": "Extrahierte EN-16931-Rechnungsdaten (Formularfelder). Vor create_zugferd pr\u00fcfen und korrigieren, insbesondere Felder mit dem Wert 'KORRIGIEREN' bzw. '1900-01-01'.",
+    "properties": {
+     "allowanceCharges": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "amount": {
+         "description": "BT-92/BT-99: Betrag ohne Vorzeichen. Darf fehlen, wenn percent gesetzt ist: dann gilt round2(basisAmount \u00d7 percent / 100).",
+         "minimum": 0,
+         "type": "number"
+        },
+        "basisAmount": {
+         "description": "BT-93/BT-100: Grundbetrag des Prozentsatzes. Ohne Angabe die Summe der lineNetAmount aller Positionen mit ratePercent (bei gemischten Kategorien desselben Satzes nur die mit categoryCode).",
+         "type": "number"
+        },
+        "categoryCode": {
+         "default": "S",
+         "maxLength": 12,
+         "type": "string"
+        },
+        "charge": {
+         "description": "true = Zuschlag (BG-21), false = Abzug/Nachlass (BG-20).",
+         "type": "boolean"
+        },
+        "percent": {
+         "description": "BT-94/BT-101: Prozentsatz, z. B. 2 f\u00fcr 2 % Nachlass.",
+         "maximum": 100,
+         "minimum": 0,
+         "type": "number"
+        },
+        "ratePercent": {
+         "description": "BT-96/BT-103: Steuersatz in Prozent. Darf beim Prozent-Eintrag ohne basisAmount fehlen, wenn alle Positionen denselben Satz haben.",
+         "type": "number"
+        },
+        "reason": {
+         "maxLength": 200,
+         "type": "string"
+        },
+        "reasonCode": {
+         "maxLength": 10,
+         "type": "string"
+        }
+       },
+       "required": [
+        "charge"
+       ],
+       "type": "object"
+      },
+      "maxItems": 50,
+      "type": "array"
+     },
+     "buyer": {
+      "additionalProperties": false,
+      "properties": {
+       "address": {
+        "additionalProperties": false,
+        "default": {},
+        "properties": {
+         "city": {
+          "maxLength": 100,
+          "type": "string"
+         },
+         "countryCode": {
+          "default": "DE",
+          "maxLength": 2,
+          "minLength": 2,
+          "type": "string"
+         },
+         "line1": {
+          "maxLength": 150,
+          "type": "string"
+         },
+         "line2": {
+          "maxLength": 150,
+          "type": "string"
+         },
+         "postalCode": {
+          "maxLength": 20,
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "contact": {
+        "additionalProperties": false,
+        "properties": {
+         "email": {
+          "maxLength": 150,
+          "type": "string"
+         },
+         "name": {
+          "maxLength": 150,
+          "type": "string"
+         },
+         "phone": {
+          "maxLength": 40,
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "electronicAddress": {
+        "additionalProperties": false,
+        "properties": {
+         "id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+         },
+         "scheme": {
+          "default": "EM",
+          "maxLength": 10,
+          "type": "string"
+         }
+        },
+        "required": [
+         "id"
+        ],
+        "type": "object"
+       },
+       "gln": {
+        "maxLength": 20,
+        "type": "string"
+       },
+       "name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+       },
+       "registrationId": {
+        "description": "BT-30 (Verk\u00e4ufer) / BT-47 (K\u00e4ufer): Handelsregisternummer bzw. Registerkennung der Partei, z. B. \"HRB 12345, Amtsgericht M\u00fcnchen\". Nur angeben, wenn sie auf der Rechnung steht. Beim K\u00e4ufer reicht sie bei Reverse Charge (Kategorie AE) statt der USt-IdNr., bei innergemeinschaftlicher Lieferung (K) nicht.",
+        "maxLength": 60,
+        "type": "string"
+       },
+       "vatId": {
+        "maxLength": 20,
+        "type": "string"
+       }
+      },
+      "required": [
+       "name"
+      ],
+      "type": "object"
+     },
+     "buyerReference": {
+      "maxLength": 80,
+      "type": "string"
+     },
+     "contractReference": {
+      "maxLength": 200,
+      "type": "string"
+     },
+     "costCenter": {
+      "maxLength": 60,
+      "type": "string"
+     },
+     "currency": {
+      "default": "EUR",
+      "maxLength": 3,
+      "minLength": 3,
+      "type": "string"
+     },
+     "delivery": {
+      "additionalProperties": false,
+      "properties": {
+       "address": {
+        "additionalProperties": false,
+        "properties": {
+         "city": {
+          "maxLength": 100,
+          "type": "string"
+         },
+         "countryCode": {
+          "maxLength": 2,
+          "minLength": 2,
+          "type": "string"
+         },
+         "line1": {
+          "maxLength": 150,
+          "type": "string"
+         },
+         "line2": {
+          "maxLength": 150,
+          "type": "string"
+         },
+         "postalCode": {
+          "maxLength": 20,
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "name": {
+        "maxLength": 200,
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "deliveryCountryCode": {
+      "maxLength": 2,
+      "minLength": 2,
+      "type": "string"
+     },
+     "deliveryDate": {
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "type": "string"
+     },
+     "despatchAdviceRef": {
+      "maxLength": 200,
+      "type": "string"
+     },
+     "documentTypeCode": {
+      "default": "380",
+      "type": "string"
+     },
+     "dueDate": {
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "type": "string"
+     },
+     "invoiceNumber": {
+      "maxLength": 60,
+      "minLength": 1,
+      "type": "string"
+     },
+     "invoicingPeriod": {
+      "additionalProperties": false,
+      "properties": {
+       "end": {
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+       },
+       "start": {
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "issueDate": {
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "type": "string"
+     },
+     "lines": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "allowanceCharges": {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "amount": {
+            "description": "BT-136/BT-141: Betrag ohne Vorzeichen. Darf fehlen, wenn percent gesetzt ist: dann gilt round2(basisAmount \u00d7 percent / 100).",
+            "minimum": 0,
+            "type": "number"
+           },
+           "basisAmount": {
+            "description": "BT-137/BT-142: Grundbetrag des Prozentsatzes. Ohne Angabe Menge \u00d7 unitPriceNet der Position (je Eintrag, nicht gestaffelt).",
+            "type": "number"
+           },
+           "charge": {
+            "description": "true = Zuschlag (BG-28), false = Abzug/Rabatt (BG-27).",
+            "type": "boolean"
+           },
+           "percent": {
+            "description": "BT-138/BT-143: Prozentsatz, z. B. 10 f\u00fcr 10 % Rabatt.",
+            "maximum": 100,
+            "minimum": 0,
+            "type": "number"
+           },
+           "reason": {
+            "maxLength": 200,
+            "type": "string"
+           },
+           "reasonCode": {
+            "maxLength": 10,
+            "type": "string"
+           }
+          },
+          "required": [
+           "charge"
+          ],
+          "type": "object"
+         },
+         "maxItems": 10,
+         "type": "array"
+        },
+        "buyerArticleId": {
+         "maxLength": 200,
+         "type": "string"
+        },
+        "categoryCode": {
+         "maxLength": 12,
+         "type": "string"
+        },
+        "globalArticleId": {
+         "maxLength": 60,
+         "type": "string"
+        },
+        "globalArticleScheme": {
+         "maxLength": 10,
+         "pattern": "^[0-9A-Za-z]+$",
+         "type": "string"
+        },
+        "lineNetAmount": {
+         "type": "number"
+        },
+        "name": {
+         "maxLength": 300,
+         "minLength": 1,
+         "type": "string"
+        },
+        "quantity": {
+         "type": "number"
+        },
+        "sellerArticleId": {
+         "maxLength": 200,
+         "type": "string"
+        },
+        "unitCode": {
+         "default": "C62",
+         "maxLength": 12,
+         "type": "string"
+        },
+        "unitPriceNet": {
+         "type": "number"
+        },
+        "vatRatePercent": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "name",
+        "quantity",
+        "unitPriceNet",
+        "vatRatePercent",
+        "lineNetAmount"
+       ],
+       "type": "object"
+      },
+      "maxItems": 500,
+      "minItems": 1,
+      "type": "array"
+     },
+     "notes": {
+      "items": {
+       "anyOf": [
+        {
+         "maxLength": 1000,
+         "type": "string"
+        },
+        {
+         "additionalProperties": false,
+         "properties": {
+          "subjectCode": {
+           "type": "string"
+          },
+          "text": {
+           "maxLength": 1000,
+           "type": "string"
+          }
+         },
+         "required": [
+          "text"
+         ],
+         "type": "object"
+        }
+       ]
+      },
+      "maxItems": 20,
+      "type": "array"
+     },
+     "paidAmount": {
+      "minimum": 0,
+      "type": "number"
+     },
+     "payee": {
+      "additionalProperties": false,
+      "properties": {
+       "gln": {
+        "maxLength": 20,
+        "type": "string"
+       },
+       "name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+       },
+       "registrationId": {
+        "maxLength": 60,
+        "type": "string"
+       }
+      },
+      "required": [
+       "name"
+      ],
+      "type": "object"
+     },
+     "payment": {
+      "additionalProperties": false,
+      "properties": {
+       "accountName": {
+        "maxLength": 200,
+        "type": "string"
+       },
+       "bic": {
+        "maxLength": 15,
+        "pattern": "^[A-Za-z0-9 ]*$",
+        "type": "string"
+       },
+       "creditorId": {
+        "maxLength": 35,
+        "type": "string"
+       },
+       "debitedIban": {
+        "maxLength": 40,
+        "pattern": "^[A-Za-z0-9 ]*$",
+        "type": "string"
+       },
+       "discountDays": {
+        "maximum": 999,
+        "minimum": 0,
+        "type": "integer"
+       },
+       "discountPercent": {
+        "maximum": 100,
+        "minimum": 0,
+        "type": "number"
+       },
+       "iban": {
+        "maxLength": 40,
+        "pattern": "^[A-Za-z0-9 ]*$",
+        "type": "string"
+       },
+       "mandateId": {
+        "maxLength": 35,
+        "type": "string"
+       },
+       "meansCode": {
+        "type": "string"
+       },
+       "reference": {
+        "maxLength": 140,
+        "type": "string"
+       },
+       "terms": {
+        "maxLength": 1000,
+        "type": "string"
+       }
+      },
+      "type": "object"
+     },
+     "precedingInvoiceDate": {
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "type": "string"
+     },
+     "precedingInvoiceNumber": {
+      "maxLength": 60,
+      "type": "string"
+     },
+     "profile": {
+      "default": "en16931",
+      "enum": [
+       "en16931",
+       "xrechnung"
+      ],
+      "type": "string"
+     },
+     "projectReference": {
+      "maxLength": 200,
+      "type": "string"
+     },
+     "purchaseOrderReference": {
+      "maxLength": 60,
+      "type": "string"
+     },
+     "receivingAdviceRef": {
+      "maxLength": 200,
+      "type": "string"
+     },
+     "seller": {
+      "additionalProperties": false,
+      "properties": {
+       "address": {
+        "additionalProperties": false,
+        "default": {},
+        "properties": {
+         "city": {
+          "maxLength": 100,
+          "type": "string"
+         },
+         "countryCode": {
+          "default": "DE",
+          "maxLength": 2,
+          "minLength": 2,
+          "type": "string"
+         },
+         "line1": {
+          "maxLength": 150,
+          "type": "string"
+         },
+         "line2": {
+          "maxLength": 150,
+          "type": "string"
+         },
+         "postalCode": {
+          "maxLength": 20,
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "contact": {
+        "additionalProperties": false,
+        "properties": {
+         "email": {
+          "maxLength": 150,
+          "type": "string"
+         },
+         "name": {
+          "maxLength": 150,
+          "type": "string"
+         },
+         "phone": {
+          "maxLength": 40,
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "electronicAddress": {
+        "additionalProperties": false,
+        "properties": {
+         "id": {
+          "maxLength": 200,
+          "minLength": 1,
+          "type": "string"
+         },
+         "scheme": {
+          "default": "EM",
+          "maxLength": 10,
+          "type": "string"
+         }
+        },
+        "required": [
+         "id"
+        ],
+        "type": "object"
+       },
+       "gln": {
+        "maxLength": 20,
+        "type": "string"
+       },
+       "name": {
+        "maxLength": 200,
+        "minLength": 1,
+        "type": "string"
+       },
+       "registrationId": {
+        "description": "BT-30 (Verk\u00e4ufer) / BT-47 (K\u00e4ufer): Handelsregisternummer bzw. Registerkennung der Partei, z. B. \"HRB 12345, Amtsgericht M\u00fcnchen\". Nur angeben, wenn sie auf der Rechnung steht. Beim K\u00e4ufer reicht sie bei Reverse Charge (Kategorie AE) statt der USt-IdNr., bei innergemeinschaftlicher Lieferung (K) nicht.",
+        "maxLength": 60,
+        "type": "string"
+       },
+       "vatId": {
+        "maxLength": 20,
+        "type": "string"
+       }
+      },
+      "required": [
+       "name"
+      ],
+      "type": "object"
+     },
+     "taxCurrencyCode": {
+      "maxLength": 3,
+      "minLength": 3,
+      "type": "string"
+     },
+     "totalGross": {
+      "type": "number"
+     },
+     "totalNet": {
+      "type": "number"
+     },
+     "totalVat": {
+      "type": "number"
+     },
+     "totalVatInTaxCurrency": {
+      "type": "number"
+     },
+     "vatBreakdown": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "basisAmount": {
+         "type": "number"
+        },
+        "categoryCode": {
+         "default": "S",
+         "maxLength": 12,
+         "type": "string"
+        },
+        "exemptionReason": {
+         "maxLength": 500,
+         "type": "string"
+        },
+        "exemptionReasonCode": {
+         "maxLength": 30,
+         "type": "string"
+        },
+        "ratePercent": {
+         "type": "number"
+        },
+        "taxAmount": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "ratePercent",
+        "basisAmount",
+        "taxAmount"
+       ],
+       "type": "object"
+      },
+      "maxItems": 50,
+      "minItems": 1,
+      "type": "array"
+     }
+    },
+    "required": [
+     "invoiceNumber",
+     "issueDate",
+     "seller",
+     "buyer",
+     "lines",
+     "vatBreakdown",
+     "totalNet",
+     "totalVat",
+     "totalGross"
+    ],
+    "type": "object"
+   },
+   "source": {
+    "description": "Herkunft der Felder: 'xml' = deterministisch aus der in der PDF eingebetteten E-Rechnung \u00fcbernommen, 'llm' = per Sprachmodell aus dem Druckbild extrahiert.",
+    "enum": [
+     "xml",
+     "llm"
+    ],
+    "type": "string"
+   },
+   "upload_id": {
+    "description": "Bei create_zugferd als 'upload_id' \u00fcbergeben, damit dieselbe Quell-PDF eingebettet wird.",
+    "type": "string"
+   },
+   "validation_issues": {
+    "description": "Offene Probleme der extrahierten Daten. severity='error' blockiert create_zugferd (dort wird dieselbe Pr\u00fcfung erneut ausgef\u00fchrt), 'warning' nicht.",
+    "items": {
+     "properties": {
+      "code": {
+       "description": "Maschinencode, z. B. \"BR-CO-26\" oder \"EXTRACTION_UNCERTAIN\".",
+       "type": "string"
+      },
+      "message": {
+       "description": "Deutsche Fehlermeldung.",
+       "type": "string"
+      },
+      "path": {
+       "description": "Punkt-Pfad ins Invoice-Objekt, z. B. \"seller.vatId\".",
+       "type": "string"
+      },
+      "severity": {
+       "enum": [
+        "error",
+        "warning"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "code",
+      "message",
+      "severity"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "invoice",
+   "validation_issues",
+   "upload_id",
+   "expires_at",
+   "source"
+  ],
+  "type": "object"
+ },
+ "title": "Rechnungsdaten aus PDF auslesen"
+}

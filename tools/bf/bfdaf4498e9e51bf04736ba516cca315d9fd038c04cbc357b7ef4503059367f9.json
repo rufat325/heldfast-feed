@@ -1,0 +1,367 @@
+{
+ "annotations": {
+  "destructiveHint": true
+ },
+ "description": "Add, remove, or list a note's tags. Defaults to the frontmatter `tags:` array \u2014 set `location` to `inline` or `both` to mutate the note body. `add` ensures the tag is present in the requested location(s); `remove` strips it; `both` reconciles across both representations. Inline `#tag` detection skips what Obsidian indexes no tag in: code (fenced, indented, and inline), wikilinks (`[[...]]` \u2014 so a heading anchor, block anchor, or wikilink alias is never read as a tag or rewritten by a removal), images, a markdown link's destination or label (its text is read), HTML blocks and comments (`<!-- \u2026 -->`), and math (`$\u2026$`, `$$\u2026$$`). An inline tag starts at line start, after whitespace, after another tag (`#a#b` is two tags), or right after markup such as `**`, `_\u2026_`, `==`, `[`, a table cell's `|`, `<br>`, or a `\\`-escape (`**#x**` is a tag; `(#x`, `a *#x`, and `\\#x` are not); a `#` inside a `%% \u2026 %%` comment still counts. Inline-location additions append the new tag at end-of-file. `list` ignores the input `tags` array.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "location": {
+    "default": "frontmatter",
+    "description": "Where to apply the change. Defaults to `frontmatter` (the canonical Obsidian tag location, leaves the body untouched). `inline` mutates the note body \u2014 `add` appends `#tag` at end-of-file. `both` is opt-in reconciliation of frontmatter and inline tag locations.",
+    "enum": [
+     "frontmatter",
+     "inline",
+     "both"
+    ],
+    "type": "string"
+   },
+   "operation": {
+    "description": "`add` and `remove` mutate the note; `list` reads the current tag set.",
+    "enum": [
+     "add",
+     "remove",
+     "list"
+    ],
+    "type": "string"
+   },
+   "tags": {
+    "description": "Tags to add or remove. Omit the leading `#`. Required for add/remove.",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "target": {
+    "description": "Where the note lives.",
+    "oneOf": [
+     {
+      "description": "Address a note by its vault-relative path.",
+      "properties": {
+       "path": {
+        "description": "Vault-relative path including extension, e.g. \"Projects/foo.md\".",
+        "minLength": 1,
+        "type": "string"
+       },
+       "type": {
+        "const": "path",
+        "description": "Address by vault-relative path.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "path"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "Address whichever file is currently active in the Obsidian UI.",
+      "properties": {
+       "type": {
+        "const": "active",
+        "description": "Address the file currently open in Obsidian.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type"
+      ],
+      "type": "object"
+     },
+     {
+      "description": "Address a periodic note (current or dated).",
+      "properties": {
+       "date": {
+        "description": "ISO date YYYY-MM-DD. Omit for the current period.",
+        "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+        "type": "string"
+       },
+       "period": {
+        "description": "Periodic note granularity.",
+        "enum": [
+         "daily",
+         "weekly",
+         "monthly",
+         "quarterly",
+         "yearly"
+        ],
+        "type": "string"
+       },
+       "type": {
+        "const": "periodic",
+        "description": "Address a daily/weekly/monthly/etc. periodic note.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "type",
+       "period"
+      ],
+      "type": "object"
+     }
+    ]
+   }
+  },
+  "required": [
+   "target",
+   "operation"
+  ],
+  "type": "object"
+ },
+ "name": "obsidian_manage_tags",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "result"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `path_forbidden`: `list` requires the path to be readable; `add`/`remove` require it to be inside OBSIDIAN_WRITE_PATHS, with OBSIDIAN_READ_ONLY=false. `tags_required`: `operation` is \"add\" or \"remove\" but `tags` was empty or omitted. `frontmatter_invalid`: `location` reaches the frontmatter and the note's existing block does not parse as a mapping of properties, or the tag change would leave YAML that cannot be re-emitted. Nothing is written \u2014 the note keeps its original bytes, and under `location: \"both\"` the inline half is skipped too rather than applied on its own. `note_missing`: The vault path does not resolve to an existing note. `no_active_file`: Target was `active` but no file is currently open in Obsidian. `periodic_unsupported`: Target was `periodic` and this vault runs Local REST API v5.0.2 or later without the companion periodic-notes extension, so the `/periodic/` routes are not served at all. `periodic_not_found`: Target was `periodic`, the `/periodic/` routes are served on this vault, and no note exists for the requested period. `periodic_disabled`: Target was `periodic` but the requested period is not enabled in Obsidian's Periodic Notes plugin settings. `path_is_directory`: The supplied path names a folder rather than a note file. `path_traversal`: The path contains a `.` or `..` segment, which is rejected to prevent vault escape. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "path_forbidden",
+         "tags_required",
+         "frontmatter_invalid",
+         "note_missing",
+         "no_active_file",
+         "periodic_unsupported",
+         "periodic_not_found",
+         "periodic_disabled",
+         "path_is_directory",
+         "path_traversal"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "result": {
+    "description": "Operation-discriminated result payload.",
+    "oneOf": [
+     {
+      "additionalProperties": false,
+      "description": "Result for `list`.",
+      "properties": {
+       "operation": {
+        "const": "list",
+        "description": "Echoed operation.",
+        "type": "string"
+       },
+       "path": {
+        "description": "Resolved vault-relative path.",
+        "type": "string"
+       },
+       "tags": {
+        "additionalProperties": false,
+        "description": "Tags split by location plus the deduplicated union.",
+        "properties": {
+         "all": {
+          "description": "Deduplicated union of frontmatter and inline tags.",
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "frontmatter": {
+          "description": "Tags from frontmatter `tags:` array.",
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "inline": {
+          "description": "Tags found in inline `#tag` syntax.",
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         }
+        },
+        "required": [
+         "frontmatter",
+         "inline",
+         "all"
+        ],
+        "type": "object"
+       }
+      },
+      "required": [
+       "operation",
+       "path",
+       "tags"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "description": "Result for `add`.",
+      "properties": {
+       "applied": {
+        "description": "Tags actually changed by this call.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "currentSizeInBytes": {
+        "description": "Byte size of the note after the add. Equals `previousSizeInBytes` when no tags were applied.",
+        "type": "number"
+       },
+       "operation": {
+        "const": "add",
+        "description": "Echoed operation.",
+        "type": "string"
+       },
+       "path": {
+        "description": "Resolved vault-relative path.",
+        "type": "string"
+       },
+       "previousSizeInBytes": {
+        "description": "Byte size of the note before the add.",
+        "type": "number"
+       },
+       "skipped": {
+        "description": "Tags already present at the targeted location(s).",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "tags": {
+        "description": "All tags on the note after the change.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "operation",
+       "path",
+       "applied",
+       "skipped",
+       "tags",
+       "previousSizeInBytes",
+       "currentSizeInBytes"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "description": "Result for `remove`.",
+      "properties": {
+       "applied": {
+        "description": "Tags actually changed by this call.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "currentSizeInBytes": {
+        "description": "Byte size of the note after the remove. Equals `previousSizeInBytes` when no tags were applied.",
+        "type": "number"
+       },
+       "operation": {
+        "const": "remove",
+        "description": "Echoed operation.",
+        "type": "string"
+       },
+       "path": {
+        "description": "Resolved vault-relative path.",
+        "type": "string"
+       },
+       "previousSizeInBytes": {
+        "description": "Byte size of the note before the remove.",
+        "type": "number"
+       },
+       "skipped": {
+        "description": "Tags absent from the targeted location(s).",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "tags": {
+        "description": "All tags on the note after the change.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "operation",
+       "path",
+       "applied",
+       "skipped",
+       "tags",
+       "previousSizeInBytes",
+       "currentSizeInBytes"
+      ],
+      "type": "object"
+     }
+    ]
+   }
+  },
+  "type": "object"
+ },
+ "title": "Obsidian Manage Tags"
+}

@@ -1,0 +1,373 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Fetch SEC XBRL frames for one concept \u00d7 one period across all reporting companies. Inline response returns a page of the ranked companies \u2014 start at the top or pass offset/next_offset to walk further down the ranking; the full frames response (all reporters) is materialized as df_<id> when a canvas is available \u2014 inspect it with secedgar_dataframe_describe, then analyze it with secedgar_dataframe_query. Accepts friendly names like \"revenue\" or \"assets\" (discover via secedgar_search_concepts) or raw XBRL tags. One call hits one XBRL tag \u2014 when a friendly name maps to multiple same-meaning tags, the response's `unqueried_tags` lists the others; call again per tag and UNION/COALESCE in SQL with an analysis-specific priority (e.g. SalesRevenueGoodsNet is goods-only). The response's `related_tags` separately flags alternate-DEFINITION tags a meaningful share of filers use as their primary line (e.g. cash incl. restricted cash, equity incl. noncontrolling interest) \u2014 a whole-universe screen on the base tag silently omits those filers; query them separately, but do not blindly union (the semantics differ). Response includes `value_distribution` and `period_end_range` to flag XBRL scale-factor anomalies and fiscal-year mixing. SEC publishes frames for us-gaap and dei tags only, and `taxonomy` picks which of the two a raw tag is read from (dei for cover-page tags such as EntityCommonStockSharesOutstanding); a friendly name keeps its own mapped taxonomy. There are no ifrs-full frames, so IFRS (20-F) filers are absent from every frame; read them per company with secedgar_get_financials or secedgar_compare_companies under taxonomy ifrs-full.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "concept": {
+    "description": "Financial concept \u2014 same friendly names as secedgar_get_financials (e.g., \"revenue\", \"assets\", \"eps_basic\") or raw XBRL tag.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "limit": {
+    "default": 25,
+    "description": "Number of companies to return.",
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "offset": {
+    "default": 0,
+    "description": "Rank to start the page at, 0-based, over the sorted frame. Pass the next_offset from the previous response to read the next page \u2014 the ranked list is fetched whole and sliced, so paging is stable and gap-free. An offset at or past total_companies returns an empty page.",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "period": {
+    "description": "Calendar period. Use duration periods (no I suffix) for income/cash-flow items: \"CY2023\" (full year), \"CY2024Q2\" (single quarter). Use instant periods (I suffix) for balance-sheet items: \"CY2023Q4I\" (snapshot at Q4 close).",
+    "minLength": 1,
+    "pattern": "^CY\\d{4}(Q[1-4]I?)?$",
+    "type": "string"
+   },
+   "sort": {
+    "default": "desc",
+    "description": "Sort direction. \"desc\" for highest values first (typical for revenue, assets). \"asc\" for lowest values.",
+    "enum": [
+     "desc",
+     "asc"
+    ],
+    "type": "string"
+   },
+   "taxonomy": {
+    "default": "us-gaap",
+    "description": "Frames namespace a raw XBRL tag is read from: us-gaap for financial-statement tags, dei for cover-page entity tags such as EntityCommonStockSharesOutstanding. SEC publishes frames for no other taxonomy. A friendly name keeps its own mapped taxonomy (shares_outstanding reads dei) unless dei is passed, which reads its tags from dei instead \u2014 the same rule as secedgar_get_financials.",
+    "enum": [
+     "us-gaap",
+     "dei"
+    ],
+    "type": "string"
+   },
+   "unit": {
+    "default": "USD",
+    "description": "Unit of measure. Use \"USD-per-shares\" (or equivalently \"USD/shares\") for EPS, \"shares\" for share counts, \"pure\" for ratios. Ignored when concept resolves to a friendly name with a known unit.",
+    "enum": [
+     "USD",
+     "USD-per-shares",
+     "USD/shares",
+     "shares",
+     "pure"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "concept",
+   "period"
+  ],
+  "type": "object"
+ },
+ "name": "secedgar_fetch_frames",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "concept",
+     "taxonomy",
+     "period",
+     "unit",
+     "label",
+     "total_companies",
+     "offset",
+     "data",
+     "unqueried_tags",
+     "related_tags",
+     "value_distribution",
+     "period_end_range",
+     "caveats"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cap": {
+    "description": "The limit cap applied.",
+    "type": "number"
+   },
+   "caveats": {
+    "description": "Completeness warnings, else empty: quarterly frames (CY####Q#) omit fiscal-Q4 filers; annual NetIncomeLoss rows may be proxy pay-versus-performance figures; an annual frame still open or in its 10-K window may hold 10-Q trailing-twelve-month figures; top rows may be split or scale artifacts.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "concept": {
+    "description": "XBRL tag the data was actually fetched against (after resolving any friendly name).",
+    "type": "string"
+   },
+   "data": {
+    "description": "Ranked companies for this metric.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One company's reported value for this metric and period.",
+     "properties": {
+      "accession_number": {
+       "description": "Source filing for secedgar_get_filing.",
+       "type": "string"
+      },
+      "cik": {
+       "description": "Company CIK, zero-padded to 10 digits.",
+       "type": "string"
+      },
+      "company_name": {
+       "description": "Entity name.",
+       "type": "string"
+      },
+      "location": {
+       "description": "Business location (state or country). Absent when SEC has none.",
+       "type": "string"
+      },
+      "period_end": {
+       "description": "Period end date (YYYY-MM-DD).",
+       "type": "string"
+      },
+      "rank": {
+       "description": "Rank in sorted order.",
+       "type": "number"
+      },
+      "ticker": {
+       "description": "Ticker symbol (if available).",
+       "type": "string"
+      },
+      "value": {
+       "description": "Reported value.",
+       "type": "number"
+      }
+     },
+     "required": [
+      "rank",
+      "company_name",
+      "cik",
+      "value",
+      "period_end",
+      "accession_number"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "dataset": {
+    "additionalProperties": false,
+    "description": "Dataframe of the full frame, every reporter. Absent when canvas is unavailable or staging failed.",
+    "properties": {
+     "expires_at": {
+      "description": "ISO 8601 expiry timestamp.",
+      "type": "string"
+     },
+     "name": {
+      "description": "Dataframe handle (df_XXXXX_XXXXX) for secedgar_dataframe_describe, then secedgar_dataframe_query.",
+      "type": "string"
+     },
+     "row_count": {
+      "description": "Rows materialized in the dataframe.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "name",
+     "row_count",
+     "expires_at"
+    ],
+    "type": "object"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `unknown_concept`: The concept input is neither a supported friendly name nor shaped like an XBRL tag, so no request is sent. `no_data`: Concept resolves but no companies report this metric for the requested period and unit. `rate_limited`: SEC is rate-limiting this server's IP \u2014 SEC answered 429, or the call was refused without being sent while the cool-down after one runs. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "unknown_concept",
+         "no_data",
+         "rate_limited"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "label": {
+    "description": "Human-readable concept label.",
+    "type": "string"
+   },
+   "next_offset": {
+    "description": "Offset for the next page down the ranking. Absent on the last page.",
+    "type": "number"
+   },
+   "notice": {
+    "description": "Guidance when the requested offset lands past the end of the ranked list.",
+    "type": "string"
+   },
+   "offset": {
+    "description": "Rank the returned page starts at, 0-based.",
+    "type": "number"
+   },
+   "period": {
+    "description": "Calendar period the data was fetched for, echoed from input.",
+    "type": "string"
+   },
+   "period_end_range": {
+    "additionalProperties": false,
+    "description": "Range of period_end dates; filers report on their own fiscal years, so \"CY2023\" can span 2023-01-31 to 2024-12-31, mixing fiscal periods.",
+    "properties": {
+     "max": {
+      "description": "Latest period_end across all rows (YYYY-MM-DD).",
+      "type": "string"
+     },
+     "min": {
+      "description": "Earliest period_end across all rows (YYYY-MM-DD).",
+      "type": "string"
+     }
+    },
+    "required": [
+     "min",
+     "max"
+    ],
+    "type": "object"
+   },
+   "related_tags": {
+    "description": "Alternate-definition tags many filers use as their primary line (e.g., cash including restricted cash); those filers are absent from data. Fetch each separately; never blindly UNION, since definitions differ. Empty when none is known.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One alternate-definition tag and the reason it differs.",
+     "properties": {
+      "note": {
+       "description": "How this tag differs in definition from the queried tag.",
+       "type": "string"
+      },
+      "tag": {
+       "description": "Alternate XBRL tag those filers report under.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "tag",
+      "note"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "shown": {
+    "description": "Number of companies shown inline.",
+    "type": "number"
+   },
+   "taxonomy": {
+    "description": "Frames namespace the tag was read from (us-gaap or dei); a friendly name mapped to dei reads dei.",
+    "type": "string"
+   },
+   "total_companies": {
+    "description": "Total companies reporting this metric for this period.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when the inline data[] was capped by limit.",
+    "type": "boolean"
+   },
+   "unit": {
+    "description": "Unit of measure, in dashed form (e.g., \"USD-per-shares\").",
+    "type": "string"
+   },
+   "unqueried_tags": {
+    "description": "Same-meaning mapped tags this call did not query (e.g., SalesRevenueNet for revenue); their filers are absent from data, so fetch each and UNION/COALESCE in SQL. Empty for raw tags and single-tag concepts.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "value_distribution": {
+    "additionalProperties": false,
+    "description": "Distribution across the full frame; max_to_p95_ratio is the outlier signal.",
+    "properties": {
+     "max": {
+      "description": "Maximum reported value.",
+      "type": "number"
+     },
+     "max_to_p95_ratio": {
+      "description": "Max divided by p95. Heavy-tail frames sit near 10\u201350\u00d7; above ~200\u00d7 usually means a filer-side scale-factor error, so check the top rows of data before trusting rankings.",
+      "type": "number"
+     },
+     "median": {
+      "description": "Median reported value across all reporters in the frame.",
+      "type": "number"
+     },
+     "p95": {
+      "description": "95th-percentile reported value.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "median",
+     "p95",
+     "max",
+     "max_to_p95_ratio"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Secedgar Fetch Frames"
+}

@@ -1,0 +1,1100 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "Step 2 of 3: call it once, with the collected next_question returned when ready_to_quote was true. It returns a quote_id for get_quote. If it answers quote_in_progress, do not call it again: read the quote_id you already have. Retrying the same call, after a timeout say, is safe: while its rating runs, the retry starts no second one and answers quote_in_progress.\n\nAsks Sigo's carriers for car insurance estimates. Carriers answer over tens of seconds, so this returns a quote_id straight away rather than waiting; read the prices with get_quote. Estimates are not binding: this does not select a policy, take payment or bind coverage. No browser is needed to get them: they come back in these tool calls, and the link in each one is where the customer continues if they want to buy.\n\nCall it once the details are gathered. Gather them a step at a time in conversation \u2014 listing every field up front reads as a form and loses people before the first answer.\n\nFor a customer who already has a quote and wants something changed, pass that quote's id as revise_of instead of starting over: the same person re-quoted, not a second one. A call for a customer who already quoted today and is still at their first round revises that quote even without revise_of \u2014 the result says revised_from_quote: true \u2014 so a forgotten id never makes a second application.\n\nThe same call carries the second round. Once the customer has answered what `next_question` asks with `stage: \"second_round\"` \u2014 address, VIN, ownership and lienholder, licence status and months held, occupation, education, prior coverage, excluded drivers, and each driver's document number in `drivers[].document.number` \u2014 send them all here with revise_of, and the carriers price the quote again on what they now know.\n\nThe address the second round asks for is where the car is kept, and it is checked against the ZIP the quote is running on. They disagree, and the answer is to correct whichever one is wrong \u2014 never to move the customer onto a ZIP in a state the car is not kept in.\n\nOne quote at a time per customer. If their previous quote is still being answered, this fails with quote_in_progress and a poll_after_seconds: say so, read the earlier quote with get_quote when that time has passed, then ask for this one again with revise_of. Two asks at once (\"the Civic and the Silverado\") are run one after the other, and each result's asked_for says which is which.\n\nApart from arguments the schema rejects, a refusal comes back with a code, a message for the customer and a next_step for you, which says what to do next and which tool, if any, to call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "address": {
+    "anyOf": [
+     {
+      "maxLength": 120,
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Second round only. The street address where the car is kept overnight \u2014 street and number; the ZIP already gave the city and the state. It is checked against that ZIP, and an address somewhere else is refused rather than quoted: this is the field that decides which state the policy is rated in. Where they work is not it."
+   },
+   "collected": {
+    "description": "The `collected` next_question returned once `ready_to_quote` was true. Required: it is the record that every question was put to the customer. A call without it, or with one that still has questions pending, is refused with `questions_not_finished` and creates nothing.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "correction_of": {
+    "description": "Only when a previous call failed with `data_not_accepted`: pass the `correction_of` it returned, together with the corrected details. The quote is retried on the same record instead of starting a second one for the same person. Never invent this value.",
+    "type": "string"
+   },
+   "drivers": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "birthdate": {
+       "description": "YYYY-MM-DD. Age is what carriers rate on, so it is the date itself, never one worked out from an age.",
+       "type": "string"
+      },
+      "document": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "number": {
+           "anyOf": [
+            {
+             "maxLength": 13,
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ],
+           "description": "Second round only, as on sigoseguros.com: required there for every driver who is not excluded, and dropped if sent on a first quote. A Texas licence is 7 or 8 digits, a California one 1 letter and 7 digits, a Florida one 1 letter and 12 digits; any other is up to 12 characters."
+          },
+          "type": {
+           "description": "Offer all six. A customer without a US licence is quotable on a foreign licence, a consular ID (matr\u00edcula) or a passport, and offering fewer reads as being turned away. None of the six is a learner permit, and the type on its own is never read as a full licence: a permit holder is recorded with the type of the document they carry and with `license_status: \"learner-permit\"`, which is what the rater prices as a permit.",
+           "enum": [
+            "us_license",
+            "foreign_license",
+            "us_id",
+            "foreign_id",
+            "consular_id",
+            "passport"
+           ],
+           "type": "string"
+          }
+         },
+         "required": [
+          "type"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "The driver's identity document. Optional: a customer who declines is quoted without one."
+      },
+      "education": {
+       "anyOf": [
+        {
+         "enum": [
+          "less-than-high-school",
+          "high-school",
+          "some-college",
+          "bachelor-degree",
+          "master-degree"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Second round only. Not asked for in California, which prohibits rating on it."
+      },
+      "excluded": {
+       "default": false,
+       "description": "True for a household member who is named but must not drive the car. They go on the policy as excluded rather than being left off it. Nobody prices them, so their gender and marital status are not needed \u2014 do not go back to the customer for personal details about someone who is not being rated.",
+       "type": "boolean"
+      },
+      "first_name": {
+       "description": "Up to 25 characters, which is what the carrier's form holds. A customer whose name does not fit is asked how they want it shortened \u2014 it goes on the policy, so it is their call and not a silent trim.",
+       "maxLength": 25,
+       "minLength": 1,
+       "type": "string"
+      },
+      "gender": {
+       "description": "The two values the rater maps; anything else is silently rated as male. It is a field on the carrier's rating form, so ask it as such rather than as a question about identity. Not asked for in California, which prohibits rating on it.",
+       "enum": [
+        "male",
+        "female"
+       ],
+       "type": "string"
+      },
+      "is_primary": {
+       "description": "Whether this is the driver who uses the car most. Exactly one driver is, and it is the customer who says which \u2014 carriers rate on it, so choosing for them quotes a household that may not be theirs. With more than one driver and nothing said about it, ask before quoting rather than assuming the first one.",
+       "type": "boolean"
+      },
+      "last_name": {
+       "description": "Up to 25 characters, same as the first name: ask rather than shorten it for them.",
+       "maxLength": 25,
+       "minLength": 1,
+       "type": "string"
+      },
+      "license_status": {
+       "anyOf": [
+        {
+         "enum": [
+          "valid",
+          "learner-permit",
+          "suspended"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Whether that document is in force, and the only place a learner permit is ever recorded. Send it the moment the customer says it, first quote included: a permit holder goes down as 'learner-permit' and never as a full licence, and the rater prices them as a permit. A permit and a suspended licence are both quotable, so ask it plainly."
+      },
+      "marital_status": {
+       "description": "Offer all of them when asking. Carriers rate on it, and anything the rater does not recognise is silently rated as 'single', so a driver pushed into the nearest offered option is quoted on the wrong facts. Not asked for in California, which prohibits rating on it.",
+       "enum": [
+        "single",
+        "married",
+        "widowed",
+        "divorced",
+        "separated"
+       ],
+       "type": "string"
+      },
+      "months_licensed": {
+       "anyOf": [
+        {
+         "exclusiveMinimum": 0,
+         "maximum": 9007199254740991,
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Second round only. How many months they have held the document. Offer ranges \u2014 1 to 4 years, 5 to 8, more than 8 \u2014 and send the middle of the one they pick, which is what the other Sigo channels send."
+      },
+      "occupation": {
+       "anyOf": [
+        {
+         "maxLength": 20,
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Second round only. The rater's code, from `find_occupation` \u2014 never invented and never the customer's own words. Not asked for in California."
+      },
+      "relationship": {
+       "description": "How this driver relates to the main one. Leave it out for the main driver. A married customer's spouse goes on the quote as a driver with 'spouse'.",
+       "enum": [
+        "spouse",
+        "domestic-partner",
+        "child",
+        "parent",
+        "sibling",
+        "other-relative",
+        "non-relative"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "first_name",
+      "last_name",
+      "birthdate",
+      "is_primary"
+     ],
+     "type": "object"
+    },
+    "maxItems": 4,
+    "minItems": 1,
+    "type": "array"
+   },
+   "email": {
+    "description": "Identifies the customer and is how Sigo reaches them about this quote. No phone number is collected here, so nothing can be called or texted from this channel \u2014 which is not the same as Sigo not calling: a customer who wants a call leaves their number in Sigo's own flow, through the link on their estimate, and an agent calls them.",
+    "format": "email",
+    "pattern": "^(?!\\.)(?!.*\\.\\.)([A-Za-z0-9_'+\\-\\.]*)[A-Za-z0-9_+-]@([A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+    "type": "string"
+   },
+   "has_prior_insurance": {
+    "description": "Whether the customer currently has car insurance.",
+    "type": "boolean"
+   },
+   "is_homeowner": {
+    "default": false,
+    "type": "boolean"
+   },
+   "is_student": {
+    "default": false,
+    "type": "boolean"
+   },
+   "locale": {
+    "description": "The language the customer is writing in. Set it from their own messages rather than leaving the default: the estimate's notice comes back in this language, and a notice the customer cannot read discloses nothing. Sigo serves these two languages only.",
+    "enum": [
+     "es",
+     "en"
+    ],
+    "type": "string"
+   },
+   "prior_coverage_expiration": {
+    "anyOf": [
+     {
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Second round only. YYYY-MM-DD, when the current policy ends. Today is accepted; a date already past is refused: confirm it with the customer, and if their coverage really did end, they have no prior insurance to send."
+   },
+   "prior_coverage_months": {
+    "anyOf": [
+     {
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Second round only, and only for a customer who has insurance now. How long they have been covered: offer 6 months, 1 year, 3 years, 4 or more."
+   },
+   "revise_of": {
+    "description": "When the customer wants a quote they already have run again with something changed \u2014 another deductible, another coverage, a detail they gave wrong: pass that quote's `quote_id` here, with the full details including the change. It re-quotes the same person instead of making them a second one. Never invent this value, and never use it for a different customer.",
+    "type": "string"
+   },
+   "uninsured_motorist": {
+    "description": "Whether to include uninsured-motorist protection \u2014 cover for when the other driver has no insurance. Ask it; it is the one add-on offered at this step and it changes the price.",
+    "type": "boolean"
+   },
+   "vehicles": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "coverage_type": {
+       "enum": [
+        "liability",
+        "full_coverage"
+       ],
+       "type": "string"
+      },
+      "deductible": {
+       "anyOf": [
+        {
+         "exclusiveMinimum": 0,
+         "maximum": 9007199254740991,
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Only meaningful with full_coverage. Ignored otherwise."
+      },
+      "lienholder": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "address": {
+           "anyOf": [
+            {
+             "maxLength": 120,
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "city": {
+           "anyOf": [
+            {
+             "maxLength": 60,
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "loan_number": {
+           "anyOf": [
+            {
+             "maxLength": 40,
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "name": {
+           "description": "The bank or finance company. Ask for this one; the rest is on the loan papers.",
+           "maxLength": 60,
+           "minLength": 1,
+           "type": "string"
+          },
+          "state": {
+           "anyOf": [
+            {
+             "pattern": "^[A-Za-z]{2}$",
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "zip_code": {
+           "anyOf": [
+            {
+             "pattern": "^[0-9]{5}$",
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          }
+         },
+         "required": [
+          "name"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Second round only, and only for a financed or leased car: who holds the loan."
+      },
+      "make": {
+       "maxLength": 40,
+       "minLength": 1,
+       "type": "string"
+      },
+      "model": {
+       "maxLength": 40,
+       "minLength": 1,
+       "type": "string"
+      },
+      "ownership": {
+       "anyOf": [
+        {
+         "enum": [
+          "owned",
+          "financed",
+          "leased"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Second round only. Whether the car is paid off, financed or leased."
+      },
+      "primary_use": {
+       "description": "What the car is mostly used for, in the rater's own five: pleasure, artisan (tools and a trade), commute (driving to work), farm, business. Ask with all five \u2014 the ones that are not 'pleasure' are what a carrier prices differently. None of them means driving for a transport app; that answer goes in `used_for_rideshare`.",
+       "enum": [
+        "pleasure",
+        "artisan",
+        "commute",
+        "farm",
+        "business"
+       ],
+       "type": "string"
+      },
+      "used_for_rideshare": {
+       "default": false,
+       "description": "True when the customer says they drive the vehicle for a transport or delivery app \u2014 Uber, Lyft, DiDi, Uber Eats, DoorDash, Amazon Flex and the like. Do not ask for it: set it the moment they mention it, in any wording ('manejo para Uber', 'hago entregas con la app'). Unlike every other field here it stops the quote: no estimate is produced, because a personal auto policy priced for this use is a misrepresentation the carrier can void a claim over. The customer is answered with `rideshare_needs_agent` and the link a Sigo agent reaches them through.",
+       "type": "boolean"
+      },
+      "used_for_work": {
+       "default": false,
+       "description": "True when the customer says the vehicle is used for their work or business \u2014 deliveries, tools, a trade. Do not ask for it: set it when they bring it up. It changes nothing about the price and adds the notice their situation needs, because this is a personal auto quote and a vehicle used for a business may need a commercial policy. Driving for a transport app is not this: it has its own field, `used_for_rideshare`, and it is not quoted here at all.",
+       "type": "boolean"
+      },
+      "vin": {
+       "anyOf": [
+        {
+         "maxLength": 21,
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Second round only. The VIN from the customer's registration or insurance card."
+      },
+      "year": {
+       "maximum": 2027,
+       "minimum": 1981,
+       "type": "integer"
+      }
+     },
+     "required": [
+      "year",
+      "make",
+      "model",
+      "coverage_type",
+      "primary_use"
+     ],
+     "type": "object"
+    },
+    "maxItems": 4,
+    "minItems": 1,
+    "type": "array"
+   },
+   "zip_code": {
+    "description": "The 5-digit ZIP code where the vehicle is kept. It determines the state.",
+    "pattern": "^[0-9]{5}$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "zip_code",
+   "vehicles",
+   "drivers",
+   "has_prior_insurance",
+   "uninsured_motorist",
+   "email",
+   "collected",
+   "locale"
+  ],
+  "type": "object"
+ },
+ "name": "start_quote",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "application": {
+    "additionalProperties": false,
+    "properties": {
+     "complete": {
+      "description": "True when the application has everything RC3 needs. False while anything is missing.",
+      "type": "boolean"
+     },
+     "note": {
+      "description": "What to do about it, in the customer's language.",
+      "type": "string"
+     },
+     "still_needed": {
+      "anyOf": [
+       {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "What is missing, empty when nothing is. Null on a quote issued before this was recorded, where completeness is unknown rather than proven."
+     }
+    },
+    "required": [
+     "complete",
+     "still_needed",
+     "note"
+    ],
+    "type": "object"
+   },
+   "asked_for": {
+    "additionalProperties": false,
+    "description": "Label each answer with this when comparing two quotes for the same customer, so \"con deducible de 1000\" is matched to the quote that asked for it.",
+    "properties": {
+     "drivers": {
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     "vehicles": {
+      "description": "Empty on a quote started before this field existed; then the agent's own record is the label.",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "coverage_type": {
+         "enum": [
+          "liability",
+          "full_coverage"
+         ],
+         "type": "string"
+        },
+        "deductible": {
+         "anyOf": [
+          {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "Null for liability, or when none was given."
+        },
+        "position": {
+         "description": "1-based, in the order start_quote received them.",
+         "exclusiveMinimum": 0,
+         "maximum": 9007199254740991,
+         "type": "integer"
+        },
+        "year": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        }
+       },
+       "required": [
+        "position",
+        "year",
+        "coverage_type",
+        "deductible"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "vehicles",
+     "drivers"
+    ],
+    "type": "object"
+   },
+   "carriers": {
+    "additionalProperties": false,
+    "properties": {
+     "answered": {
+      "description": "The carriers that returned a price for this quote, and the only ones that may be named.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "catalogue_is_public": {
+      "const": false,
+      "description": "Sigo publishes no list of the carriers it works with: it varies by state and by quote, and cannot be derived from this response. A carrier absent from `answered` is not thereby a carrier Sigo does not work with.",
+      "type": "boolean"
+     },
+     "note": {
+      "description": "What may be said about carriers, in the customer's language.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "answered",
+     "catalogue_is_public",
+     "note"
+    ],
+    "type": "object"
+   },
+   "contact": {
+    "additionalProperties": false,
+    "properties": {
+     "note": {
+      "description": "What to say when the customer asks to be called, in their language.",
+      "type": "string"
+     },
+     "phone_collected_here": {
+      "const": false,
+      "description": "No phone number reaches this connector: the input schema has no field for one.",
+      "type": "boolean"
+     },
+     "sigo_calls_customers": {
+      "const": true,
+      "description": "Sigo's agents do call and text customers. What cannot happen is a call arranged from here, because this channel never has a number to call.",
+      "type": "boolean"
+     },
+     "url": {
+      "description": "Where the customer leaves a phone number for a Sigo agent. Present as soon as the list is final, whether or not anything was quoted; null only while carriers are still answering. This is the only way on from here \u2014 do not offer another.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "phone_collected_here",
+     "sigo_calls_customers",
+     "url",
+     "note"
+    ],
+    "type": "object"
+   },
+   "cover_first": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "chosen_quote_id": {
+        "description": "The one estimate's quote_id, to pass to carrier_questions. Null when there is none.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "confirmed_price": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "currency": {
+            "const": "USD",
+            "type": "string"
+           },
+           "due_today": {
+            "type": "number"
+           },
+           "monthly_payment": {
+            "type": "number"
+           },
+           "total_for_term": {
+            "type": "number"
+           }
+          },
+          "required": [
+           "currency",
+           "due_today",
+           "monthly_payment",
+           "total_for_term"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "The carrier's confirmed amounts, once confirmed. Still subject to eligibility and state rules."
+       },
+       "more_options_offered": {
+        "description": "True when Sigo offers to look at the other carriers beside a confirmed price. Offer it once; other_carrier_questions is how, and only if the customer wants to compare.",
+        "type": "boolean"
+       },
+       "next_call": {
+        "description": "Exactly what to call next, with its arguments; null when nothing is.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "note": {
+        "description": "What to tell the customer and do next, in their language.",
+        "type": "string"
+       },
+       "poll_after_seconds": {
+        "anyOf": [
+         {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "While confirming: how long to wait before get_quote again."
+       },
+       "status": {
+        "description": "rating: carriers still answering. questions_pending: ask carrier_questions for the one estimate shown. handed_off: the answers are in and the carrier did not confirm here; give the customer next_step's link and stop. confirming: Sigo is confirming the price, read again. confirmed: the price is in confirmed_price and the customer pays in the link. declined / not_available: that option is not the answer; other_carrier_questions follows.",
+        "enum": [
+         "rating",
+         "questions_pending",
+         "confirming",
+         "confirmed",
+         "declined",
+         "not_available",
+         "handed_off"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "status",
+       "chosen_quote_id",
+       "confirmed_price",
+       "more_options_offered",
+       "poll_after_seconds",
+       "next_call",
+       "note"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "covers": {
+    "additionalProperties": false,
+    "properties": {
+     "drivers": {
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     "note": {
+      "description": "Present from two vehicles up: say it with the prices, because one amount for a household reads as an amount per car. Null for a single vehicle, where the amount can only mean one thing.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "vehicles": {
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "vehicles",
+     "drivers",
+     "note"
+    ],
+    "type": "object"
+   },
+   "expires_at": {
+    "format": "date-time",
+    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+    "type": "string"
+   },
+   "issued_by": {
+    "additionalProperties": false,
+    "properties": {
+     "agency": {
+      "const": "Sigo",
+      "type": "string"
+     },
+     "charges_broker_fee": {
+      "description": "Whether Sigo charges this customer a broker fee, which depends on their state. True: a fee for the agency's service, on top of a commission from the carrier. False: Sigo charges them no fee at all. Either way it is not part of the amounts in this response \u2014 those are the carrier's \u2014 and cannot be derived from them: where there is one, it is itemised for the customer before purchase. An estimate is not the final cost of buying through Sigo.",
+      "type": "boolean"
+     },
+     "pays_claims": {
+      "const": false,
+      "type": "boolean"
+     },
+     "role": {
+      "const": "licensed insurance agency",
+      "type": "string"
+     },
+     "underwrites_policies": {
+      "const": false,
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "agency",
+     "role",
+     "underwrites_policies",
+     "pays_claims",
+     "charges_broker_fee"
+    ],
+    "type": "object"
+   },
+   "more_carriers_pending": {
+    "description": "True when more carriers may still return a price; the list is not final.",
+    "type": "boolean"
+   },
+   "pending_note": {
+    "description": "What to do while carriers are still answering, in the customer's language. Null once the list is final.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "personal_use_note": {
+    "description": "Present when the customer said the vehicle is used for work. Say it with the prices: this quote is personal auto. Null when they said nothing about it, and then the subject is not raised.",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "poll_after_seconds": {
+    "anyOf": [
+     {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "How long to wait before calling get_quote again."
+   },
+   "price_levers": {
+    "additionalProperties": false,
+    "properties": {
+     "available": {
+      "description": "The only changes worth offering, and they re-quote: empty when this quote has none, and then the honest answer is that there is nothing to adjust at this step.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "note": {
+      "description": "How to answer the question, in the customer's language.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "available",
+     "note"
+    ],
+    "type": "object"
+   },
+   "problems": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "code": {
+       "type": "string"
+      },
+      "message": {
+       "description": "Customer-safe wording. Upstream carrier or configuration detail is never included.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "code",
+      "message"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "quote_id": {
+    "description": "Pass this back to get_quote to read the result again.",
+    "type": "string"
+   },
+   "quoted_at": {
+    "format": "date-time",
+    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z))$",
+    "type": "string"
+   },
+   "quotes": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "carrier_name": {
+       "description": "The carrier that issues this policy. Sigo is the agency, not the issuer.",
+       "type": "string"
+      },
+      "disclaimer": {
+       "additionalProperties": false,
+       "properties": {
+        "show_verbatim": {
+         "const": true,
+         "description": "This text goes to the customer as it is written, in the same answer as the price. It is short enough to fit: shortening it further drops the disclosure Sigo is required to make, and a summary of it is not that disclosure. It carries no instructions to the model and none to the customer.",
+         "type": "boolean"
+        },
+        "text": {
+         "description": "The notice, in the customer's language.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "text",
+        "show_verbatim"
+       ],
+       "type": "object"
+      },
+      "estimate": {
+       "additionalProperties": false,
+       "properties": {
+        "currency": {
+         "const": "USD",
+         "type": "string"
+        },
+        "due_today": {
+         "description": "What the customer pays today to start the policy. Not the policy total.",
+         "type": "number"
+        },
+        "first_payment_note": {
+         "description": "What the amount due today is, in words the customer hears. It is stated for every estimate, whichever of the two numbers is larger.",
+         "type": "string"
+        },
+        "monthly_payment": {
+         "exclusiveMinimum": 0,
+         "type": "number"
+        },
+        "number_of_installments": {
+         "exclusiveMinimum": 0,
+         "maximum": 9007199254740991,
+         "type": "integer"
+        },
+        "term_months": {
+         "anyOf": [
+          {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "description": "Policy term in months, or null when the carrier did not report one. A 6-month and a 12-month quote are not comparable on the down payment alone, so do not rank on price without it."
+        },
+        "total_for_term": {
+         "description": "What the payment plan adds up to over the term: the amount due today plus every instalment. Stated rather than left to be worked out \u2014 an agent asked for the six-month total produced one of its own.",
+         "exclusiveMinimum": 0,
+         "type": "number"
+        },
+        "total_note": {
+         "description": "What that total is and what it does not include. It travels with the number for the same reason the first payment's note does: a trailing sentence gets paraphrased away.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "currency",
+        "due_today",
+        "first_payment_note",
+        "monthly_payment",
+        "number_of_installments",
+        "total_for_term",
+        "total_note",
+        "term_months"
+       ],
+       "type": "object"
+      },
+      "is_binding": {
+       "const": false,
+       "type": "boolean"
+      },
+      "next_step": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "action": {
+           "const": "continue_with_sigo",
+           "type": "string"
+          },
+          "url": {
+           "format": "uri",
+           "type": "string"
+          }
+         },
+         "required": [
+          "action",
+          "url"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Where the customer continues with Sigo \u2014 present only once the list of prices is final. While carriers are still answering it is null, because a customer cannot choose from a list that is still filling."
+      },
+      "quote_id": {
+       "type": "string"
+      },
+      "quote_type": {
+       "const": "estimate",
+       "description": "Always an estimate, in every round. No price the connector returns is final: the final quote is calculated by Sigo in the link, after the carrier's questions and before the customer pays.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "quote_id",
+      "carrier_name",
+      "estimate",
+      "quote_type",
+      "is_binding",
+      "disclaimer",
+      "next_step"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "revised_from_quote": {
+    "description": "True when this quote re-quoted the same customer: started with revise_of, or for a customer who already quoted today and was still at their first round. One person, one application, priced again.",
+    "type": "boolean"
+   },
+   "state": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "status": {
+    "enum": [
+     "pending",
+     "partial",
+     "ready",
+     "failed"
+    ],
+    "type": "string"
+   },
+   "to_final_quote": {
+    "additionalProperties": false,
+    "properties": {
+     "available": {
+      "description": "True once there are prices. There is always a next step towards the final quote.",
+      "type": "boolean"
+     },
+     "next_call": {
+      "description": "Exactly what to call next, with its arguments: `next_question` with stage second_round while the application is incomplete; `carrier_questions` with `quote_id` (this quote) and `chosen_quote_id` (the `quote_id` of the estimate the customer picked) once it is. Null before there are prices.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "note": {
+      "description": "What to tell the customer, in their language.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "price_may_change": {
+      "description": "One line on what finishing can do to the price, in the customer's language. It never promises a better price, and never mentions a carrier that has not answered.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "available",
+     "next_call",
+     "note",
+     "price_may_change"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "quote_id",
+   "status",
+   "more_carriers_pending",
+   "poll_after_seconds",
+   "pending_note",
+   "to_final_quote",
+   "cover_first",
+   "application",
+   "state",
+   "quoted_at",
+   "expires_at",
+   "quotes",
+   "problems",
+   "contact",
+   "covers",
+   "asked_for",
+   "revised_from_quote",
+   "price_levers",
+   "personal_use_note",
+   "carriers",
+   "issued_by"
+  ],
+  "type": "object"
+ },
+ "title": "Start a car insurance quote"
+}
