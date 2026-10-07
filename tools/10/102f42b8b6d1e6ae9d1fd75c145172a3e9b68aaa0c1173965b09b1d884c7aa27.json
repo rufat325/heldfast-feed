@@ -1,0 +1,814 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Measure subscriptions from bank outflows"
+ },
+ "description": "Measure the workspace's subscriptions from its bank outflows: which suppliers it pays on a regular cadence, what each costs per month and per year, and how the spend moved month by month. It draws no card.\n\nCall it when the user asks what they pay for on a regular basis, what their subscriptions cost, or how that spend moved. Then draw the two cards from its result, trend first:\n  1. `well_render_category_trend` with one `category_trends` entry, passed as it is.\n  2. `well_render_monthly_pivot` with the `pivots` entry of the same currency, passed as it is.\nWhen the result holds more than one currency, draw one pair per currency. Never add two currencies together. When `category_trends` and `pivots` are empty, no subscription was found: say so and draw nothing.\n\n**The server applies every rule, and the result states each one in `rules`.** Quote the figures as returned: never recompute a cost, a total or a cadence, and never loosen a rule to list a supplier the user expects. A supplier in `not_recurring` missed the rule named in its `missed_rule`.\n\nThe window is fixed: the last 24 complete calendar months in UTC and the running month are read, and the cards draw the last 12 complete months (the pivot draws the running month apart, marked as in progress). `window`, `current_month` and `display_months` say which months those were.\n\nWhat the result is:\n  - `subscriptions`: the suppliers on a cadence (monthly, bimonthly, quarterly, yearly), largest cost per month first, at most 50; `subscription_count` is the full count. Each carries its cadence evidence, its amount pattern (fixed, changed, varying), the amount its cost per month starts from, the cost per month and per year, its latest month, `possibly_ended`, and its category. A `category` with a null key and a null label is uncategorised: say so and point the user to categorizing their counterparties.\n  - `totals`: per currency, the subscription count, the total cost per month and per year, and the part from subscriptions flagged as possibly ended (already inside the total).\n  - `possible_duplicates`: suppliers paid more than once in a month. A lead to check, never a verdict, and never in a total.\n  - `not_recurring`: suppliers paid in the window on no cadence, at most 25, with the rule missed (one_month, too_few_months, multiple_debits_in_month, irregular_gaps).\n  - `unattributed`: outflows whose payee resolves to no company. Real spend with no supplier to repeat, so never on a cadence.\n  - `category_trends` and `pivots`: the render inputs, one per currency. A trend holds at most 6 lines, the smallest categories rolled into the last one.\n  - `excluded`: what fell out, counted apart. `internal_transfers` are movements between the workspace's own accounts. `no_asset_movement` counts the outflows with no owned bank-account leg: credit card charges, which move a liability, and rows whose payer resolved to no account. A debit card charge that left a bank account is measured like any other outflow. Say so whenever the count is not zero: subscriptions paid by credit card, or on rows linked to no account, are NOT measured here. `payments_to_own_accounts` are card repayments, `own_company` payments to the workspace's own company, `unreadable_rows` rows with no readable amount or currency. `category_keys` lists the categories never counted as subscriptions (transfers, treasury, loans, taxes, salaries, social charges), and `category_excluded` is how many bank outflows those categories removed. `internal_transfers` counts a transfer whatever its category. A `null` count was not measured, which is not zero.\n\n**Never claim a saving.** A possibly ended subscription or a possible duplicate is what the bank shows, and Well cannot see whether a service is in use.\n\n`partial: true` means nothing was measured: the read was cut short, or the workspace holds no bank account. Say so rather than reporting no subscriptions. `rows_truncated: true` means the smallest counterparties were not read, so every total is a floor.\n\n`scope` is required: `own_and_adopted` is the spend population the burn counts, `own` the workspace's own rows only.\n\nWhen the token authorizes one workspace, call this directly \u2014 no other tool call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "scope": {
+    "description": "Which rows are this workspace's: `own_and_adopted` for its spend, `own` for its own rows only. Required; see the description.",
+    "enum": [
+     "own",
+     "own_and_adopted"
+    ],
+    "type": "string"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several: this read reports one workspace's own figures and will not choose which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "scope"
+  ],
+  "type": "object"
+ },
+ "name": "well_measure_subscriptions",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "category_trends": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "currency": {
+       "type": "string"
+      },
+      "folded_count": {
+       "type": "number"
+      },
+      "months": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "series": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "amounts": {
+          "items": {
+           "type": "number"
+          },
+          "type": "array"
+         },
+         "category_key": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "is_other": {
+          "const": true,
+          "type": "boolean"
+         },
+         "key": {
+          "type": "string"
+         },
+         "label": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         }
+        },
+        "required": [
+         "key",
+         "label",
+         "category_key",
+         "amounts"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      }
+     },
+     "required": [
+      "currency",
+      "months",
+      "series",
+      "folded_count"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "current_month": {
+    "type": "string"
+   },
+   "display_months": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "error": {
+    "type": "string"
+   },
+   "excluded": {
+    "additionalProperties": false,
+    "properties": {
+     "category_excluded": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "category_keys": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "internal_transfers": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "no_asset_movement": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "no_owned_leg": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "own_company": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "payments_to_own_accounts": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "unreadable_rows": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "internal_transfers",
+     "no_asset_movement",
+     "no_owned_leg",
+     "payments_to_own_accounts",
+     "own_company",
+     "category_excluded",
+     "unreadable_rows",
+     "category_keys"
+    ],
+    "type": "object"
+   },
+   "newly_connected": {
+    "description": "Tools that connected to this workspace since the last result and that no session was told about yet, oldest first. Present only when at least one tool is new. Start the reply with one line per entry, in the person's language: \"<name> is connected.\". Never fold several entries into one sentence. Each entry comes back once, on one result only: never repeat its line later.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "not_recurring": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "amount": {
+       "type": "number"
+      },
+      "company_id": {
+       "type": "string"
+      },
+      "currency": {
+       "type": "string"
+      },
+      "missed_rule": {
+       "enum": [
+        "one_month",
+        "too_few_months",
+        "multiple_debits_in_month",
+        "irregular_gaps"
+       ],
+       "type": "string"
+      },
+      "months_with_debits": {
+       "type": "number"
+      },
+      "name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "company_id",
+      "name",
+      "currency",
+      "missed_rule",
+      "months_with_debits",
+      "amount"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "not_recurring_count": {
+    "type": "number"
+   },
+   "partial": {
+    "type": "boolean"
+   },
+   "pivots": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "currency": {
+       "type": "string"
+      },
+      "month_count": {
+       "type": "number"
+      },
+      "rows": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "amounts": {
+          "additionalProperties": {
+           "type": "number"
+          },
+          "propertyNames": {
+           "type": "string"
+          },
+          "type": "object"
+         },
+         "category": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "category_key": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "company_id": {
+          "type": "string"
+         },
+         "domain": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "name": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         }
+        },
+        "required": [
+         "company_id",
+         "name",
+         "domain",
+         "category",
+         "category_key",
+         "amounts"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "rows_truncated": {
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "currency",
+      "month_count",
+      "rows",
+      "rows_truncated"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "possible_duplicate_count": {
+    "type": "number"
+   },
+   "possible_duplicates": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "category": {
+       "additionalProperties": false,
+       "properties": {
+        "key": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "label": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        }
+       },
+       "required": [
+        "key",
+        "label"
+       ],
+       "type": "object"
+      },
+      "company_id": {
+       "type": "string"
+      },
+      "currency": {
+       "type": "string"
+      },
+      "months_with_multiple_debits": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "amount": {
+          "type": "number"
+         },
+         "debit_count": {
+          "type": "number"
+         },
+         "month": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "month",
+         "debit_count",
+         "amount"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "company_id",
+      "name",
+      "currency",
+      "months_with_multiple_debits",
+      "category"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "rows_truncated": {
+    "type": "boolean"
+   },
+   "rules": {
+    "additionalProperties": {},
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "scope": {
+    "enum": [
+     "own",
+     "own_and_adopted"
+    ],
+    "type": "string"
+   },
+   "subscription_count": {
+    "type": "number"
+   },
+   "subscriptions": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "amount_basis": {
+       "enum": [
+        "latest",
+        "mean"
+       ],
+       "type": "string"
+      },
+      "amount_pattern": {
+       "enum": [
+        "fixed",
+        "changed",
+        "varying"
+       ],
+       "type": "string"
+      },
+      "amounts_by_month": {
+       "additionalProperties": {
+        "type": "number"
+       },
+       "propertyNames": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "basis_amount": {
+       "type": "number"
+      },
+      "cadence": {
+       "enum": [
+        "monthly",
+        "bimonthly",
+        "quarterly",
+        "yearly"
+       ],
+       "type": "string"
+      },
+      "category": {
+       "additionalProperties": false,
+       "properties": {
+        "key": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "label": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        }
+       },
+       "required": [
+        "key",
+        "label"
+       ],
+       "type": "object"
+      },
+      "changed_in_month": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "company_id": {
+       "type": "string"
+      },
+      "cost_per_month": {
+       "type": "number"
+      },
+      "cost_per_year": {
+       "type": "number"
+      },
+      "currency": {
+       "type": "string"
+      },
+      "domain": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "evidence": {
+       "additionalProperties": false,
+       "properties": {
+        "debit_count": {
+         "type": "number"
+        },
+        "gaps": {
+         "items": {
+          "type": "number"
+         },
+         "type": "array"
+        },
+        "months_with_debits": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "months_with_debits",
+        "debit_count",
+        "gaps"
+       ],
+       "type": "object"
+      },
+      "first_amount": {
+       "type": "number"
+      },
+      "latest_amount": {
+       "type": "number"
+      },
+      "latest_month": {
+       "type": "string"
+      },
+      "name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "possibly_ended": {
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "company_id",
+      "name",
+      "domain",
+      "currency",
+      "cadence",
+      "evidence",
+      "amount_pattern",
+      "first_amount",
+      "latest_amount",
+      "changed_in_month",
+      "amount_basis",
+      "basis_amount",
+      "cost_per_month",
+      "cost_per_year",
+      "latest_month",
+      "possibly_ended",
+      "category",
+      "amounts_by_month"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "subscriptions_truncated": {
+    "type": "boolean"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "totals": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "cost_per_month": {
+       "type": "number"
+      },
+      "cost_per_year": {
+       "type": "number"
+      },
+      "currency": {
+       "type": "string"
+      },
+      "possibly_ended_cost_per_month": {
+       "type": "number"
+      },
+      "subscription_count": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "currency",
+      "subscription_count",
+      "cost_per_month",
+      "cost_per_year",
+      "possibly_ended_cost_per_month"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "unattributed": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "amount": {
+       "type": "number"
+      },
+      "currency": {
+       "type": "string"
+      },
+      "debit_count": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "currency",
+      "debit_count",
+      "amount"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "window": {
+    "additionalProperties": false,
+    "properties": {
+     "from": {
+      "type": "string"
+     },
+     "to": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "from",
+     "to"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "window",
+   "current_month",
+   "display_months",
+   "scope",
+   "subscriptions",
+   "subscription_count",
+   "subscriptions_truncated",
+   "totals",
+   "possible_duplicates",
+   "possible_duplicate_count",
+   "not_recurring",
+   "not_recurring_count",
+   "unattributed",
+   "category_trends",
+   "pivots",
+   "excluded",
+   "partial",
+   "rows_truncated",
+   "rules",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Measure subscriptions from bank outflows"
+}

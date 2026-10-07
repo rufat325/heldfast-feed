@@ -1,0 +1,431 @@
+{
+ "_meta": {
+  "ui": {
+   "resourceUri": "ui://well/widget/3db89ed2"
+  },
+  "ui/resourceUri": "ui://well/widget/3db89ed2"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false,
+  "title": "Create invoice from data"
+ },
+ "description": "Create an invoice in Well from data you extracted by reading an invoice (your own OCR) \u2014 you send the structured fields, not the file.\n\nWell persists the invoice + its line items + payment means using the same pipeline as uploaded documents. Fill every field you can read from the document:\n- issuer / receiver: { name (required), company_id?, domain?, tax_id? }\n- invoice_number (the invoice's own number, read from the document; leave it out for a draft, Well numbers drafts itself), reference_number? (a reference printed apart from the invoice number; never the invoice number itself; ignored on a draft), issue_date (YYYY-MM-DD), due_date? (YYYY-MM-DD; leave it out on a draft the person gave no due date: Well sets the customer's usual terms, else 30 days after the issue date), currency (ISO 4217)\n- totals: { items_total?, tax_total?, grand_total } (grand_total required)\n- line_items[]: { name, quantity?, unit_price, currency?, tax_rate? }\n- payment_means?[]: { type, iban?, bic?, scheme? }\n- status?: draft | issued | paid | canceled \u2014 create an invoice the user is still reviewing as \"draft\", then issue it with well_issue_invoice once the user confirms; issuing gives it the next invoice number and locks it\n- document_type_code?: \"380\" invoice | \"381\" credit note (state it: an invoice with no document type cannot post); corrects_invoice_id? \u2014 the issued invoice a credit note corrects, required for a credit note. An issued invoice cannot be edited: correct it with a credit note, then create a new invoice\n\nONE CALL IS THE WHOLE WRITE. This tool takes the invoice's status and both\nparties' company ids, so a create never needs a well_update_invoice after it:\n- The user asked to DRAFT an invoice \u2192 pass status: \"draft\" here.\n- You already found the company (well_query_records, well_get_entity) \u2192 pass its\n  company_id on that party. Naming the party without its id re-resolves it, which\n  can attach the invoice to the wrong company or create a duplicate one.\n\nCreating and then patching the same invoice writes twice and shows the user two\nconfirmations for one action. Put the intent in this call.\n\nThe answer carries the saved invoice's status, customer_name, currency, grand_total, issue_date, design_layout (null until a design is chosen) and lines. The card shows them, so the reply does not list them again.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "corrects_invoice_id": {
+    "description": "The UUID of the issued invoice a credit note corrects. Required for a credit note (381); refused otherwise.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   },
+   "currency": {
+    "description": "ISO 4217 (3 letters).",
+    "type": "string"
+   },
+   "document_type_code": {
+    "description": "\"380\" is an invoice; \"381\" is a credit note that corrects an invoice already issued. Omitted, the invoice has no document type and cannot post. An issued invoice cannot be edited, so a correction is a credit note with its own number, then a new invoice.",
+    "enum": [
+     "380",
+     "381"
+    ],
+    "type": "string"
+   },
+   "due_date": {
+    "description": "ISO 8601 YYYY-MM-DD.",
+    "type": "string"
+   },
+   "idempotency_key": {
+    "description": "Optional client-supplied key. A retried write with the same key returns the original result instead of re-applying the operation.",
+    "maxLength": 255,
+    "minLength": 1,
+    "type": "string"
+   },
+   "invoice_number": {
+    "description": "The invoice's own number, read from the document. Required unless the invoice is a draft or created to be issued: Well numbers those when they are issued. Never make one up.",
+    "maxLength": 255,
+    "minLength": 1,
+    "type": "string"
+   },
+   "issue_date": {
+    "description": "ISO 8601 YYYY-MM-DD.",
+    "type": "string"
+   },
+   "issuer": {
+    "properties": {
+     "company_id": {
+      "description": "An existing company in the workspace, bound directly \u2014 ALWAYS send this when you already know the company (e.g. you found it with well_query_records). Without it the party is re-resolved from name/domain/tax_id, which can attach the invoice to a different company or mint a duplicate.",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+      "type": "string"
+     },
+     "domain": {
+      "description": "Company domain, e.g. acme.com.",
+      "type": "string"
+     },
+     "name": {
+      "description": "Legal/company name of the party.",
+      "maxLength": 255,
+      "minLength": 1,
+      "type": "string"
+     },
+     "tax_id": {
+      "description": "VAT / tax id, if present on the invoice.",
+      "type": "string"
+     },
+     "tax_id_type": {
+      "description": "Tax-id type backing tax_id, e.g. SIREN, EIN, VAT. Defaults to VAT when omitted.",
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   },
+   "line_items": {
+    "items": {
+     "properties": {
+      "currency": {
+       "description": "ISO 4217; defaults to the invoice currency.",
+       "type": "string"
+      },
+      "name": {
+       "description": "Line description.",
+       "maxLength": 255,
+       "minLength": 1,
+       "type": "string"
+      },
+      "quantity": {
+       "type": "number"
+      },
+      "tax_rate": {
+       "description": "Tax rate as a percentage 0-100.",
+       "type": "number"
+      },
+      "unit_price": {
+       "description": "Unit price (number, not string).",
+       "type": "number"
+      }
+     },
+     "required": [
+      "name",
+      "unit_price"
+     ],
+     "type": "object"
+    },
+    "minItems": 1,
+    "type": "array"
+   },
+   "payment_means": {
+    "items": {
+     "properties": {
+      "bic": {
+       "type": "string"
+      },
+      "iban": {
+       "type": "string"
+      },
+      "scheme": {
+       "description": "e.g. SEPA, SWIFT \u2014 only honoured if a known scheme.",
+       "type": "string"
+      },
+      "type": {
+       "enum": [
+        "iban",
+        "card",
+        "cash",
+        "check",
+        "other"
+       ],
+       "type": "string"
+      }
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "receiver": {
+    "properties": {
+     "company_id": {
+      "description": "An existing company in the workspace, bound directly \u2014 ALWAYS send this when you already know the company (e.g. you found it with well_query_records). Without it the party is re-resolved from name/domain/tax_id, which can attach the invoice to a different company or mint a duplicate.",
+      "format": "uuid",
+      "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+      "type": "string"
+     },
+     "domain": {
+      "description": "Company domain, e.g. acme.com.",
+      "type": "string"
+     },
+     "name": {
+      "description": "Legal/company name of the party.",
+      "maxLength": 255,
+      "minLength": 1,
+      "type": "string"
+     },
+     "tax_id": {
+      "description": "VAT / tax id, if present on the invoice.",
+      "type": "string"
+     },
+     "tax_id_type": {
+      "description": "Tax-id type backing tax_id, e.g. SIREN, EIN, VAT. Defaults to VAT when omitted.",
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "name"
+    ],
+    "type": "object"
+   },
+   "reference_number": {
+    "description": "A reference printed apart from the invoice's own number. Never the invoice number itself. Leave it out for a draft: Well names a draft by the number it will take when issued (DRAFT-061 while the next invoice number is INV-061) and ignores any value sent.",
+    "maxLength": 100,
+    "minLength": 1,
+    "type": "string"
+   },
+   "status": {
+    "description": "The invoice's lifecycle status. Set it here when the user asked for one (\"draft an invoice\") \u2014 do NOT create and then call well_update_invoice to change it. Omitted, Well derives one only where the document type decides it; otherwise the invoice has no status.",
+    "enum": [
+     "draft",
+     "issued",
+     "paid",
+     "canceled"
+    ],
+    "type": "string"
+   },
+   "totals": {
+    "description": "The invoice's totals. grand_total is required; Well never computes it for you.",
+    "properties": {
+     "grand_total": {
+      "description": "The invoice's total including tax, as printed.",
+      "type": "number"
+     },
+     "items_total": {
+      "type": "number"
+     },
+     "tax_total": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "grand_total"
+    ],
+    "type": "object"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several \u2014 a write lands in exactly one workspace and this call would not say which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "issuer",
+   "receiver",
+   "issue_date",
+   "currency",
+   "totals",
+   "line_items"
+  ],
+  "type": "object"
+ },
+ "name": "well_create_invoice_from_data",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "currency": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "customer_name": {
+    "type": "string"
+   },
+   "design_layout": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "error": {
+    "type": "string"
+   },
+   "grand_total": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "invoice_id": {
+    "type": "string"
+   },
+   "invoice_item_count": {
+    "type": "number"
+   },
+   "issue_date": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "lines": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "line_id": {
+       "type": "string"
+      },
+      "line_kind": {
+       "description": "Whether the line is charged. Only a billed line counts toward grand_total; an optional or alternative line is printed with its price but not charged. Its line_id still names it in an edit.",
+       "enum": [
+        "billed",
+        "optional",
+        "alternative"
+       ],
+       "type": "string"
+      },
+      "name": {
+       "type": "string"
+      },
+      "quantity": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "tax_rate": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "unit_price": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "name",
+      "quantity",
+      "unit_price",
+      "tax_rate"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "newly_connected": {
+    "description": "Tools that connected to this workspace since the last result and that no session was told about yet, oldest first. Present only when at least one tool is new. Start the reply with one line per entry, in the person's language: \"<name> is connected.\". Never fold several entries into one sentence. Each entry comes back once, on one result only: never repeat its line later.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "payment_means": {
+    "type": "number"
+   },
+   "reference_number": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "status": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "success": {
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Create invoice from data"
+}

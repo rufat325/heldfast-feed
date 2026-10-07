@@ -1,0 +1,245 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Sum invoices over a window"
+ },
+ "description": "Sum a workspace's billed amounts over a window of whole months, grouped by month, currency and billing context. Arithmetic only \u2014 this tool holds no definition of MRR or recurrence, and returns no figure the app renders.\n\nUse it when you are computing a figure whose RULES you are stating yourself: recurring revenue over a window you chose, a total restricted to the billing contexts a reader confirmed, a per-month series behind a trend you are about to describe. The server derives no MRR of its own, so an MRR figure starts here: state the rules, sum exactly those rows, then put the result on a card with `well_render_mrr`.\n\n**The window is whole months.** `from` and `to` are both the first day of a month, as YYYY-MM-01; `from` is inclusive and `to` is EXCLUSIVE, so June to August is `2026-06-01` to `2026-09-01`. A bound inside a month is refused rather than widened, and so is a window longer than 36 months.\n\n**Which rows are billed amounts is decided here, and stated so you can say it.** A canceled invoice is left out. Only billing documents count: invoices, debit notes, credit notes and subscription billing statements, so a proforma and the invoice it precedes are not summed twice, and an order, a quote or a payment advice never is. A row with no document type is read as an invoice. Every amount is NET of tax (`items_total`), because tax collected is owed onward rather than earned.\n\n**`party_scope` is required, and it decides whose invoice this is.** `sales` is what the workspace ISSUED \u2014 its receivables, and the only side revenue can come from. `purchase` is what it received. The two are the same rows read from opposite ends, so no default is offered: a server choosing a side would answer a different question from the one asked. `intra_self` is an invoice between two companies the workspace owns, and `unattributed` is one Well could place on neither side.\n\n**Those four scopes partition every invoice exactly once**, which is what makes an incomplete picture visible rather than silent. `unattributed_count` comes back on every call, whatever scope you asked for: it counts the invoices in the window that landed in that fourth bucket. State it beside any total, because an unattributed invoice may still belong in the figure and nothing here can tell you whether it does.\n\n**Every row carries ONE month, ONE currency and ONE billing context.** Currency is always a grouping key, named or not: adding EUR to USD gives a number denominated in nothing, and no field on the result would tell you it happened. Convert the per-currency subtotals yourself, at a rate you can state, before you add them.\n\n**`sum` is already net of credit notes.** A credit note subtracts its magnitude from its own month-currency-context bucket, whichever sign it was stored with; `credit_note_sum` and `credit_note_count` report what that removed, so you can say what the figure netted. Do not subtract them a second time. A bucket whose credit notes outweigh its invoices nets negative, and that is a real state rather than an error.\n\n**`billing_context` is `null` on rows that name no billing arrangement** \u2014 none stored, `unknown`, or a value Well has no label for \u2014 and that is a third answer rather than a kind of one-off. The field is filled by extraction, not by a billing system, so a workspace can carry real recurring revenue on rows that say nothing about it. `unclassified_count` totals those rows. The recurring-contexts card offers them as one choice, keyed `\"unclassified\"`, so apply that key to these rows and only these. Counted or not, report the count rather than letting a reader read the remainder as \"everything else\".\n\n`corrected_or_consolidated_count` counts the corrected and consolidated invoices among the rows. Each replaces invoices Well holds no link to, so when those originals fall in the same window the sum counts that billing twice. The rows keep them, because dropping them would lose the revenue whenever the originals fall outside the window. State the count beside any total whenever it is not zero.\n\n`excluded_malformed` counts billing documents in the window with no readable net amount or no currency. They are in none of the rows and none of the sums, so state the count beside any total. It comes back `null` when the count could not be read, which is NOT `0`: zero says every row was readable, null says nobody counted.\n\n`partial: true` means the aggregate was cut short and every figure is a FLOOR rather than a measurement.\n\nWhen the token authorizes one workspace, call this directly \u2014 no other tool call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "from": {
+    "description": "Inclusive start of the window: the first day of a month, YYYY-MM-01.",
+    "pattern": "^(\\d{4})-(\\d{2})-01$",
+    "type": "string"
+   },
+   "party_scope": {
+    "description": "Which side of the invoice the workspace occupies: `sales` for what it issued, `purchase` for what it received. Required; see the description.",
+    "enum": [
+     "purchase",
+     "sales",
+     "intra_self",
+     "unattributed"
+    ],
+    "type": "string"
+   },
+   "to": {
+    "description": "EXCLUSIVE end of the window: the first day of the month after the last one you want, YYYY-MM-01.",
+    "pattern": "^(\\d{4})-(\\d{2})-01$",
+    "type": "string"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several: this read reports one workspace's own figures and will not choose which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "from",
+   "to",
+   "party_scope"
+  ],
+  "type": "object"
+ },
+ "name": "well_sum_invoices",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "corrected_or_consolidated_count": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "error": {
+    "type": "string"
+   },
+   "excluded_malformed": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "newly_connected": {
+    "description": "Tools that connected to this workspace since the last result and that no session was told about yet, oldest first. Present only when at least one tool is new. Start the reply with one line per entry, in the person's language: \"<name> is connected.\". Never fold several entries into one sentence. Each entry comes back once, on one result only: never repeat its line later.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "partial": {
+    "type": "boolean"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "rows": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "billing_context": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "count": {
+       "type": "number"
+      },
+      "credit_note_count": {
+       "type": "number"
+      },
+      "credit_note_sum": {
+       "type": "number"
+      },
+      "currency": {
+       "type": "string"
+      },
+      "month": {
+       "type": "string"
+      },
+      "sum": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "month",
+      "currency",
+      "billing_context",
+      "sum",
+      "count",
+      "credit_note_sum",
+      "credit_note_count"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "unattributed_count": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "unclassified_count": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "window": {
+    "additionalProperties": false,
+    "properties": {
+     "from": {
+      "type": "string"
+     },
+     "to": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "from",
+     "to"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "rows",
+   "window",
+   "unattributed_count",
+   "unclassified_count",
+   "corrected_or_consolidated_count",
+   "excluded_malformed",
+   "partial",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Sum invoices over a window"
+}

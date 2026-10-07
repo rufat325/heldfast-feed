@@ -1,0 +1,1021 @@
+{
+ "_meta": {
+  "ui": {
+   "resourceUri": "ui://well/widget/3db89ed2"
+  },
+  "ui/resourceUri": "ui://well/widget/3db89ed2"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "List connectors"
+ },
+ "description": "List the connectors a workspace can install AND everything it has already connected, each with a one-click install deep link. The result DRAWS THE CONNECT CARD the user clicks in.\n\nIt is also the answer to \"which connectors can bring this provider's invoices in\" (browser extension, direct connector, mailbox, file drive): pass `counterparty_ids` for the providers in question, or `q` to search one by name, instead of showing the missing-invoices worklist.\n\nONE tool answers both halves of the connect question \u2014 \"what can I connect to Well?\" and \"what is connected, still syncing, or broken?\" \u2014 because every existing connection is overlaid onto its catalog row. Do NOT read workspace_connectors records to work out connection coverage; this tool is that answer.\n\n\u26a0\ufe0f FOR A SILENT COVERAGE CHECK, CALL `well_get_connector_coverage` INSTEAD. Same scope arguments, same rows, no card. A data skill confirming a bank is connected before it measures anything must use that one: this tool renders on every call, so a check run here drops a connect picker into a conversation about something else and then waits for a click nobody meant to make.\n\n\u26a0\ufe0f WAIT ON THE CARD IN THE TURN THAT DREW IT. Write your one line for the user FIRST \u2014 the wait holds the turn open for up to a minute, and a user looking at a card with no sentence beside it has been given no reason to click \u2014 then call `well_wait_for_selection` on the kind this result names in `next_step`.\n\nEach entry has:\n- service_id: the connector's stable catalog id (e.g. \"stripe\"), used in the install link.\n- name, category_id, direction: what the connector is.\n- data_domains: the financial domains it serves \u2014 any of \"bank\", \"accounting\", \"invoicing\" \u2014 or null for a non-financial connector. One connector can serve several domains (Qonto serves all three). \"bank\" here means the connector delivers cash movements, which a payroll or billing platform also does; do NOT read it as \"this is a bank\". To list banks, pass kind: \"bank\", which the server scopes on its own bank classification. data_domains is a finance filter for the connect steps, NOT the scope of what Well reads or changes in the tool: answer that from reads and writes.\n- reads: the Well record types Well reads from this tool, from the connector's declared catalog data (e.g. \"invoice\", \"transaction\", \"people\", \"payslip\"). Answer \"what does Well read in <tool>?\" from this list and name only its items. An empty list means the catalog does not declare it yet: say you do not know yet (\"je ne sais pas encore\" in French). Never fill the gap from data_domains, invoice_source, category_id or the tool's name, and do not add them as a hint beside it.\n- writes: the exact provider actions Well may run in this tool from the chat, each only after the user confirms. An empty list means Well changes nothing in this tool from the chat: say so. Never name an action that is not on this list.\n  When the user asks what Well reads or changes in a tool that is not connected (is_connected false), also give ONE install link, once, raw. When the top-level install_all_url is non-null (a slug lookup on an installable connector carries it), that link is the one to give, even for a single tool, and the row's install_url stays out of the answer; only when install_all_url is null give the row's install_url. Make no claim about what connecting it would bring in beyond reads.\n- invoice_source: this connector can bring supplier invoices into Well, either because it issues or holds them (an accounting or an invoicing tool) or because invoices arrive through it as files (a mailbox, a messaging app, a file drive). Read it to decide which tools to offer for a missing-invoice hunt. It is a property of the connector, not of this workspace's connection.\n- reason: why this row is on the card. \"catalog\" is the list that was asked for. \"picked_vendor\" is a connector behind a counterparty the user picked. \"named_connector\" is the one connector a slug argument named, or a connected row of that same brand that stands for it (an open-banking row beside it, or another of the brand's rows in its place). Say which is which; never present a catalog row as one the user chose.\n- status: \"available\" connectors are connectable now; \"coming_soon\"/\"unavailable\"/\"maintenance\" are not.\n- is_matched / is_selected: whether this workspace's detected tools matched this connector / the workspace already picked it.\n- match_score: 0..1 confidence of that match; null when unmatched. It ranks nothing and ticks nothing: a detection is not a suggestion. It is internal: never show the score or its value to the person.\n- match_source: which detection lane matched the provider (\"email\", \"transaction\", \"invoice\", \"tool\", \"accounting\", \"enrichment\", \"scoring\", \"crm\", \"bank\", or \"user\" when the workspace picked it itself); null when there is no match or the match predates source tracking. A match found only in the inbox (\"email\") is never a reason to suggest a tool.\n- evidence: why Well suggests this tool, a list of { kind, count, count_is_lower_bound }; empty when Well holds none for the tool. A tool already connected carries empty evidence: it is never a suggestion. kind is \"open_task\" (Well has an open task to connect it), \"payments\" or \"invoices\" (count of payments or invoices with the tool's company in the last 12 months; count_is_lower_bound true reads \"count+\"), \"user_pick\" (the person picked it in Well), or \"note\" (a tool you passed in suggest). The list is ordered with the tools that have evidence first, the most payments and invoices ahead, then the rest by country and popularity.\n- suggestion_reason: your own one-line reason, echoed back, for a tool you passed in suggest; null on every other row, and always null for a tool already connected, which is never a suggestion. The server words no reason for payments, invoices, an open task or a pick: read the typed evidence and say it to the person yourself, in their language. Suggest a tool ONLY when its evidence is non-empty. A row with empty evidence is a catalog row, never a suggestion. When the result's evidence_complete is false, Well could not read every source: an empty row is then unchecked, so say you could not check and never say there is no sign yet.\n- is_connected: this workspace has a connection you should REPAIR or MANAGE, not install fresh. True for \"enabled\", \"processing\", \"error\" and \"need_reconnect\"; false for \"to_configure\" and \"disabled\", where a fresh install IS the right next step.\n- connection_status: the existing connection's state, or null when this workspace has no connection row for the connector at all. One of:\n  - \"enabled\" \u2014 connected and syncing.\n  - \"processing\" \u2014 the grant is in and the FIRST sync is still running; data may be partial. Connected: do NOT ask the user to connect it again.\n  - \"error\" \u2014 authenticated but its last real sync failed. Offer install_url as a reconnect when it is non-null. A null install_url means the grant is still live: state the failed sync, never a link.\n  - \"need_reconnect\" \u2014 the grant is dead and only the user can restore it. Offer install_url as a reconnect, NOT a first install.\n  - \"to_configure\" \u2014 a connect attempt that never completed its handshake. Nothing is connected: offer install_url as a first install, and never claim the tool is connected.\n  - \"disabled\" \u2014 the connection was torn down. Offer install_url as a first install.\n  A \"degraded\" connector never appears: it is resolved server-side against its own sync history into \"enabled\" or \"error\", so you never surface a state that clears itself. A connection whose state this build cannot read also reports null, and there is_connected stays true \u2014 read the two fields together, and treat \"null status, is_connected true\" as an existing connection whose health is unknown.\n- connect_failure_cause: WHY the connection is in a failed or refused state \u2014 one of the connect-failure vocabulary (\"provider_rejected\", \"plan_required\", \"user_cancelled\", \"selected_not_authorised\", \u2026), or null while an attempt is live, on a healthy row, or when none was recorded. Use it to name the reason to the user instead of guessing from the status.\n- last_connect_outcome: {cause, at} \u2014 how this connector's most recent connect attempt ENDED, even when that attempt's row is gone (a cancelled or refused install removes its connection row, so connection_status and connect_failure_cause can read null while this still names the outcome). Read it to answer \"the Ramp install said canceled\" accurately: a \"provider_rejected\" cause means the PROVIDER refused the install, \"plan_required\" that the PROVIDER's own plan does not cover it, \"connection_limit_reached\" that WELL refused because this workspace's own Well plan has reached its bank connection limit (never the provider; the fix is on the Well plan), \"user_cancelled\" that the user closed the flow. Null when no attempt has ended recently.\n- sync_health: null, or { reading, summary } for a connection that is flagged degraded. connection_status answers whether the connection works; sync_health answers whether recent sync runs delivered everything. Quote the summary and do not turn it into a fault. \"data_incomplete\": some rows are incomplete or missing, so say the data is incomplete; when connection_status is \"enabled\" the connection works and a reconnect does not help. \"runs_failing\": recent sync runs are failing. \"no_recent_sync\": no run has succeeded recently. Advise a reconnect only when connection_status is \"need_reconnect\" or \"error\"; a non-null sync_health never calls for one on its own.\n- workspace_connector_id: the connection instance's id, or null when there is no connection row. This is the id well_invoke_connector_tool and well_list_connector_tools need \u2014 resolve it HERE, never via well_query_records on workspace_connectors.\n- last_successful_sync_at: ISO timestamp of the last SUCCESSFUL sync, or null when none has landed yet. An \"enabled\" connector with null here has a valid grant but has never delivered data.\n- sync_in_progress: a data sync is running right now. Tell the user to wait rather than to act.\n- is_preselected: the card arrives with this one ticked. True ONLY on a from_selection result, where the row is a vendor the user themselves just picked, and on a slug lookup called with intent: \"connect\" \u2014 a detected match is a suggestion and is never pre-checked. A \"to_configure\" or \"disabled\" row can still be pre-checked \u2014 installing it IS the fix.\n- install_url: a one-click link that STARTS or REPAIRS the connection in Well. It works from any state \u2014 it signs the user in if needed, creates their workspace if they have none, then runs the connector's own auth flow \u2014 and it covers banks too (a bank opens its bank-login flow pre-selected). For a reconnect, give the user its install_url as is. Null when the connector is not \"available\", on every ai_client row (an AI app connects from its own settings, never through a link), and on a live connection \u2014 a connector still holding its grant (\"enabled\", \"processing\", or the live rows behind an \"error\" reading) has nothing for this link to start or repair, so a \"reconnect it\" ask on one is answered with its state, never a link. Hand this to the user to get started in one click.\n- countries: the ISO 3166-1 alpha-2 countries this connector serves, or null when none is known. It is what the country scope sorts on; use it to explain why a bank fits the company, never to hide a bank the country field is null on.\n- direct_connector_service_id: on an open-banking (Plaid) row, the service_id of the bank's OWN connector when the bank has one a user can install now (e.g. \"qonto\" on a Qonto institution reached through Plaid); null on every other row. A connected row carrying it means the bank is reached through the aggregator although a direct connection exists: the direct row of that service_id is the offer. The field names a route, never a connection: read is_connected on the direct row before you offer it.\n\nunsent_document_counts is a TOP-LEVEL field, present only when include_unsent_counts was passed. It names every tool this workspace forwards documents to, with the documents each one has not received yet, biggest backlog first. IT IS THE ONLY PLACE THE BACKLOG IS REPORTED: that array carries the workspace's whole set of outbound connections whatever catalog page came back, the connector rows carry no count at all, and the catalog runs to hundreds of rows, so a tool with a real backlog is missing from any page that did not happen to carry it. An entry reading 0 is a tool that is up to date: say nothing about it. unsent_document_count_is_upper_bound true means a document filter applies to that connection, so the count is a maximum and reads as \"up to <n>\". Every count is read off Well's own forward record, so it measures what Well wrote down rather than what the tool confirmed. Name each tool by the entry's name.\n\nunfinished_connects is a TOP-LEVEL field. Connect attempts in this workspace the person has not been told about yet, newest first. `outcome` is `stopped` (the person closed the connect before it finished), `timed_out` (nobody finished it within the hour), or `still_connecting` (it is still open). An empty array means there is nothing to tell; an absent field means nothing was read. Name a tool by its `name`. For each entry, say one short line in the reply: on `stopped` or `timed_out`, offer to connect it again or to skip it for now; on `still_connecting`, offer to wait or to skip it for now. Once the reply says the lines, call `well_mark_connects_told` with the `workspace_connector_id` of each entry it said, so a later read does not repeat them. An entry the reply did not say stays unmarked and comes back on the next read.\n\ninstall_all_url is a TOP-LEVEL field, not a per-connector one. It is ONE link that installs every installable connector in this result that is not already connected, in the order they are listed. Every available, not-connected row also carries its own install_url, a connector the catalog holds by service id alone included, so a single row never needs this link to be installable. One exception: a row the catalog holds by service id alone (a long-tail bank institution) with a \"need_reconnect\", \"error\" or \"to_configure\" connection behind it carries NO install_url, because that link cannot name the existing connection and would start a second one for the same institution. Do not offer such a row a new install: state its connection_status and tell the user to repair the existing connection from Well, never promise a link for it. When the answer offers several connectors to install, hand the user install_all_url and do NOT list the per-connector install_url links beside it \u2014 the one link IS the whole offer, and a table of links beside it puts the reader back through several sign-ins. One link carries at most 10 connectors, and install_all_omitted names the service ids it left out, so offer those rows their own install_url. install_all_url is null when the result offers nothing to install. It is null too wherever the result names no set the user has chosen: the unfiltered catalog and the whole bank domain never carry the link, a name search carries it only when it matches exactly one connector, and an accounting or invoicing domain carries it only while the WHOLE result fits in one link and this page holds all of it \u2014 past that the link would stand for whichever rows the page happened to carry. A slug lookup carries it whenever the named connector is installable: its one-connector result always fits one link. from_selection always carries the link, however many vendors were picked, because the user named each one. Where install_all_url is null, the rows' own install_url links ARE the offer: list them, and never announce a batch link the result does not carry.\n\nPaging: page with offset and page_count, never with the length of connectors. On the first page of an unsearched browse the workspace's ALREADY CONNECTED connectors are prepended so the catalog's ordering cannot bury them past any page you would ask for \u2014 so connectors can be longer than the page it came from, and page_count is the catalog window's own length. Advance by offset + page_count; total counts every matching connector across all pages. Those prepended rows carry is_connected true (or a to_configure/disabled state), so a workspace's live tools are visible without paging for them.\n\nScoping: pass kind (\"bank\" | \"accounting\" | \"invoicing\") to get only the connectors serving that domain \u2014 the whole set, server-ordered, including the long tail of bank institutions. Pass kind: \"upload_surface\" for the places invoices ARRIVE \u2014 mailboxes, messaging apps, file drives. Pass kind: \"storage\" for the drives Well FILES INTO \u2014 Google Drive, Dropbox, OneDrive \u2014 the step that asks where Well should write the documents it collects. Pass kind: \"ai_client\" for the AI apps that read Well over MCP: a row with is_connected true means that app is connected, and no row carries an install_url because an AI app connects from its own settings. Neither of those two is a financial domain: the server resolves each from the connectors' own display categories, so read the rows it returns and never re-derive the set from category_id yourself. They are opposite DIRECTIONS on the same drives, so a \"storage\" row carries direction \"output\" and no data_domains, and its is_connected reports the workspace's own file-drop connection, never the drive's separate invoice-source connection. Pass q to name-search the full catalog. Pass slug to resolve the ONE connector a request named: the card then shows that connector alone, whatever kind it is, ticked only when the call also passes intent: \"connect\". When that connector is not connected or is owed a repair, and the workspace reaches the same bank through open banking with a better connection, the open-banking row comes back beside it. Outside the storage and ai_client scopes, every read (a search, an offset page, a pick and a slug included) shows a brand through its best-connected row: when another of the brand's own rows has a better connection than the row the catalog would show, that row comes back in its place, at the same position. Its slug and name can then differ from the ones the request named or searched for (\"stripe-token\" for \"stripe\"): it is the same tool, so report its is_connected and connection_status as the named tool's. Omit all of them for the curated view, which lists the tools with evidence first. Pass suggest with the tools a note the person gave you names, each with its one-line reason: those rows rank with the evidence and carry your reason. Use well_list_connector_tools for a live connection's actions.\n\nCountry: pass country (ISO 3166-1 alpha-2, e.g. \"FR\") on a connect-a-bank or a connect-an-accounting-tool step so the banks or accounting tools that serve the company's country sort first, then the ones that serve its region, then the rest. It reorders the page only \u2014 no row is dropped, and a connector the catalog carries no coverage for is left in place \u2014 so a connector the user names is still found with q. Take the country from the workspace identity; omit it when the country is unknown, and the order is unchanged.\n\nPass from_selection: true for the connect step that FOLLOWS a vendor pick. It returns the connectors behind the counterparties the user picked on the missing-invoices card in this conversation, and NOTHING else: only the picked vendors' connectors, and of those only the ones that can bring an invoice in (reason \"picked_vendor\"). It offers no accounting or invoicing tool the user did not pick: that offer belongs to its own step, scoped with kind. When the pick leaves no row, the list is empty and the card is not worth drawing. \u26a0\ufe0f **This tool draws its card on EVERY call, the empty one included**, so never call it with from_selection to find out whether the pick has a connector behind it. Ask `well_get_worklist_status({ worklist: \"invoice_sources_for_pick\" })` first: it draws nothing, and it reports how many of the picked vendors carry a connector that can bring an invoice in. Make the from_selection call only when that count is above zero. An ABSENT count is not a zero: the probe answers `success: false` when it could not read the pick at all, so retry it rather than reading its silence as a vendor with no connector. row_count reports the same number back on this result. picked_vendors_filtered counts the picked vendors' connectors that were dropped for bringing no invoices in: when it is above zero, say a filter ran rather than letting a short card read as a pick nobody made. It takes no q and no kind: those browse a catalog, and this names a set already decided. An empty list means this conversation holds no pick for this workspace, or no picked counterparty matched a connector.\n\nEvery result carries scope \u2014 \"catalog\", one of the three domains, \"upload_surface\", \"storage\", \"ai_client\", or \"picked_vendors\" \u2014 naming what the list IS. The card words its title from that field, so a caller must not describe the result as a domain the scope does not name.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "counterparty_ids": {
+    "description": "Scope the card to the connectors behind these counterparties, copied from the `company_id` of the missing-invoices rows. The explicit form of `from_selection`, for a caller holding the picked ids itself instead of a card click recorded in this session: it resolves the same connectors and filters them the same way. Passing counterparty_ids alone already scopes the card to the pick \u2014 from_selection is not needed alongside it; it cannot be combined with `q` or `kind`.",
+    "items": {
+     "format": "uuid",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+     "type": "string"
+    },
+    "maxItems": 200,
+    "minItems": 1,
+    "type": "array"
+   },
+   "country": {
+    "description": "The company's country as an ISO 3166-1 alpha-2 code (e.g. \"FR\"). When set, the connectors that serve that country sort first, then the ones that serve its region, then the rest \u2014 the order only, no row is dropped. Use it on a connect-a-bank or a connect-an-accounting-tool step so the banks or accounting tools that fit the company appear first; take it from the workspace identity's country. Omit when the country is unknown, and the order is left unchanged.",
+    "enum": [
+     "AD",
+     "AE",
+     "AF",
+     "AG",
+     "AI",
+     "AL",
+     "AM",
+     "AO",
+     "AQ",
+     "AR",
+     "AS",
+     "AT",
+     "AU",
+     "AW",
+     "AX",
+     "AZ",
+     "BA",
+     "BB",
+     "BD",
+     "BE",
+     "BF",
+     "BG",
+     "BH",
+     "BI",
+     "BJ",
+     "BL",
+     "BM",
+     "BN",
+     "BO",
+     "BQ",
+     "BR",
+     "BS",
+     "BT",
+     "BV",
+     "BW",
+     "BY",
+     "BZ",
+     "CA",
+     "CC",
+     "CD",
+     "CF",
+     "CG",
+     "CH",
+     "CI",
+     "CK",
+     "CL",
+     "CM",
+     "CN",
+     "CO",
+     "CR",
+     "CU",
+     "CV",
+     "CW",
+     "CX",
+     "CY",
+     "CZ",
+     "DE",
+     "DJ",
+     "DK",
+     "DM",
+     "DO",
+     "DZ",
+     "EC",
+     "EE",
+     "EG",
+     "EH",
+     "ER",
+     "ES",
+     "ET",
+     "FI",
+     "FJ",
+     "FK",
+     "FM",
+     "FO",
+     "FR",
+     "GA",
+     "GB",
+     "GD",
+     "GE",
+     "GF",
+     "GG",
+     "GH",
+     "GI",
+     "GL",
+     "GM",
+     "GN",
+     "GP",
+     "GQ",
+     "GR",
+     "GS",
+     "GT",
+     "GU",
+     "GW",
+     "GY",
+     "HK",
+     "HM",
+     "HN",
+     "HR",
+     "HT",
+     "HU",
+     "ID",
+     "IE",
+     "IL",
+     "IM",
+     "IN",
+     "IO",
+     "IQ",
+     "IR",
+     "IS",
+     "IT",
+     "JE",
+     "JM",
+     "JO",
+     "JP",
+     "KE",
+     "KG",
+     "KH",
+     "KI",
+     "KM",
+     "KN",
+     "KP",
+     "KR",
+     "KW",
+     "KY",
+     "KZ",
+     "LA",
+     "LB",
+     "LC",
+     "LI",
+     "LK",
+     "LR",
+     "LS",
+     "LT",
+     "LU",
+     "LV",
+     "LY",
+     "MA",
+     "MC",
+     "MD",
+     "ME",
+     "MF",
+     "MG",
+     "MH",
+     "MK",
+     "ML",
+     "MM",
+     "MN",
+     "MO",
+     "MP",
+     "MQ",
+     "MR",
+     "MS",
+     "MT",
+     "MU",
+     "MV",
+     "MW",
+     "MX",
+     "MY",
+     "MZ",
+     "NA",
+     "NC",
+     "NE",
+     "NF",
+     "NG",
+     "NI",
+     "NL",
+     "NO",
+     "NP",
+     "NR",
+     "NU",
+     "NZ",
+     "OM",
+     "PA",
+     "PE",
+     "PF",
+     "PG",
+     "PH",
+     "PK",
+     "PL",
+     "PM",
+     "PN",
+     "PR",
+     "PS",
+     "PT",
+     "PW",
+     "PY",
+     "QA",
+     "RE",
+     "RO",
+     "RS",
+     "RU",
+     "RW",
+     "SA",
+     "SB",
+     "SC",
+     "SD",
+     "SE",
+     "SG",
+     "SH",
+     "SI",
+     "SJ",
+     "SK",
+     "SL",
+     "SM",
+     "SN",
+     "SO",
+     "SR",
+     "SS",
+     "ST",
+     "SV",
+     "SX",
+     "SY",
+     "SZ",
+     "TC",
+     "TD",
+     "TF",
+     "TG",
+     "TH",
+     "TJ",
+     "TK",
+     "TL",
+     "TM",
+     "TN",
+     "TO",
+     "TR",
+     "TT",
+     "TV",
+     "TW",
+     "TZ",
+     "UA",
+     "UG",
+     "UM",
+     "US",
+     "UY",
+     "UZ",
+     "VA",
+     "VC",
+     "VE",
+     "VG",
+     "VI",
+     "VN",
+     "VU",
+     "WF",
+     "WS",
+     "YE",
+     "YT",
+     "ZA",
+     "ZM",
+     "ZW"
+    ],
+    "type": "string"
+   },
+   "from_selection": {
+    "const": true,
+    "description": "Scope the card to the connectors behind the counterparties the user picked on the missing-invoices card in this conversation, each installable one pre-checked. Use it for the connect step that FOLLOWS a vendor pick. It returns those vendors' connectors and NOTHING else: a picked connector that brings no invoices in is dropped, and no accounting or invoicing tool the user did not pick is offered here: that offer is its own step, scoped with `kind`. Cannot be combined with `q` or `kind`: those name a catalog to browse, and this names a set already decided. Returns an empty list when this conversation holds no pick for this workspace, or when no picked counterparty matched a connector.",
+    "type": "boolean"
+   },
+   "include_unsent_counts": {
+    "const": true,
+    "description": "Add the top-level `unsent_document_counts`: every tool Well forwards this workspace's documents to, each with how many documents it has not received yet. That array is the whole answer \u2014 it holds every one of the workspace's outbound connections, whatever catalog page was requested, and the rows carry no count at all. Off by default, because it costs an extra read. The figure is the workspace's whole backlog, not a period's.",
+    "type": "boolean"
+   },
+   "intent": {
+    "const": "connect",
+    "description": "With `slug` only: \"connect\" ticks the named connector on the card. Without it the card shows the connector unticked. Rejected on every other scope.",
+    "type": "string"
+   },
+   "kind": {
+    "description": "Scope the card server-side. Three financial domains: \"bank\" (every bank and neobank, including the long tail of open-banking institutions, plus the platforms that hold an account like Qonto and Pennylane \u2014 never a payroll or billing tool that merely reports transactions), \"accounting\", and \"invoicing\". Plus two scopes the server resolves from display categories rather than from a financial domain: \"upload_surface\", the places invoices ARRIVE (mailboxes, messaging apps, file drives), and \"storage\", the drives Well FILES INTO (Google Drive, Dropbox, OneDrive). The last two are opposite directions on the same drives, so a workspace can hold both connections and each is offered on its own card. And \"ai_client\", the AI apps that read Well over MCP (Claude, Codex, the Well CLI and the like): read it to tell whether any AI app is connected. Its rows carry no install_url, since an AI app connects from its own settings. Use this for a connect-a-bank, a connect-where-invoices-arrive or a connect-where-Well-files step instead of filtering the default view yourself. Omit for every connectable connector.",
+    "enum": [
+     "bank",
+     "accounting",
+     "invoicing",
+     "upload_surface",
+     "storage",
+     "ai_client"
+    ],
+    "type": "string"
+   },
+   "limit": {
+    "description": "Max connectors to return (1-100, default 50).",
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "offset": {
+    "description": "Number of connectors to skip, for paging (default 0).",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "q": {
+    "description": "Name search across the full catalog (e.g. a specific bank). Omit for the curated view, which lists the tools with evidence first.",
+    "maxLength": 120,
+    "minLength": 1,
+    "type": "string"
+   },
+   "slug": {
+    "description": "Exact connector slug: resolves the ONE named connector, of any kind (e.g. \"notion\" for a connect-Notion request). Use it when the request names a single connector, instead of `q` which name-searches. An unknown slug returns an empty list; retry with `q` on the name then. Cannot be combined with `q`, `kind`, `from_selection` or `counterparty_ids`.",
+    "maxLength": 120,
+    "minLength": 1,
+    "type": "string"
+   },
+   "subtitle": {
+    "description": "Supporting line under the connect card's heading, OVERRIDING the scope-derived subtitle. At most 240 characters. Omit to keep the default wording for the requested kind.",
+    "maxLength": 240,
+    "type": "string"
+   },
+   "suggest": {
+    "description": "The tools you suggest from something the person told you, which only you can read (their notes, your memory of them, what they said earlier): each a catalog service_id and a one-line reason in the person's language (\"You told me you bank with Qonto\"). Those rows gain note evidence, rank with the other tools that have evidence, and carry your reason as their suggestion_reason. Never name a tool here from a guess, an email domain or a category alone. At most 10.",
+    "items": {
+     "properties": {
+      "reason": {
+       "maxLength": 120,
+       "minLength": 1,
+       "type": "string"
+      },
+      "service_id": {
+       "maxLength": 120,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "required": [
+      "service_id",
+      "reason"
+     ],
+     "type": "object"
+    },
+    "maxItems": 10,
+    "type": "array"
+   },
+   "title": {
+    "description": "Heading for the connect card shown to the user, OVERRIDING the wording the card otherwise derives from the scope/kind. Use it to frame the step in its flow (e.g. \"Connect your accounting tool for the close\"). At most 120 characters. Omit to keep the default wording for the requested kind.",
+    "maxLength": 120,
+    "type": "string"
+   },
+   "workspace_id": {
+    "description": "Target workspace. This read reports one workspace's own data. Omit it and the token's primary workspace answers, which may not be the one you mean; the result names the workspace that did.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "well_list_connectors",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "connectors": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "category_id": {
+       "type": "string"
+      },
+      "connect_failure_cause": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "connection_status": {
+       "anyOf": [
+        {
+         "enum": [
+          "enabled",
+          "processing",
+          "error",
+          "need_reconnect",
+          "to_configure",
+          "disabled"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "countries": {
+       "anyOf": [
+        {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "country_codes": {
+       "anyOf": [
+        {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "data_domains": {
+       "anyOf": [
+        {
+         "items": {
+          "enum": [
+           "bank",
+           "accounting",
+           "invoicing"
+          ],
+          "type": "string"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "direct_connector_service_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "direction": {
+       "type": "string"
+      },
+      "domain": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "evidence": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "count": {
+          "anyOf": [
+           {
+            "maximum": 9007199254740991,
+            "minimum": 0,
+            "type": "integer"
+           },
+           {
+            "type": "null"
+           }
+          ]
+         },
+         "count_is_lower_bound": {
+          "type": "boolean"
+         },
+         "kind": {
+          "enum": [
+           "open_task",
+           "payments",
+           "invoices",
+           "user_pick",
+           "note"
+          ],
+          "type": "string"
+         }
+        },
+        "required": [
+         "kind",
+         "count",
+         "count_is_lower_bound"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "install_url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "invoice_source": {
+       "type": "boolean"
+      },
+      "is_connected": {
+       "type": "boolean"
+      },
+      "is_matched": {
+       "type": "boolean"
+      },
+      "is_preselected": {
+       "type": "boolean"
+      },
+      "is_selected": {
+       "type": "boolean"
+      },
+      "last_connect_outcome": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "at": {
+           "anyOf": [
+            {
+             "type": "string"
+            },
+            {
+             "type": "null"
+            }
+           ]
+          },
+          "cause": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "cause",
+          "at"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "last_successful_sync_at": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "logo_url": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "match_score": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "match_source": {
+       "anyOf": [
+        {
+         "enum": [
+          "email",
+          "bank",
+          "tool",
+          "accounting",
+          "transaction",
+          "scoring",
+          "invoice",
+          "crm",
+          "enrichment",
+          "user"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "name": {
+       "type": "string"
+      },
+      "popularity_score": {
+       "anyOf": [
+        {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "reads": {
+       "items": {
+        "enum": [
+         "company",
+         "people",
+         "invoice",
+         "transaction",
+         "account",
+         "ledger_account",
+         "journal",
+         "journal_entry",
+         "journal_entry_line",
+         "account_balance",
+         "invoice_item",
+         "email",
+         "payment_means",
+         "invoice_transaction",
+         "document",
+         "invoice_payment",
+         "note",
+         "payslip",
+         "employment_contract",
+         "payslip_line"
+        ],
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "reason": {
+       "enum": [
+        "catalog",
+        "picked_vendor",
+        "named_connector"
+       ],
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      },
+      "slug": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "status": {
+       "type": "string"
+      },
+      "suggestion_reason": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "sync_health": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "reading": {
+           "enum": [
+            "data_incomplete",
+            "runs_failing",
+            "no_recent_sync"
+           ],
+           "type": "string"
+          },
+          "summary": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "reading",
+          "summary"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "sync_in_progress": {
+       "type": "boolean"
+      },
+      "workspace_connector_id": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "writes": {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "required": [
+      "service_id",
+      "slug",
+      "name",
+      "category_id",
+      "status",
+      "direction",
+      "data_domains",
+      "reads",
+      "writes",
+      "domain",
+      "country_codes",
+      "invoice_source",
+      "reason",
+      "logo_url",
+      "popularity_score",
+      "is_matched",
+      "is_selected",
+      "match_score",
+      "match_source",
+      "evidence",
+      "suggestion_reason",
+      "is_connected",
+      "connection_status",
+      "connect_failure_cause",
+      "last_connect_outcome",
+      "sync_health",
+      "workspace_connector_id",
+      "last_successful_sync_at",
+      "sync_in_progress",
+      "is_preselected",
+      "install_url",
+      "countries",
+      "direct_connector_service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "error": {
+    "type": "string"
+   },
+   "evidence_complete": {
+    "description": "False when Well could not read every source of evidence for this workspace. A row with empty `evidence` is then UNCHECKED, not clean: say you could not check, and never say there is no sign yet. True or absent means every source was read. Only a catalog read (no scope, or a `kind` of `bank`, `accounting` or `invoicing`, with or without `q` or `slug`) reads evidence: the picked-vendor (`from_selection`, `counterparty_ids`), `upload_surface`, `storage` and `ai_client` scopes read no workspace evidence. A row holds only a note you passed in `suggest`, otherwise empty `evidence`. These scopes always report false.",
+    "type": "boolean"
+   },
+   "install_all_omitted": {
+    "description": "The service ids install_all_url could not carry, because one link names a bounded number of connectors. Offer these rows their own install_url instead of promising the batch link covers them.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "install_all_url": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "One link that installs every installable connector in this result. Null when the result offers nothing to install, or when its scope names a set the reader has not chosen. When it is non-null it is the ONLY install link the answer offers \u2014 do not list the rows' own install_url beside it. When it is null, the rows' own install_url is the offer instead."
+   },
+   "limit": {
+    "description": "The page size that was REQUESTED. The catalog may return fewer.",
+    "type": "number"
+   },
+   "newly_connected": {
+    "description": "Tools that connected to this workspace since the last result and that no session was told about yet, oldest first. Present only when at least one tool is new. Start the reply with one line per entry, in the person's language: \"<name> is connected.\". Never fold several entries into one sentence. Each entry comes back once, on one result only: never repeat its line later.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "next_step": {
+    "description": "What to do with the card this result renders. Added by the dispatcher when the card asks for a click.",
+    "type": "string"
+   },
+   "offset": {
+    "description": "How many catalog rows this page skipped.",
+    "type": "number"
+   },
+   "page_count": {
+    "description": "The catalog page's own length, and the ONLY safe paging cursor: advance by `offset + page_count`. `connectors` can be LONGER \u2014 on the first page of an unsearched browse the workspace's already-connected rows are prepended so they cannot be lost to the catalog's ordering \u2014 so paging by the array's length silently skips exactly that many catalog rows on every later request.",
+    "type": "number"
+   },
+   "picked_vendors_filtered": {
+    "description": "How many of the picked vendors' connectors were dropped for bringing no invoices in. Present on the `picked_vendors` scope only. Above zero means the card is SHORTER than the pick: say that those vendors' tools cannot deliver an invoice, rather than letting the gap read as a pick the user never made.",
+    "type": "number"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "row_count": {
+    "description": "How many rows this result puts ON THE CARD, prepended rows included. `0` on a `picked_vendors` scope means the pick has no connector behind it that can bring an invoice in: the card carries nothing to tick, so say so in half a sentence and move on. Not a paging cursor \u2014 `page_count` is.",
+    "type": "number"
+   },
+   "scope": {
+    "description": "What this result is a list OF: the requested kind, the picked vendors' connectors, or the curated catalog when neither was asked for. The card words itself from this, so it never describes the rows as a domain that was not requested.",
+    "enum": [
+     "catalog",
+     "bank",
+     "accounting",
+     "invoicing",
+     "upload_surface",
+     "storage",
+     "ai_client",
+     "picked_vendors"
+    ],
+    "type": "string"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "total": {
+    "description": "Every connector matching the query, across all pages \u2014 NOT the length of `connectors`.",
+    "type": "number"
+   },
+   "unfinished_connects": {
+    "description": "Connect attempts in this workspace the person has not been told about yet, newest first. `outcome` is `stopped` (the person closed the connect before it finished), `timed_out` (nobody finished it within the hour), or `still_connecting` (it is still open). An empty array means there is nothing to tell; an absent field means nothing was read. Name a tool by its `name`. For each entry, say one short line in the reply: on `stopped` or `timed_out`, offer to connect it again or to skip it for now; on `still_connecting`, offer to wait or to skip it for now. Once the reply says the lines, call `well_mark_connects_told` with the `workspace_connector_id` of each entry it said, so a later read does not repeat them. An entry the reply did not say stays unmarked and comes back on the next read.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "at": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "name": {
+       "type": "string"
+      },
+      "outcome": {
+       "enum": [
+        "stopped",
+        "timed_out",
+        "still_connecting"
+       ],
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      },
+      "workspace_connector_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "workspace_connector_id",
+      "service_id",
+      "name",
+      "outcome",
+      "at"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "unsent_document_counts": {
+    "description": "Every tool this workspace forwards documents to, each with the documents it has not received yet, biggest backlog first. Present only when `include_unsent_counts` was set. THIS IS THE ONLY PLACE THE BACKLOG IS REPORTED: it is not a page, it carries the workspace's whole set of outbound connections whether or not the requested catalog page holds their rows, and the catalog rows carry no count. An empty array means the workspace forwards to nothing; an absent field means nothing was measured. `unsent_document_count_is_upper_bound: true` means a document filter applies to that connection, so the count is a maximum and reads as `up to <n>`. Every count is read off Well's own forward record, so it measures what Well wrote down rather than what the tool confirmed. Name a tool by its `name`. An entry reading `0` is a tool that is up to date: say nothing about it.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      },
+      "unsent_document_count": {
+       "maximum": 9007199254740991,
+       "minimum": 0,
+       "type": "integer"
+      },
+      "unsent_document_count_is_upper_bound": {
+       "type": "boolean"
+      },
+      "workspace_connector_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "service_id",
+      "name",
+      "workspace_connector_id",
+      "unsent_document_count",
+      "unsent_document_count_is_upper_bound"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "install_all_url",
+   "install_all_omitted",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "List connectors"
+}
