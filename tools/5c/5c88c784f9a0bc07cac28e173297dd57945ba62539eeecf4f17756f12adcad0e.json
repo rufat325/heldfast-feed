@@ -1,0 +1,625 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Sum outstanding receivables"
+ },
+ "description": "What the workspace's customers still owe it: the outstanding receivables, one figure per currency, with the overdue part and an aging breakdown. It draws nothing.\n\nUse it for any total of what customers owe: \"who owes us money\", \"how much are we owed\", \"how much is overdue\". State the totals it returns and do not add up rows yourself, and do not page `well_query_records` to rebuild a total: this read sums every outstanding invoice on the server, so the same question gives the same figure each time. For the invoices behind the figure (which customer, which invoice), read the rows with `well_show_records`.\n\n**The rule is fixed, and `rule` echoes it.** An invoice counts as owed when the workspace is the issuer and the customer the receiver, it is a billing document (`rule.document_types`, or no type at all; never a proforma, quote, order or credit note), it is not a draft or canceled, its payment status is `unpaid` or `partial`, and `balance_due` is above zero. The amount is `balance_due`, so a part-paid invoice counts for what is left. Payment status decides, never `balance_due` alone: an invoice a connector calls settled keeps a balance until a bank payment matches it.\n\n**Every figure is per currency and never converted.** `currencies` holds one row per currency. Do not add two rows without converting them at a rate you can state. Each row has `outstanding_count` and `outstanding_total`, the `overdue_count` and `overdue_total` part past its due date, and `aging`: the bands `current` (not yet due, or due today), `1_30`, `31_60`, `61_90` and `over_90` days past due, every band present even at zero. The bands and the invoices with no due date add up to the outstanding total.\n\n**`as_of` is the instant of the read, and due dates are aged against `as_of_date`,** the UTC calendar date. Give `as_of` beside every figure.\n\n**What the figure leaves out is returned so you can say it:**\n- `no_due_date_count` and `no_due_date_total` (per row): outstanding invoices with no due date. They are in the outstanding total and in no aging band, and no other date stands in for a missing due date.\n- `marked_paid_count` and `marked_paid_total` (per row): issued invoices a connector says are settled with no bank payment matched yet, with a balance left. They are NOT in the outstanding total. State them on their own line.\n- `draft_count` and `draft_total` (per row): draft invoices with a balance left, at any payment status except `unknown`. A draft at `marked_paid` is counted here, not in the marked-paid line. An imported sales invoice often stays a draft while it is owed. They are NOT in the outstanding total. State them on their own line.\n- `unsettled_credit_note_count` and `unsettled_credit_note_total` (per row): issued credit notes still unpaid or part paid with a balance left. The read does not tell a note linked to its invoice from one that is not, so say \"credit notes with a balance left\", never \"unlinked\". They are NOT in the outstanding total and are NOT subtracted from it. State them on their own line.\n- `unknown_payment_status_count`: invoices, drafts included, whose payment status could not be worked out. Their balance is not trusted, so they are in no figure and in no draft line. `null` means the count failed, which is not `0`.\n- `unattributed_count`: outstanding-looking invoices Well could place on neither side. They may be owed to the workspace and are in no figure. `null` means the count failed, and it is also `null` when `customer_ids` narrows the read.\n- `no_currency_count`: invoices with no currency, among the outstanding ones and among the marked-paid, draft and credit-note lines. They are in no row. `null` means the count failed.\n- `no_balance_count`: unpaid or part-paid invoices, drafts included, with no `balance_due` recorded, so no amount to count. In no figure. `null` means the count failed.\nState every count beside the total, even at zero, so a reader can tell a clean read from a silent one. Never count rows yourself to fill one in.\n\n`customer_ids` narrows the read to those customers (company ids, at most 20). It matches each company id exactly, and one customer can exist as several company rows (aliases), so pass every company id that names the customer or the figure leaves out the invoices filed under the others. Omit it for every customer.\n\n`partial: true` means the aggregate was cut short and every figure is a FLOOR. When `success` is false the read failed: the empty `currencies` is not a measured zero.\n\nWhen the token authorizes one workspace, call this directly \u2014 no other tool call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "customer_ids": {
+    "description": "Company ids of the customers to restrict the figure to. Each id matches exactly, so include every company id that names the same customer, aliases included. Omit for every customer; see the description.",
+    "items": {
+     "format": "uuid",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+     "type": "string"
+    },
+    "maxItems": 20,
+    "type": "array"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several: this read reports one workspace's own figures and will not choose which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   },
+   "workspace_scope": {
+    "description": "Restrict this call to the family: the token's primary workspace plus the company workspaces under it that you are a member of. Unrelated authorized workspaces drop out of the read; row reads merge across the family, while a per-workspace figure still reports exactly one workspace.",
+    "enum": [
+     "family"
+    ],
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "well_sum_receivables",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "as_of": {
+    "type": "string"
+   },
+   "as_of_date": {
+    "type": "string"
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "currencies": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "aging": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "band": {
+          "enum": [
+           "current",
+           "1_30",
+           "31_60",
+           "61_90",
+           "over_90"
+          ],
+          "type": "string"
+         },
+         "count": {
+          "type": "number"
+         },
+         "overdue": {
+          "type": "boolean"
+         },
+         "total": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "band",
+         "overdue",
+         "count",
+         "total"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "currency": {
+       "type": "string"
+      },
+      "draft_count": {
+       "type": "number"
+      },
+      "draft_total": {
+       "type": "number"
+      },
+      "marked_paid_count": {
+       "type": "number"
+      },
+      "marked_paid_total": {
+       "type": "number"
+      },
+      "no_due_date_count": {
+       "type": "number"
+      },
+      "no_due_date_total": {
+       "type": "number"
+      },
+      "outstanding_count": {
+       "type": "number"
+      },
+      "outstanding_total": {
+       "type": "number"
+      },
+      "overdue_count": {
+       "type": "number"
+      },
+      "overdue_total": {
+       "type": "number"
+      },
+      "unsettled_credit_note_count": {
+       "type": "number"
+      },
+      "unsettled_credit_note_total": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "currency",
+      "outstanding_count",
+      "outstanding_total",
+      "overdue_count",
+      "overdue_total",
+      "aging",
+      "no_due_date_count",
+      "no_due_date_total",
+      "marked_paid_count",
+      "marked_paid_total",
+      "draft_count",
+      "draft_total",
+      "unsettled_credit_note_count",
+      "unsettled_credit_note_total"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "customer_ids": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "error": {
+    "type": "string"
+   },
+   "newly_connected": {
+    "description": "Tools that connected to this workspace since the last result and that no session was told about yet, oldest first. Present only when at least one tool is new. Start the reply with one line per entry, in the person's language: \"<name> is connected.\". Never fold several entries into one sentence. Each entry comes back once, on one result only: never repeat its line later.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "no_balance_count": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "no_currency_count": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "partial": {
+    "type": "boolean"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "rule": {
+    "additionalProperties": false,
+    "properties": {
+     "aged_by": {
+      "const": "due_date",
+      "type": "string"
+     },
+     "aging_bands": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "band": {
+         "enum": [
+          "current",
+          "1_30",
+          "31_60",
+          "61_90",
+          "over_90"
+         ],
+         "type": "string"
+        },
+        "max_days_past_due": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "min_days_past_due": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "overdue": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "band",
+        "min_days_past_due",
+        "max_days_past_due",
+        "overdue"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "amount": {
+      "const": "balance_due",
+      "type": "string"
+     },
+     "credit_note_document_types": {
+      "items": {
+       "enum": [
+        "380",
+        "381",
+        "383",
+        "384",
+        "325",
+        "326",
+        "385",
+        "386",
+        "387",
+        "388",
+        "389",
+        "390",
+        "391",
+        "392",
+        "393",
+        "394",
+        "395",
+        "396",
+        "397",
+        "220",
+        "221",
+        "222",
+        "230",
+        "231",
+        "232",
+        "235",
+        "236",
+        "310",
+        "311",
+        "312",
+        "315",
+        "320",
+        "322",
+        "327",
+        "328",
+        "329",
+        "440",
+        "441",
+        "446",
+        "447",
+        "450",
+        "451",
+        "452",
+        "456",
+        "460",
+        "270",
+        "271",
+        "550",
+        "551",
+        "552",
+        "622",
+        "623",
+        "705",
+        "740",
+        "741",
+        "743",
+        "610",
+        "611",
+        "612",
+        "615",
+        "617",
+        "618",
+        "619",
+        "700",
+        "701",
+        "702",
+        "770",
+        "775",
+        "950",
+        "951",
+        "952",
+        "953",
+        "954",
+        "955",
+        "956",
+        "957",
+        "958",
+        "959",
+        "960",
+        "961",
+        "962",
+        "963",
+        "964",
+        "966",
+        "967",
+        "805",
+        "810",
+        "815",
+        "820",
+        "825",
+        "830",
+        "835",
+        "840",
+        "845",
+        "850",
+        "901",
+        "902",
+        "903",
+        "904",
+        "999"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "day_basis": {
+      "const": "utc_calendar_date",
+      "type": "string"
+     },
+     "document_types": {
+      "items": {
+       "enum": [
+        "380",
+        "381",
+        "383",
+        "384",
+        "325",
+        "326",
+        "385",
+        "386",
+        "387",
+        "388",
+        "389",
+        "390",
+        "391",
+        "392",
+        "393",
+        "394",
+        "395",
+        "396",
+        "397",
+        "220",
+        "221",
+        "222",
+        "230",
+        "231",
+        "232",
+        "235",
+        "236",
+        "310",
+        "311",
+        "312",
+        "315",
+        "320",
+        "322",
+        "327",
+        "328",
+        "329",
+        "440",
+        "441",
+        "446",
+        "447",
+        "450",
+        "451",
+        "452",
+        "456",
+        "460",
+        "270",
+        "271",
+        "550",
+        "551",
+        "552",
+        "622",
+        "623",
+        "705",
+        "740",
+        "741",
+        "743",
+        "610",
+        "611",
+        "612",
+        "615",
+        "617",
+        "618",
+        "619",
+        "700",
+        "701",
+        "702",
+        "770",
+        "775",
+        "950",
+        "951",
+        "952",
+        "953",
+        "954",
+        "955",
+        "956",
+        "957",
+        "958",
+        "959",
+        "960",
+        "961",
+        "962",
+        "963",
+        "964",
+        "966",
+        "967",
+        "805",
+        "810",
+        "815",
+        "820",
+        "825",
+        "830",
+        "835",
+        "840",
+        "845",
+        "850",
+        "901",
+        "902",
+        "903",
+        "904",
+        "999"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "excluded_invoice_statuses": {
+      "items": {
+       "enum": [
+        "draft",
+        "issued",
+        "paid",
+        "canceled"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "held_back_payment_statuses": {
+      "items": {
+       "enum": [
+        "unpaid",
+        "partial",
+        "paid",
+        "overpaid",
+        "unknown",
+        "marked_paid"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "outstanding_payment_statuses": {
+      "items": {
+       "enum": [
+        "unpaid",
+        "partial",
+        "paid",
+        "overpaid",
+        "unknown",
+        "marked_paid"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "untyped_documents_count": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "outstanding_payment_statuses",
+     "held_back_payment_statuses",
+     "excluded_invoice_statuses",
+     "document_types",
+     "untyped_documents_count",
+     "credit_note_document_types",
+     "amount",
+     "aged_by",
+     "day_basis",
+     "aging_bands"
+    ],
+    "type": "object"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "unattributed_count": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "unknown_payment_status_count": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   }
+  },
+  "required": [
+   "as_of",
+   "as_of_date",
+   "currencies",
+   "customer_ids",
+   "unattributed_count",
+   "unknown_payment_status_count",
+   "no_currency_count",
+   "no_balance_count",
+   "partial",
+   "rule",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Sum outstanding receivables"
+}

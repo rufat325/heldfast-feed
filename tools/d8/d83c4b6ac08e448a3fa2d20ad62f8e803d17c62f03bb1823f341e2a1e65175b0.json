@@ -1,0 +1,217 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Get worklist status"
+ },
+ "description": "Ask whether a repair gate is still OPEN, without drawing its card.\n\nCall this BEFORE the worklist read whenever you are checking rather than repairing \u2014 the first pass of a gate, and every re-check after the reader has cleared one. `open: false` means the gate is settled: carry on, and call nothing else.\n\n**Only call the worklist read when this says `open: true`.** Those reads draw a card on every call, empty included, so reaching for one to find out whether there is anything to do puts a picker with no rows and a dead button in front of the reader. The tool that draws each card comes back as `card_tool`.\n\nWORKLISTS, and the scope each one needs:\n- `accounts_needing_company` \u2014 the accounts with no company attached, or whose ownership is still unknown. No scope.\n- `uncategorized_window` \u2014 the transactions in a window carrying no category. Needs `from` (inclusive) and `to` (EXCLUSIVE), both `YYYY-MM-DD`.\n- `unposted_transactions` \u2014 a period's categorized rows still missing the ledger account they would post to. Needs `fiscal_year` and `fiscal_period`. This kind also carries `unhydrated_ledger_defaults`: signed rows whose counterparty already has a confirmed AP/AR default for the row's direction that Well is filling in the background. While that is above zero, re-read this probe and wait rather than assigning those rows by hand.\n- `invoice_sources_for_pick` \u2014 how many of the vendors the user picked on the missing-invoices card carry a connector that can bring an invoice in. No scope: the pick is on this session's own lane. Ask it BEFORE any `well_list_connectors({ from_selection: true })` call, and make that call only when this answers above zero \u2014 a pick with no invoice source behind it draws a picker with no rows and a dead button.\n- `counterparties_to_categorize` \u2014 the counterparties whose invoices the named months are still missing and that carry no industry category. Needs `periods`, the same `[{ calendar_year, calendar_month }]` list the card takes.\n- `gap_owners_to_invite` \u2014 how many owners of the period's missing-invoice gaps are still `pending` or `not_member`, the people the invite step of a close or missing-invoice flow would offer. Name the period as `periods` or as `fiscal_year` with `fiscal_period`, or name none to use the months selected in this conversation, exactly as `well_list_member_candidates({ from_assigned_gaps: true })` does. Ask it BEFORE that call, and make the call only when this answers above zero: an owner who already has access, such as a solo owner who assigned the gaps to themselves, is nobody to invite.\n\nA scope field the named worklist needs is REQUIRED. Omit one and this refuses: a gate reported clear over the wrong window cannot be told from one that is genuinely clear, and the figure behind it would be computed on that.\n\n**`success: false` means the gate is UNKNOWN, not clear.** `open` is ABSENT on that path, so a failed read can never be mistaken for a settled worklist. Retry once; on a second failure say the gate could not be read and stop, rather than computing a figure on evidence you never obtained.\n\nMost worklists report no COUNT. One row answers \"is it open\", and the count of what is left comes from the worklist read itself \u2014 which you are about to call anyway when the gate is open. Three kinds are the exception and carry `count`. `gap_owners_to_invite` reads the same owner set the invite card reads, so the number is the card's own invitable rows. `invoice_sources_for_pick` reads its whole set by id in one go, never paged, so the number comes free. `counterparties_to_categorize` reads the whole month population rather than one row, so the number is already in hand, and it is the same number the card reports as `uncategorized_count`.\n\nCOST: `counterparties_to_categorize` reads each named month's spend \u2014 the same reads its card makes, and a scope with work left in it pays for them TWICE, once here and once when the card draws. A clean scope pays once and skips the card entirely, which is what the check buys. Probe the months the user actually named, not a whole year \"to be safe\".\n\nWhen the token authorizes one workspace, call this directly \u2014 no other tool call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.\n\nThat holds for every gate but two. `invoice_sources_for_pick` and `counterparties_to_categorize` follow their cards instead: `well_list_connectors` and `well_list_counterparties` both answer from the token's primary workspace when you name none, so those gates answer from the same one. A probe that refused where its card answers would be describing a different workspace from the card it stands in for. The result names the workspace that answered.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "counterparty_ids": {
+    "description": "`invoice_sources_for_pick` and `counterparties_to_categorize` only: the counterparties to check, copied from the `company_id` of the missing-invoices rows. It REPLACES the pick a card recorded in this session, so the gate answers for the companies named here and no others. Omit to check the whole scope.",
+    "items": {
+     "format": "uuid",
+     "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+     "type": "string"
+    },
+    "maxItems": 200,
+    "minItems": 1,
+    "type": "array"
+   },
+   "fiscal_period": {
+    "description": "`unposted_transactions` and `gap_owners_to_invite` only: the fiscal period, 1-12 for a month; 13 is the adjustment period and resolves to no rows.",
+    "maximum": 13,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "fiscal_year": {
+    "description": "`unposted_transactions` and `gap_owners_to_invite` only: the period's fiscal year.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "from": {
+    "description": "`uncategorized_window` only: the window's first day, inclusive.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   },
+   "periods": {
+    "description": "`counterparties_to_categorize` and `gap_owners_to_invite` only: the calendar months to check, the same list the card takes. Every month must have ended.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "calendar_month": {
+       "description": "Calendar month, 1 = January \u2026 12 = December.",
+       "maximum": 12,
+       "minimum": 1,
+       "type": "integer"
+      },
+      "calendar_year": {
+       "description": "Calendar year, e.g. 2026.",
+       "maximum": 2100,
+       "minimum": 2000,
+       "type": "integer"
+      }
+     },
+     "required": [
+      "calendar_year",
+      "calendar_month"
+     ],
+     "type": "object"
+    },
+    "maxItems": 12,
+    "minItems": 1,
+    "type": "array"
+   },
+   "to": {
+    "description": "`uncategorized_window` only: the day AFTER the window's last, exclusive.",
+    "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+    "type": "string"
+   },
+   "worklist": {
+    "description": "Which repair gate to check. Each one names its own required scope in this tool's description.",
+    "enum": [
+     "accounts_needing_company",
+     "uncategorized_window",
+     "unposted_transactions",
+     "invoice_sources_for_pick",
+     "counterparties_to_categorize",
+     "gap_owners_to_invite"
+    ],
+    "type": "string"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several: this read reports one workspace's own figures and will not choose which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   },
+   "workspace_scope": {
+    "description": "Restrict this call to the family: the token's primary workspace plus the company workspaces under it that you are a member of. Unrelated authorized workspaces drop out of the read; row reads merge across the family, while a per-workspace figure still reports exactly one workspace.",
+    "enum": [
+     "family"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "worklist"
+  ],
+  "type": "object"
+ },
+ "name": "well_get_worklist_status",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "card_tool": {
+    "description": "The tool that draws this worklist's repair card. Call it only when `open` is true.",
+    "type": "string"
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "count": {
+    "description": "How many rows the gate still holds. Carried only by the kinds whose read counts the whole set (`invoice_sources_for_pick`, `counterparties_to_categorize` where it equals the card's `uncategorized_count`, and `gap_owners_to_invite`); absent on the kinds answered one row at a time, and absent whenever `success` is false.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "error": {
+    "type": "string"
+   },
+   "newly_connected": {
+    "description": "Tools that connected to this workspace since the last result and that no session was told about yet, oldest first. Present only when at least one tool is new. Start the reply with one line per entry, in the person's language: \"<name> is connected.\". Never fold several entries into one sentence. Each entry comes back once, on one result only: never repeat its line later.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "open": {
+    "description": "Whether the worklist still holds a row. Absent when `success` is false \u2014 an unknown gate, not a clear one.",
+    "type": "boolean"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "unhydrated_ledger_defaults": {
+    "description": "`unposted_transactions` only: signed rows in the period whose counterparty already carries a confirmed AP/AR default for the row's direction but whose ledger account Well has not filled yet. Well hydrates these in the background; while it is above zero, wait and re-read this probe rather than assigning those rows by hand. Absent for other kinds and whenever `success` is false.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "worklist": {
+    "description": "The gate that was checked, echoed back.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "worklist",
+   "card_tool",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Get worklist status"
+}

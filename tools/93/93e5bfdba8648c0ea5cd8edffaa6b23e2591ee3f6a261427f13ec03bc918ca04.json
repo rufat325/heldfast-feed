@@ -1,0 +1,223 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Execute a Rigor workflow"
+ },
+ "description": "Execute a structured workflow end-to-end. Call rigor_plan first (free) to preview the step sequence and cost estimate before committing credits. Classifies the task, selects the optimal tool sequence, and executes each step with the right LLM model. Returns a complete deliverable \u2014 solution designs, competitive analyses, governance documents, and more. Supports SSE streaming for real-time progress, webhook callback, or polling. For atomic work \u2014 classification, scoring, ranking, entity extraction, query parsing \u2014 set preferences.execution to 'direct' and declare preferences.output_contract to get validated JSON records from a single call, routed to the cheapest model that holds the schema.",
+ "discoverable": true,
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "context": {
+    "description": "Additional context for the workflow.",
+    "properties": {
+     "additional_context": {
+      "description": "Free-form context the workflow steps can reference.",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "delivery": {
+    "description": "Delivery method. Default: polling (MCP clients typically can't handle SSE).",
+    "properties": {
+     "method": {
+      "description": "sse | webhook | polling. Default for MCP: polling.",
+      "type": "string"
+     },
+     "webhook_url": {
+      "description": "Required if method is webhook. Must be HTTPS.",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "preferences": {
+    "description": "Optional workflow preferences.",
+    "properties": {
+     "execution": {
+      "description": "Set to 'direct' to compose the plan's content frameworks into a single LLM call and route cost-first, using a per-task-type model floor that moves when a cheaper model earns the work. Research steps, process steps (classification-verify, review protocol, synthesis) and the quality review each remain separate calls, so this is not a one-call-per-workflow guarantee: for atomic task types, which have a single content framework, the call count matches standard execution and the saving is the model. Supplying output_contract replaces the quality-review call with deterministic validation, which is one fewer call. No intermediate outputs. Available at every tier. Auto-selected for atomic task types when no execution preference is given. Falls back to standard execution when combined with require_approval or interactive mode, or when the plan exceeds the composition size limit. Attachments and prior_workflow_id chaining are NOT applied \u2014 use standard execution for those.",
+      "enum": [
+       "direct"
+      ],
+      "type": "string"
+     },
+     "max_budget_usd": {
+      "description": "Spending ceiling in USD. If the plan's quote is still above it after Rigor fits the plan (cheaper models, optional steps dropped), rigor_plan returns a max_budget_exceeded warning and rigor_execute refuses with 402 max_budget_exceeded before anything runs or is charged.",
+      "type": "number"
+     },
+     "output_contract": {
+      "description": "Only read when execution is \"direct\". Declares the JSON shape you want back, so the answer is generated against your schema and validated against it before return, instead of returned as prose you have to parse. A conforming run also skips the quality-review call, costing 1 LLM call rather than 2. The schema is closed: a record carrying an undeclared key is rejected exactly like one missing a required key.",
+      "properties": {
+       "count": {
+        "description": "Bounds on the number of entries. Only read when shape is \"array\".",
+        "properties": {
+         "max": {
+          "type": "number"
+         },
+         "min": {
+          "type": "number"
+         }
+        },
+        "type": "object"
+       },
+       "fields": {
+        "description": "The schema for 1 record.",
+        "items": {
+         "properties": {
+          "description": {
+           "description": "Passed to the model as the field's description.",
+           "type": "string"
+          },
+          "enum": {
+           "description": "Restricts a string field to a fixed set of values.",
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "maximum": {
+           "description": "Upper bound for a numeric field.",
+           "type": "number"
+          },
+          "minimum": {
+           "description": "Lower bound for a numeric field.",
+           "type": "number"
+          },
+          "name": {
+           "description": "The JSON key.",
+           "type": "string"
+          },
+          "required": {
+           "description": "Defaults to true. Set false for a field that may be absent.",
+           "type": "boolean"
+          },
+          "type": {
+           "description": "The value's type.",
+           "enum": [
+            "string",
+            "number",
+            "integer",
+            "boolean",
+            "array",
+            "object"
+           ],
+           "type": "string"
+          }
+         },
+         "required": [
+          "name",
+          "type"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "selection": {
+        "description": "Use when you want the model to over-generate candidates and Rigor to sort, threshold, and cap them before the count bounds are checked.",
+        "properties": {
+         "maxCount": {
+          "type": "number"
+         },
+         "minCount": {
+          "type": "number"
+         },
+         "minScore": {
+          "type": "number"
+         },
+         "scoreField": {
+          "type": "string"
+         }
+        },
+        "type": "object"
+       },
+       "shape": {
+        "description": "\"object\" for 1 record, \"array\" for 1 entry per input item.",
+        "enum": [
+         "object",
+         "array"
+        ],
+        "type": "string"
+       },
+       "task_type": {
+        "description": "Your own label for the work. Echoed into telemetry. Not read as a framework name and does not change routing.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "task_type",
+       "shape",
+       "fields"
+      ],
+      "type": "object"
+     },
+     "rigor_level": {
+      "description": "quick | standard (default) | thorough. Controls analysis depth and cost.",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "task_description": {
+    "description": "Natural language description of the task. Be specific \u2014 include what you want produced, constraints, and context. Example: 'Design a caching layer for our API gateway with Redis integration.'",
+    "type": "string"
+   },
+   "task_type": {
+    "description": "Optional hint to bypass automatic classification. Passing it also removes the slowest classification tiers from the critical path, so send it whenever you know the shape. Multi-step deliverable types: solution_design, requirements_analysis, code_implementation, code_review, bug_fix, root_cause_analysis, incident_response, deployment_execution, competitive_scan, financial_analysis, research_task, documentation, governance_change, compliance_audit, data_security_assessment, performance_optimization, user_story_definition, implementation_prompt_generation. Atomic single-call types, which auto-select direct execution: tag, score, rerank, compose, extract_entities, parse_query, quick_research, quick_classification, quick_extraction, quick_scoring. Call GET /api/rigor/task-types for the full vocabulary with each type's shape.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "task_description"
+  ],
+  "type": "object"
+ },
+ "name": "rigor_execute",
+ "outputSchema": {
+  "properties": {
+   "available_modes": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "delivery_mode": {
+    "type": "string"
+   },
+   "estimated_credits": {
+    "type": "number"
+   },
+   "execution": {
+    "description": "Present with value 'direct' when direct execution ran. Absent for standard multi-call execution.",
+    "type": "string"
+   },
+   "execution_fallback": {
+    "description": "True when you explicitly requested direct execution and it could not be honoured \u2014 the workflow ran as standard multi-call instead. Never set for an auto-selected attempt, since you did not ask.",
+    "type": "boolean"
+   },
+   "ok": {
+    "type": "boolean"
+   },
+   "poll_url": {
+    "type": "string"
+   },
+   "status": {
+    "type": "string"
+   },
+   "task_type": {
+    "type": "string"
+   },
+   "value_class": {
+    "type": "string"
+   },
+   "workflow_id": {
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "suite": "rigor"
+}

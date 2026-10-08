@@ -1,0 +1,74 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Read session state"
+ },
+ "description": "Universal poll endpoint: read the full current state of a session. Returns status, ranked stories, picked story_id, generated angles, picked angle_id, draft outputs (with trust fields), and an elicitation hint for whatever decision is next. Call this whenever you need to check progress; it's safe and cheap.\n\nEach story includes title, summary, headline_candidate (the post-shaped headline distinct from the cluster title), recency_score, relevance_score, freshness_label, and the publication_breakdown of contributing outlets (provenance). Each story also carries a recommended_story_id plus recommendation_reason before a pick. Each draft output's trust data lives under `outputs[i].trust.*` (verifier_blocked_reason, source_faithfulness_score, source_ungrounded_claims, source_diversity_passed, source_recency_passed, source_distinct_count, plus a flags[] array with explicit severity and source_grounding_map). The output top level does not mirror these; read them from `.trust`.\n\nResponse also includes `phase` (high-level: scanning / drafting / filed / spiked / awaiting), `phase_message` (a rotating gerund, e.g. 'Reading 337 signals'), and `phase_hint` (a one-line agent-facing tooltip with a typical timing band, e.g. 'Clustering, usually 8-15s, no action needed'). The full 17-status state machine is enumerated under `status_glossary` so you can introspect what every state means without discovering it experimentally. For a terminal run, read `outcome` (complete / expired / interrupted / cancelled / failed) rather than the raw `status`: a `failed` status is usually an expired walk-away (a slate was produced) or a refunded interruption, not a real error.\n\nRecommended loop: kick off work, then one niche_session_state(wait:30, wait_until:'checkpoint') per stage. It sleeps through the noisy transient statuses (clustering, ranking, generating_*) and wakes only at the next actionable stop (cpN_awaiting_* / complete / failed), or when an async render settles. So a full run is one wait per checkpoint, not several wakes per stage. (`wait_for` is an accepted alias for `wait_until`.) The `wait` plus `since_status` long-poll (wait_until:'change', wakes on any status change) is also supported; prefer 'checkpoint'. Each status' `actionable` flag in `status_glossary[]` indicates which states a 'checkpoint' wait wakes for. Avoid polling every few seconds without `wait`, which may be rate-limited (HTTP 429).\n\nniche_story_search is an accepted alias for this tool.\n\nResponse shape is sparse by default: after a story is picked, only the picked story is returned (not all candidates); same for angles. Set include_unpicked=true to get the full candidate set, useful when revising to a different story or angle. A `sparse_mode` field in the response reports how many items were dropped.",
+ "inputSchema": {
+  "properties": {
+   "include_status_glossary": {
+    "default": false,
+    "description": "When true, response includes `status_glossary[]`, the full 17-status state-machine descriptor list with phase, hint, and `actionable` (whether a wait_until='checkpoint' wakes for it) per status. Useful on the first call of an agent session so the agent caches the full map; leave false on subsequent polls. Default false.",
+    "type": "boolean"
+   },
+   "include_unpicked": {
+    "default": false,
+    "description": "When true, return the full candidate set even after picks have been made. Default false (sparse: only the picked story / angle come back). Meaningful only with view='full'; ignored in view='status' (the lean envelope never carries the candidate slate).",
+    "type": "boolean"
+   },
+   "session_id": {
+    "description": "session_id from niche_signal_scan.",
+    "type": "string"
+   },
+   "since_status": {
+    "description": "Used with `wait` (wait_until='change'). The status the caller last saw; the wait returns as soon as session.status differs. If unset, any state-change event wakes the wait. Note the pipeline has paired vocabulary: a transient `cpN_generating` (checkpoint about to produce) and a `generating_*` work status (e.g. cp2_generating maps to generating_angles). To skip both and wake only at the next actionable stop, use wait_until='checkpoint' rather than chasing since_status through the intermediates.",
+    "type": "string"
+   },
+   "view": {
+    "default": "full",
+    "description": "`status` (lean): a few-hundred-byte control envelope of status, phase, picked ids, `content_versions` (per-section change counters), `counts`, `output_ids`, cost, and next_step. Use this for the poll loop. `full` (default): the complete state with stories/angles/outputs. Fetch `full` once when a content_version moves, rather than re-shipping the full state every poll. Pairs with wait plus since_status.",
+    "enum": [
+     "status",
+     "full"
+    ],
+    "type": "string"
+   },
+   "wait": {
+    "default": 0,
+    "description": "Long-poll for up to N seconds (0-30) waiting for the session state to change. Returns immediately if the state already differs from `since_status` (or if the session is awaiting a checkpoint / complete / failed). Drops agent token burn from N polls to 1 wait. Default 0 (no wait, behave as before).",
+    "maximum": 30,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "wait_for": {
+    "description": "Alias for `wait_until` (same values and semantics). Use either; if both are set, `wait_until` wins. An unrecognized value is rejected (not silently ignored), and it only takes effect with `wait` > 0.",
+    "enum": [
+     "change",
+     "checkpoint",
+     "render",
+     "synthesis"
+    ],
+    "type": "string"
+   },
+   "wait_until": {
+    "default": "change",
+    "description": "What the `wait` long-poll resolves on. `change` (default): any status change vs since_status, a reached checkpoint, or a status-less change (synthesis fill, render completion, new output). `checkpoint`: only an actionable checkpoint (cpN_awaiting_* / complete / failed), skipping the noisy intermediate cpN_generating and generating_* transitions, so you get one wake per checkpoint. `render`: a reel/image render marker settles (done|failed). Use this after niche_render_reel / niche_render_image_card, since a render leaves status unchanged and won't wake a `change` wait on status alone. Works on a session already at complete (the normal case, since renders are post-completion add-ons): the wait holds on the render marker, not the session status. `synthesis`: a niche_intelligence_query's synthesis lands (narratives or a shortfall_note). Synthesis filling is not a status change, so block on this in one call instead of busy-polling.",
+    "enum": [
+     "change",
+     "checkpoint",
+     "render",
+     "synthesis"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "session_id"
+  ],
+  "type": "object"
+ },
+ "name": "niche_session_state",
+ "title": "Read session state"
+}

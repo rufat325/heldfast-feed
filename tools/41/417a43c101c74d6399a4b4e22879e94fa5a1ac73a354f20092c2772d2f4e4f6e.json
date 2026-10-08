@@ -1,0 +1,79 @@
+{
+ "_meta": {
+  "fastmcp": {
+   "tags": []
+  }
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "Track a SWIFT payment by UETR or reference number.\n\nBasic SWIFT payment tracking enriched by data from certain banks in\nthe correspondent chain. Returns the overall payment status and,\nwhen available, per-bank details showing which banks reported\ninformation about this payment.\n\nIMPORTANT \u2014 every trace needs four things:\n  amount, currency, date, and an identifier (uetr, or reference when\n  there is no UETR). amount, currency and date are required\n  parameters, on the UETR path too: there is no UETR-only lookup, so\n  never tell the user the UETR alone is enough to run one. Ask for\n  whatever is missing before calling, and never guess a value.\n\nIMPORTANT \u2014 UETR vs Reference:\n  The UETR (Unique End-to-End Transaction Reference) is a UUID\n  assigned to every SWIFT gpi payment. Tracking by UETR succeeds\n  ~80% of the time. Tracking by reference number alone succeeds\n  less than 1% of the time because most banks only index by UETR.\n\n  \u2192 Always provide the UETR if available.\n  \u2192 The reference number is Field 20 of the MT103 (or the\n    equivalent <InstrId>/<EndToEndId> in pacs.008). It is the\n    sender's transaction reference. Still valuable \u2014 provide it\n    alongside the UETR when you have both.\n\nWHEN THE USER HAS ONLY A REFERENCE AND NO UETR\n(\"how do I find / trace my payment?\", \"I have a reference number\nbut no UETR, where is it?\"):\n  This is exactly the scenario this tool can attempt \u2014 do NOT answer\n  from general knowledge. A reference-based trace cannot be run from\n  the reference alone; you MUST first collect three things from the user:\n    1. amount   \u2014 the exact amount as sent\n    2. currency \u2014 ISO 4217 (e.g. \"USD\")\n    3. date     \u2014 the send date (within the last 90 days)\n  Then call track_payment(reference=..., amount=..., currency=...,\n  date=...). State the expectation up front: reference-only tracing\n  succeeds less than 1% of the time.\n  In parallel, tell the user how to recover the UETR for a reliable\n  (~80%) trace: ask the SENDING bank for the MT103 confirmation \u2014 the\n  UETR is in Block 3, tag {121:} (a UUID v4), stored by every\n  gpi-enabled bank against the payment. Re-run with uetr= once they\n  have it. (swift_message_reference(\"MT103\") returns the full\n  field/UETR-recovery reference if you need to cite specifics.)\n\nIMPORTANT \u2014 Interpreting bank details:\n  Each entry in the 'details' array represents a bank that reported\n  data about this payment. The bank could be the SENDER, the\n  BENEFICIARY, or ANY INTERMEDIARY/CORRESPONDENT in the chain.\n  Do NOT assume a bank is an intermediary just because it appears\n  in the list \u2014 we only know the payment passed through that bank.\n  The bank's role is only known when it self-reports via push API\n  (indicated by a non-null 'role' field).\n\nRequires an API key with an active FI subscription.\nTo get started: call mcp_register \u2192 mcp_verify \u2192 subscribe to\nan FI plan at https://ohmyfin.ai/subscription.\n\nReturns a dict with:\n    status: Overall payment status \u2014 one of:\n        \"success\"     \u2014 delivered to the beneficiary when the gpi code\n                        ACCC backs it; otherwise one bank reported its\n                        own leg completed (status_explanation says which)\n        \"in progress\" \u2014 payment is being processed (may update)\n        \"returned\"    \u2014 payment was canceled/returned after processing (final)\n        \"rejected\"    \u2014 payment was refused (final)\n        \"on hold\"     \u2014 temporarily held, e.g. compliance review\n        \"future\"      \u2014 scheduled for a future value date\n        \"unknown\"     \u2014 no tracking data available yet\n    status_raw: ISO 20022 status code (ACCC/ACSP/RJCT/PDNG) or null\n    status_reason: ISO 20022 reason code at PAYMENT level, or null. null\n             is common and does NOT mean no reason code was reported \u2014\n             most feeds report the qualifier per bank instead, see below.\n    reason_codes_reported_by_banks: Present whenever any bank line reports\n             a \"STATUS/REASON\" qualifier (ACSP/G003, RJCT/MS03). Each entry\n             is decoded to its name and meaning. This is what answers \"is\n             anything pending / held / rejected / flagged on my payment\",\n             not status_reason.\n    lastupdate: Date of last status change (YYYY-MM-DD) or null\n    details: Array of bank-level tracking entries (see role_explanation\n             in each entry for how to interpret the bank's role)\n    not_found_guidance: Present only when nothing was found \u2014 concrete\n             next steps (UETR recovery, exact-match checks). Relay these\n             to the user instead of improvising; a miss on a\n             reference-only trace is the expected outcome and does NOT\n             mean the payment failed.\n\nExamples:\n  track_payment(uetr=\"eb6305c8-0710-4e41-84ad-f58db3083e82\",\n                amount=15000, currency=\"USD\", date=\"2026-03-10\")\n  track_payment(uetr=\"eb6305c8-0710-4e41-84ad-f58db3083e82\",\n                reference=\"FT2603100123\",\n                amount=15000, currency=\"USD\", date=\"2026-03-10\")\n  track_payment(reference=\"FT2603100123\",\n                amount=5000, currency=\"EUR\", date=\"12.03.2026\")",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "amount": {
+    "description": "Transaction amount as sent (e.g. 15000.00). Must match the original payment amount: even a small difference may stop tracking from finding the payment, so ask the user for the exact figure rather than estimating or rounding one.",
+    "type": "number"
+   },
+   "api_key": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Your Ohmyfin API key (prod-...). Optional here: it can be sent instead as a KEY header or an Authorization: Bearer header. What the tool requires of the key is in its description."
+   },
+   "currency": {
+    "description": "ISO 4217 code of the currency the payment was SENT in (e.g. \"USD\", \"EUR\", \"GBP\"). Ask if you do not know it; do not assume the sender's or the beneficiary's home currency.",
+    "type": "string"
+   },
+   "date": {
+    "description": "Transaction date. Preferred format YYYY-MM-DD (ISO 8601); DD.MM.YYYY and DD-MM-YYYY are also accepted, slash-separated dates are not. Must be within the last 90 days.",
+    "type": "string"
+   },
+   "reference": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Sender's bank reference number (MT103 field 20 / pacs.008 InstrId). Useful beside the UETR for cross-referencing, but alone it rarely produces results. Required only if uetr is not provided."
+   },
+   "uetr": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "UETR, UUID v4 (e.g. \"eb6305c8-0710-4e41-84ad-f58db3083e82\"). Strongly recommended: tracking without a UETR rarely returns results. It is the Unique End-to-End Transaction Reference every gpi payment carries."
+   }
+  },
+  "required": [
+   "amount",
+   "currency",
+   "date"
+  ],
+  "type": "object"
+ },
+ "name": "track_payment",
+ "outputSchema": {
+  "additionalProperties": true,
+  "type": "object"
+ },
+ "title": "Track a Cross-Border Payment"
+}

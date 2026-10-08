@@ -1,0 +1,107 @@
+{
+ "annotations": {
+  "consequentialHint": false,
+  "readOnlyHint": true,
+  "title": "List Device Events",
+  "untrustedContentHint": false
+ },
+ "description": "The MULTI-PRODUCER device TELEMETRY event stream (#1160/#1208) \u2014 every DECISION and STATE TRANSITION reported about the capture pipeline by the iOS app OR by the PAC/proxy server (public.device_events, 14-day retention, weekly-partitioned). iOS kinds \u2014 this list is what the app ACTUALLY emits, corrected in #1232 after SEVEN of the fifteen declared categories turned out to have zero emit sites and zero rows while this description told operators they existed. BASELINE (always on, no flag): capture.health (armed|inert + why + decrypt counters), cert.state, config.applied / config.fetch, tunnel.lifecycle, app.launch / app.phase, auth.signin / auth.switch / auth.signout / auth.token_refresh, device.pair, permission.vpn_consent / permission.notifications, control.channel / control.recovery, applink.open / applink.replay (query parameter NAMES only, fragment PRESENCE only \u2014 never a value), push.received (the RESOLVED action, so the deliberate broadcast+wake double delivery reads as stop-then-noop). AUDIT TIER (opt-in, TTL-expiring): mitm.decision, and it is FAULT-ONLY by design \u2014 only no_engine / leaf_mint_failed / ca_untrusted / upstream_failed ever produce a row, so a healthy device emits NONE however long audit mode is armed; the per-host answer for decrypted / out_of_scope / no_sni / pinned lives on entries.payload.mitmDecision under owner-scoped RLS, which is the right home for browsing-shaped data. Plus the server-authored telemetry.rate_clipped / audit_mode.ended breadcrumbs. The iOS app does NOT emit ui.*, net.* or process.* \u2014 those three were retired from its vocabulary in #1232 (see the category filter below: net and process are still live, from the PAC/proxy producer). PAC/proxy kinds (#1208): process.lifecycle, push.realtime, config.settings / config.port_allocation / config.port_release / config.pac_serve, capture.entry / capture.flush / capture.drop, net.forward / net.retry / net.dead_letter, tunnel.connect / tunnel.close, mitm.decision / mitm.handshake. Newest-first slim rows { id, at (server receive time), device_uuid, level (baseline|debug), category, action (the dotted kind = category.action), outcome, reason, host, ts (device clock), boot_id, seq, app_build, ios_version, process_role, user_id, session_id, auth_provider, install_id, tenant_id, request_id, producer }. The identity block (#1160) + request_id (#1390) are FIRST-CLASS columns, not buried in detail: process_role (app|tunnel|proxy-server), the user/session/provider/install/tenant the event was emitted under, and request_id \u2014 which JOINs public.audit_log.request_id so a device event and its server-side audit consequence link into ONE incident. `producer` is the PROCESS DISCRIMINATOR, hoisted out of `detail` into EVERY slim row (no with_detail needed) because the whole isolation contract rests on it: 'proxy-server' for PAC/proxy rows; NULL for legacy rows that carry no producer key at all, and 'ios' where the app stamps one \u2014 null is a real fact about the row and is NEVER normalised to 'ios'. iOS-authored rows carry ts/boot_id/seq/app_build/ios_version; PAC/proxy rows leave those five NULL by construction and carry transport / proxy_build / node_version / process_boot_id / producer_seq inside `detail`. `with_detail:true` adds the redacted `detail` jsonb (\u22644 KB, redacted at write \u2014 parameter NAMES only, never query values/bodies/keys). A gap in (boot_id, seq) = a dropped iOS event; a gap in detail.producer_seq = a dropped proxy event (both detectable at read time even when the drop counter itself was lost). Filters: category / action / outcome / reason / host / boot_id / process_role / user_id / session_id / install_id / request_id (exact), level, producer, failures:true (outcome \u2208 fail|deny|inert \u2014 the partial-index fast path), since / until (ISO, on `at`). DEFAULT WINDOW (#1390): with no `since` and no cursor the read is bounded to the last 48h (so an unfiltered fleet sweep can never time out); the response echoes `since_applied` + `default_window:true` \u2014 pass an explicit `since` to reach older telemetry, or a keyset cursor (which is exempt from the default). producer:'ios' means the PROJECTION-ELIGIBLE set \u2014 producer IS NULL **or** 'ios', byte-identical to the device_events_project_health trigger's WHEN clause \u2014 so it never hides pre-#1208 rows; any other slug is an exact match, so a FUTURE producer is filterable the day it starts emitting. Producer gating applies ONLY to the iOS-only device_health projection (see get_device_health): the broadcast trigger is unconditional, so device_events:<uuid> and device_events:all carry EVERY producer's row live, and so does this tool when `producer` is omitted. KEYSET pagination: when a page is full, feed next_cursor's before_at + before_id back verbatim (both together \u2014 a bulk insert lands a whole batch on ONE timestamp, so at-only paging would skip batches). ONE device by device_uuid/deviceName (owner-scoped: without devices:view you may read YOUR OWN device), or omit the selector for the FLEET-WIDE stream (devices:view operators only, re-verified server-side). limit default 50, cap 200.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "action": {
+    "description": "Exact action verb (the dotted kind is category.action, e.g. capture + health).",
+    "type": "string"
+   },
+   "before_at": {
+    "description": "Keyset cursor (from next_cursor) \u2014 pass with before_id.",
+    "type": "string"
+   },
+   "before_id": {
+    "description": "Keyset cursor (from next_cursor) \u2014 pass with before_at.",
+    "type": "number"
+   },
+   "boot_id": {
+    "description": "One process lifetime \u2014 pair with seq to walk a single boot's ordered stream.",
+    "type": "string"
+   },
+   "category": {
+    "description": "Exact category, ACROSS ALL PRODUCERS. iOS emits: capture|cert|config|tunnel|app|auth|device|permission|control|applink|mitm|push. PAC/proxy emits: process|net|capture|config|tunnel|mitm|push. Server-authored: telemetry|audit_mode. `ui` is emitted by NOTHING and is retained here only so a query for it returns an honest empty rather than an error (#1232).",
+    "type": "string"
+   },
+   "deviceName": {
+    "type": "string"
+   },
+   "device_uuid": {
+    "type": "string"
+   },
+   "failures": {
+    "description": "true \u2192 only outcome \u2208 fail|deny|inert (the indexed failure path).",
+    "type": "boolean"
+   },
+   "host": {
+    "description": "Exact bare host.",
+    "type": "string"
+   },
+   "install_id": {
+    "description": "Per-INSTALL uuid (#1160), destroyed on reinstall \u2014 'every move since this install' (device.uuid is stable across reinstall, boot_id is per tunnel boot).",
+    "type": "string"
+   },
+   "level": {
+    "description": "Telemetry tier.",
+    "enum": [
+     "baseline",
+     "debug"
+    ],
+    "type": "string"
+   },
+   "limit": {
+    "description": "Max events (default 50, cap 200).",
+    "type": "number"
+   },
+   "outcome": {
+    "description": "Exact outcome (armed|inert|ok|fail|deny|start|stop|decrypted|\u2026).",
+    "type": "string"
+   },
+   "process_role": {
+    "description": "Emitting PROCESS ROLE (#1160, first-class column): app | tunnel | proxy-server. app-vs-tunnel is an INDEXED predicate, no jsonb scan.",
+    "type": "string"
+   },
+   "producer": {
+    "description": "Emitting PROCESS (detail.producer). 'ios' = the projection-eligible set (producer IS NULL or 'ios'), so legacy pre-#1208 rows are included; 'proxy-server' = the PAC/proxy publisher; any other lowercase slug matches exactly (a future producer needs no redeploy). Omit for EVERY producer.",
+    "type": "string"
+   },
+   "reason": {
+    "description": "Exact machine reason slug (e.g. no_ca_key).",
+    "type": "string"
+   },
+   "request_id": {
+    "description": "Correlation/trace id (#1390): JOINs public.audit_log.request_id \u2014 pull every device event for one traced operation (a pair attempt, sign-in) and its server-side audit consequence together.",
+    "type": "string"
+   },
+   "session_id": {
+    "description": "The GoTrue session id the event was emitted under (#1160).",
+    "type": "string"
+   },
+   "since": {
+    "description": "ISO \u2014 only events with at >= this.",
+    "type": "string"
+   },
+   "until": {
+    "description": "ISO \u2014 only events with at <= this.",
+    "type": "string"
+   },
+   "user_id": {
+    "description": "auth.users.id (#1160) stamped AT EMIT \u2014 'everything this user did on the device', across an account switch (never re-attributed to the current owner).",
+    "type": "string"
+   },
+   "with_detail": {
+    "description": "true \u2192 include the redacted detail jsonb per row (\u22644 KB each).",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "name": "list_device_events",
+ "title": "List Device Events"
+}

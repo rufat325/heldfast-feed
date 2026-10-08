@@ -1,0 +1,58 @@
+{
+ "_meta": {
+  "fastmcp": {
+   "tags": []
+  }
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false,
+  "title": "Build a scenario's mesh and package"
+ },
+ "description": "Build a scenario's package (mesh + inputs) after showing what it will cost, and poll until built.\n\nOrder of operations, so the number is shown before anything is spent:\n\n1. GET the scenario detail. A record with no `boundary`/`computed_status`\n   keys is a non-member's read of a public project \u2192 refused: a build\n   needs the EDITOR role.\n2. Re-call checks on `latest_run` (a re-POST is NOT deduplicated after\n   `built`/`complete` \u2014 it would dispatch a duplicate build): no run \u2192\n   proceed; run `created`/`building` \u2192 resume polling, no POST; run\n   `built`/`queued`/`computing`/`processing`/`complete` with\n   `latest_run_is_valid` not false \u2192 return that state, no POST unless\n   rebuild=true; run `error`/`cancelled`, or `latest_run_is_valid` false\n   (the scenario was edited since the build) \u2192 proceed.\n3. Spend gates, each a refusal with `outcome: \"refused\"` and no POST: the\n   scenario has no boundary or its boundary row has no features (the\n   server would admit the build and fail it in make_package); the\n   estimate is None (resolution is 0/unset); the estimate is above\n   100,000 triangles and confirm is not true \u2014 the refusal states the\n   number; re-call with confirm=true to proceed. An estimate of 0 over a\n   boundary WITH features is buildable and is reported, not refused.\n4. POST /projects/<id>/scenarios/<pk>/build/. Every 4xx comes back\n   verbatim as a normal result with `http_status`: 422 MESH_TOO_LARGE\n   (`error_code`, `estimate`, `ceiling`, `detail` \u2014 the server's hard\n   ceiling; coarsen `resolution` or shrink the boundary; no run was\n   created), 409 COMPUTE_TARGET_UNAVAILABLE, 400/403/404. A 409 WITHOUT\n   an error_code is the dedup body ({status, run_id, detail}: a build is\n   already in flight) \u2014 the tool resumes polling that run.\n5. On 202 poll the detail's `computed_status` (created \u2192 building \u2192\n   built | error), bounded by timeout_seconds.\n\nReturns a COMPACT state, never the whole detail: `outcome` (built, error,\ncancelled, complete/queued/computing/processing for a run past the build,\ntimed_out, or refused), `computed_status`, `mesh_triangle_count_estimate`,\n`posted`, the POST's `build` body + `http_status` when one was made, and\nthe latest run's `run_id`, `run_status`, `error_message`, `user_message`,\n`mesh_triangle_count`. `timed_out` is normal (make_package re-downloads\nthe terrain from S3 every build; minutes): call again with the same\narguments \u2014 step 2 resumes polling the same run, it never POSTs twice \u2014\nor cancel_run(run_id) if the run is stuck in `created` with no worker.\n`error` is terminal: `error_message` says why (fix the inputs, then call\nagain \u2014 an errored latest run is rebuilt).\n\nUnits: `resolution` \u2014 on the SCENARIO and on every MeshRegion FEATURE \u2014 is\na LENGTH in metres; ANUGA maximum_triangle_area = resolution\u00b2/2 (FloatField\ndefault 100, not nullable; 0 makes the estimate None), and the estimate\nprices both the same way (TASK-3186). The smallest value becomes the raster\ncell size. A MeshRegion feature must carry `resolution_units = m` (features\ndrawn in the map are marked automatically); an unmarked one makes the build\nanswer 422 MESH_REGION_UNITS_UNMARKED, naming the conversion an operator runs.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "confirm": {
+    "default": false,
+    "description": "Required (true) when the estimate is above 100,000 triangles \u2014 the tool refuses first and tells you the number. Default false.",
+    "type": "boolean"
+   },
+   "poll_interval_seconds": {
+    "default": 5.0,
+    "description": "Seconds between polls (default 5)",
+    "type": "number"
+   },
+   "project_id": {
+    "description": "The project ID",
+    "type": "integer"
+   },
+   "rebuild": {
+    "default": false,
+    "description": "true to dispatch a NEW build of a scenario whose latest run is already built/complete and still valid (default false: the tool returns that state instead of duplicating the build).",
+    "type": "boolean"
+   },
+   "scenario_id": {
+    "description": "The scenario ID from create_scenario",
+    "type": "integer"
+   },
+   "timeout_seconds": {
+    "default": 240,
+    "description": "How long this call keeps polling before it returns `timed_out` (default 240, ceiling 280 \u2014 the prod /mcp/ proxy cuts a call at 300 s). 0 = one status read, no waiting.",
+    "type": "integer"
+   }
+  },
+  "required": [
+   "project_id",
+   "scenario_id"
+  ],
+  "type": "object"
+ },
+ "name": "build_scenario",
+ "outputSchema": {
+  "type": "object"
+ },
+ "title": "Build a scenario's mesh and package"
+}

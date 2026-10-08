@@ -1,0 +1,48 @@
+{
+ "_meta": {
+  "fastmcp": {
+   "tags": []
+  }
+ },
+ "annotations": {
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Look up correspondent banking / settlement instructions (SSI) for a bank.\n\nReturns the correspondent banks (nostro accounts) that a given bank\nuses to settle payments in a specific currency, including account\nnumbers (when available) and intermediary chains. Essential for\npayment routing and pre-validation.\n\nEach correspondent is annotated with a clearing_note indicating\nwhether it can clear the currency directly (located in a home\ncountry for that currency) or needs its own correspondent.\nIf the note suggests a further lookup, call ssi_lookup on the\ncorrespondent's SWIFT code to find the full clearing chain.\n\nIMPORTANT \u2014 known data gaps to respect:\n- Account numbers may be empty for some/all correspondents. The\n  response surfaces an `account_availability_note` in those cases.\n  Do NOT invent account numbers. Use swift_lookup() to find the\n  bank's own published correspondent banks page when accounts\n  are missing.\n- WHICH CORRESPONDENT: read `correspondent_selection`, not the array order.\n  It gives the COMPLETE set of BICs for each flow (customer MT103 vs\n  interbank MT202) and for whether the correspondent clears the currency\n  itself, each with a count. The correspondents are returned in STORAGE\n  order, which is not a ranking. Naming a subset (\"principally X and Y\",\n  \"route via X\") invents a preference this feed does not hold. Name every\n  BIC in the matching set, or give its count: which one is used is the\n  SENDING bank's choice among the ones it can already reach, not the\n  beneficiary bank's, and not ours to guess from bank size or reputation.\n  `is_preferred` is `null` on almost every row because the flag is\n  genuinely unrecorded (11 rows in the entire corpus carry it); where it IS\n  set, `correspondent_selection.bank_flagged_preference` names it and you\n  should lead with that.\n- `intermediaries` is `null` \u2014 not `[]` \u2014 when this correspondent's onward\n  chain is not recorded, which is 98% of rows. `null` means NOT ESTABLISHED,\n  never zero hops: do not read it as a direct chain and do not count it.\n  Whether a further hop is needed is answered by each correspondent's\n  `clearing_note`, which says either that it clears the currency itself or\n  that a further hop is expected and gives the ssi_lookup call that resolves\n  it. When the chain IS recorded the array is populated and\n  `intermediaries_note` names the hops in order.\n- Asset category per correspondent is COMMERCIAL (for customer\n  MT103 credit transfers) or FINANCIAL (for bank-own-account /\n  interbank MT202/pacs.009 settlements). Read `asset_categories`\n  (the full list) rather than the single `asset_category`, which\n  shows the commercial view only: one entry is one BIC+account and\n  the same account is often published under BOTH categories, so the\n  single field can never establish what an account may NOT be used\n  for. The `asset_category_note` summarises the split \u2014 match the\n  listed correspondents to the user's flow type (customer payment\n  vs treasury/interbank).\n- If `correspondents` is EMPTY, we have no SSI on file for that\n  bank/currency. The response carries a `no_ssi_note` (no SSI in any\n  currency) or `requested_currency_unavailable_note` (SSI on file for\n  other currencies only). This is a coverage gap, NOT a finding that the\n  bank has no correspondents. Do NOT name a correspondent for the missing\n  currency from training data \u2014 surface the `published_ssi_document` /\n  the bank's website and tell the user to confirm SSI with the bank.\n\nAlways inspect the response's top-level `next_steps` array \u2014 it\nchains the swift_lookup / country_banking_rules / bank_holidays\ncalls that complete a settlement-instruction answer.\n\nCOVERAGE IS KNOWABLE BEFORE YOU CALL, AND FOR FREE. swift_lookup returns a\n`settlement_instructions` block on every bank: `on_file: true` with a\ncurrency count means this lookup will answer, `false` means we hold none in\nany currency, null means it has not been established. Do not treat \"might be\na coverage gap\" as a reason to skip the call and describe the routing from\nmemory \u2014 ask swift_lookup, then read the answer here.\n\nRequires an API key with an active FI subscription.\nTo get started: call mcp_register \u2192 mcp_verify \u2192 subscribe to\nan FI plan at https://ohmyfin.ai/subscription.\n\nExamples:\n  ssi_lookup(\"DEUTDEFF\", \"USD\")                  # Deutsche Bank USD correspondents\n  ssi_lookup(\"HSBCHKHH\", \"EUR\")                  # HSBC HK EUR correspondents\n  ssi_lookup(\"DEUTDEFF\", \"USD\", api_key=\"prod-abc123...\")",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "api_key": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Your Ohmyfin API key (prod-...). Optional here: it can be sent instead as a KEY header or an Authorization: Bearer header. What the tool requires of the key is in its description."
+   },
+   "currency": {
+    "description": "ISO 4217 currency code (e.g. \"USD\", \"EUR\", \"GBP\").",
+    "type": "string"
+   },
+   "swift": {
+    "description": "BIC of the bank, 8 or 11 characters (e.g. \"DEUTDEFF\").",
+    "type": "string"
+   }
+  },
+  "required": [
+   "swift",
+   "currency"
+  ],
+  "type": "object"
+ },
+ "name": "ssi_lookup",
+ "outputSchema": {
+  "additionalProperties": true,
+  "type": "object"
+ },
+ "title": "Settlement Instructions (SSI) Lookup"
+}

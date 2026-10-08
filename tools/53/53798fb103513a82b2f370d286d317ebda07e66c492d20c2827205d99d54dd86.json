@@ -1,0 +1,1230 @@
+{
+ "_meta": {
+  "openai/outputTemplate": "ui://widget/optionsahoy-scenario.html",
+  "openai/toolInvocation/invoked": "Calculation complete",
+  "openai/toolInvocation/invoking": "Running the numbers"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Equity-Funding Plan Comparison"
+ },
+ "description": "Use this when someone asks which shares to sell and when to reach a cash goal by a deadline (down payment, tuition, a tax bill), or how to fund a goal from equity at a lower tax cost. Multi-year, multi-stack equity-funding optimizer. Given a target after-tax amount and a deadline (down payment, tax bill, expansion check), returns four named plans on the risk/wealth frontier: `lockInNow` (sell today, no further exposure to the stock price), `balanced` (bracket-aware spread across months), `holdForGrowth` (sell at the deadline, full exposure to the stock price), and `recommended` (the plan with the most projected wealth among those whose lognormal shortfall probability is at or below `riskToleranceShortfall`, default 10%). Also returns `frontier`, the full hybrid sweep between Lock-in-now and Balanced. Each plan carries its `plan` schedule plus `wealthAtTarget`, `totalTax`, and `shortfallProbability`; see `outputSchema` for the full shape. Use this when an equity holder needs cash by a deadline; for the upstream tax math on RSU/NSO/ISO events that PRODUCED the holdings, call `rsu_sell_vs_hold` / `nso_calculate` / `amt_iso_optimize` first. Out of scope: FICA, AMT, QSBS routing (use `qsbs_check`). Pass multi-ticker holdings via `stacks`; single-stack legacy callers can use top-level `lots` + `currentPrice`. Example: {targetAfterTax: 400000, targetDate: \"2028-06-01\", stacks: [{ticker: \"NVDA\", currentPrice: 140, expectedAnnualGrowth: 0.15, volatility: 0.45, lots: [{shares: 4000, costBasisPerShare: 60, acquisitionDate: \"2023-06-15\"}]}], ordinaryIncome: 280000, filingStatus: \"married_joint\", stateCode: \"CA\", cashInterestRate: 0.04, riskToleranceShortfall: 0.10}. Each stack needs `expectedAnnualGrowth`: a decimal, the string \"market\" (S&P 500 trailing average), or a covered `ticker` that resolves it from the trailing-returns table (a symbol like \"NVDA\" is enough; volatility still comes from the stack's `volatility` or `defaultVolatility`). Omitting growth (with no ticker that resolves it) assumes the S&P 500 trailing average, disclosed in `assumptions`/`assumptionNotice`, never a silent flat default; pass 0 to model flat prices deliberately. Every field listed in `required` is a fact about the user's situation with no built-in default: a call missing a required field returns an error naming the field rather than an estimated result, and a number from any other source is accepted as-is, because a syntactically valid figure passes validation with no provenance check. The math runs inside the tool with no randomness and no model inference. Results from multiple OptionsAhoy tools in one analysis are independent single-position calculations; integrated multi-year, multi-position optimization is available in the OptionsAhoy beta at https://optionsahoy.com/beta?src=mcp_multi.",
+ "inputSchema": {
+  "properties": {
+   "cashInterestRate": {
+    "description": "Annualized PRE-tax yield on cash held between each sale and the target date (money-market / short-term Treasury). The tool internally discounts this by the user's marginal federal + state ordinary rate before compounding, so the after-tax cash growth stays apples-to-apples with stock appreciation. Default 0 (interest ignored).",
+    "type": "number"
+   },
+   "currentPrice": {
+    "description": "Legacy single-stack current share price, USD. Pair with legacy `lots` (omit `stacks`). This value must come from the user.",
+    "minimum": 0,
+    "type": "number"
+   },
+   "defaultVolatility": {
+    "description": "Annualized \u03c3 assumed for any stack that omits its own `volatility`. Drives the per-sale \u03c3 \u00d7 \u221a\u0394t shortfall calculation. Override per-stack on the stack object when one position is materially more or less volatile than the rest. Default 0.30.",
+    "maximum": 5,
+    "minimum": 0,
+    "type": "number"
+   },
+   "expectedAnnualGrowth": {
+    "description": "Legacy single-stack annual growth decimal, or the string \"market\" for the S&P 500 trailing average. Used with `lots`: pass 0 for a deliberately flat-price plan; if omitted it falls back to the S&P 500 trailing average, disclosed in `assumptions` (never a silent flat default). Each future year's projected price is `currentPrice \u00d7 (1 + expectedAnnualGrowth)^\u0394years`. Negative values model decline.",
+    "type": [
+     "number",
+     "string"
+    ]
+   },
+   "filingStatus": {
+    "description": "Federal filing status. Drives LTCG brackets, NIIT threshold ($200K single / $250K MFJ MAGI), and state bracket lookups.",
+    "enum": [
+     "single",
+     "married_joint",
+     "head_household"
+    ],
+    "type": "string"
+   },
+   "lots": {
+    "description": "Legacy single-stack input (v1.5 / v1.6). Provide either `stacks` (v1.7+) or these legacy fields, not both. Lot is one cost-basis cohort (one RSU vest tranche, one ESPP purchase, one open-market buy).",
+    "items": {
+     "properties": {
+      "acquisitionDate": {
+       "description": "Date the lot was acquired. Drives the 1-year long-term-vs-short-term classification at each candidate sale date.",
+       "format": "date",
+       "type": "string"
+      },
+      "costBasisPerShare": {
+       "description": "Per-share cost basis, USD. For RSU vests this is the FMV at vest. For ESPP/open-market this is the purchase price.",
+       "minimum": 0,
+       "type": "number"
+      },
+      "shares": {
+       "description": "Whole shares in this lot.",
+       "minimum": 1,
+       "type": "integer"
+      },
+      "vestDate": {
+       "description": "Optional future vest date for an unvested RSU tranche. The lot is excluded from sales whose date precedes `vestDate`. For unvested RSUs, set `vestDate` to the future vest date and pass `costBasisPerShare: 0`; the calc overrides basis with the projected FMV at vest. Same semantics as `stacks[].lots[].vestDate`.",
+       "format": "date",
+       "type": "string"
+      }
+     },
+     "required": [
+      "shares",
+      "costBasisPerShare",
+      "acquisitionDate"
+     ],
+     "type": "object"
+    },
+    "minItems": 1,
+    "type": "array"
+   },
+   "ordinaryIncome": {
+    "description": "Annual ordinary income, USD. Used as the baseline for the federal LTCG bracket walk in each candidate year and for NIIT threshold tests. Must come from the user. This is taxable income after deductions, not gross wages: the engine applies no standard or itemized deduction to it.",
+    "minimum": 0,
+    "type": "number"
+   },
+   "riskToleranceShortfall": {
+    "description": "Max acceptable P(realized cash < target) under the lognormal price model, as a fraction (0.10 = 10%). The `recommended` plan is the plan with the most projected wealth whose shortfall is at or below this value. Tighter values push the recommendation toward Lock-in-now; looser values let `recommended` accept more price exposure for higher expected wealth. Default 0.10.",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "stacks": {
+    "description": "Holdings, multi-stack form. Provide either `stacks` (this) OR the legacy `lots`+`currentPrice` pair, not both. Each stack is one equity position (one ticker) with its own current price, growth, optional volatility, and lot list. Use when the user holds multiple tickers (e.g. current-employer RSUs + ETF + prior-employer holdings); the optimizer searches sales across all stacks jointly so the schedule can draw on lower-tax inventory first in each year.",
+    "items": {
+     "properties": {
+      "currentPrice": {
+       "description": "$/share today for this stack. Anchors the projected-price compounding for every future candidate sale date in this stack. Must come from the user.",
+       "minimum": 0,
+       "type": "number"
+      },
+      "expectedAnnualGrowth": {
+       "description": "Per-stack growth decimal (0.08 = 8%/yr), or the string \"market\" for the S&P 500 trailing average. Projected sale price = currentPrice \u00d7 (1 + expectedAnnualGrowth)^\u0394years. Negative values model decline; pass 0 for a deliberately flat-price plan. If omitted and `ticker` does not resolve it, falls back to the S&P 500 trailing average, disclosed in `assumptions` (never a silent flat default).",
+       "type": [
+        "number",
+        "string"
+       ]
+      },
+      "lots": {
+       "description": "Cost-basis cohorts within this stack (one per vest tranche / ESPP purchase / open-market buy).",
+       "items": {
+        "properties": {
+         "acquisitionDate": {
+          "description": "Acquisition date. Sales 366+ days later are long-term capital gains; earlier sales are short-term ordinary. Drives the LT-vs-ST classification at every candidate sale date.",
+          "format": "date",
+          "type": "string"
+         },
+         "costBasisPerShare": {
+          "description": "$/share basis. RSU = FMV at vest; ISO/NSO = exercise price; ESPP/open-market = purchase price.",
+          "minimum": 0,
+          "type": "number"
+         },
+         "shares": {
+          "description": "Whole shares in this lot.",
+          "minimum": 1,
+          "type": "integer"
+         },
+         "vestDate": {
+          "description": "Optional future vest date for an unvested RSU tranche. The lot is excluded from sales whose date precedes `vestDate`. For unvested RSUs, set `vestDate` to the future vest date and pass `costBasisPerShare: 0`; the calc overrides basis with the projected FMV at vest.",
+          "format": "date",
+          "type": "string"
+         }
+        },
+        "required": [
+         "shares",
+         "costBasisPerShare",
+         "acquisitionDate"
+        ],
+        "type": "object"
+       },
+       "minItems": 1,
+       "type": "array"
+      },
+      "ticker": {
+       "description": "Optional ticker label (e.g. \"NVDA\"). When set without `expectedAnnualGrowth`, growth is resolved from the cached trailing-CAGR snapshot when the symbol is covered there (see the covered-tickers resource for the current set). Echoed back in each SaleEntry for display.",
+       "type": "string"
+      },
+      "volatility": {
+       "description": "Per-stack annualized \u03c3 used in the shortfall calculation (\u03c3 \u00d7 \u221a\u0394t per sale). Overrides `defaultVolatility` for THIS stack only. Useful when one stack is a single tech name (\u03c3 \u2248 0.40-0.60) and another is an ETF (\u03c3 \u2248 0.15-0.20). Omit to inherit `defaultVolatility`.",
+       "maximum": 5,
+       "minimum": 0,
+       "type": "number"
+      }
+     },
+     "required": [
+      "currentPrice",
+      "lots"
+     ],
+     "type": "object"
+    },
+    "minItems": 1,
+    "type": "array"
+   },
+   "stateCode": {
+    "description": "Two-letter US state code (e.g. CA, NY, TX). Drives state ordinary or LTCG treatment depending on state (CA taxes LTCG as ordinary; WA has no LTCG tax under $250K; TX/FL/etc. have no state income tax).",
+    "enum": [
+     "AK",
+     "AL",
+     "AR",
+     "AZ",
+     "CA",
+     "CO",
+     "CT",
+     "DC",
+     "DE",
+     "FL",
+     "GA",
+     "HI",
+     "IA",
+     "ID",
+     "IL",
+     "IN",
+     "KS",
+     "KY",
+     "LA",
+     "MA",
+     "MD",
+     "ME",
+     "MI",
+     "MN",
+     "MO",
+     "MS",
+     "MT",
+     "NC",
+     "ND",
+     "NE",
+     "NH",
+     "NJ",
+     "NM",
+     "NV",
+     "NY",
+     "OH",
+     "OK",
+     "OR",
+     "PA",
+     "RI",
+     "SC",
+     "SD",
+     "TN",
+     "TX",
+     "UT",
+     "VA",
+     "VT",
+     "WA",
+     "WI",
+     "WV",
+     "WY"
+    ],
+    "type": "string"
+   },
+   "targetAfterTax": {
+    "description": "Net cash needed in the user's pocket after all applicable taxes (federal LTCG/ordinary + state + NIIT), USD. Example: a $1M house with 20% down minus existing savings might give a $200,000 target. Must come from the user.",
+    "minimum": 0,
+    "type": "number"
+   },
+   "targetDate": {
+    "description": "Date by which the user needs the net cash (YYYY-MM-DD). Bounds the planning horizon. Sales in non-target years happen on Dec 31; the target year's sale happens on this exact date. Must come from the user.",
+    "format": "date",
+    "type": "string"
+   }
+  },
+  "required": [
+   "targetAfterTax",
+   "targetDate",
+   "ordinaryIncome",
+   "filingStatus",
+   "stateCode"
+  ],
+  "type": "object"
+ },
+ "name": "equity_funding_plan",
+ "outputSchema": {
+  "description": "Equity-funding plan comparison: four named plans plus the full risk/wealth frontier. All dollar amounts are USD.",
+  "properties": {
+   "appliedRiskTolerance": {
+    "description": "Shortfall-probability tolerance actually applied (default 0.10 when not supplied).",
+    "type": "number"
+   },
+   "balanced": {
+    "description": "Bracket-aware spread across all candidate years: minimum tax.",
+    "properties": {
+     "lockInFraction": {
+      "description": "Fraction (0..1) of the target locked in by an immediate sale, for hybrid candidates. Omitted on pure named plans.",
+      "type": "number"
+     },
+     "plan": {
+      "description": "The full sale schedule for this plan. Nested year/sale entries follow the shapes described here and may carry additional fields.",
+      "properties": {
+       "comparison": {
+        "description": "This schedule vs the naive sell-everything-in-the-target-year alternative.",
+        "properties": {
+         "optimizedSavingsPct": {
+          "description": "Tax saved as a fraction of the naive plan tax.",
+          "type": "number"
+         },
+         "optimizedSavingsVsTargetYearSale": {
+          "description": "Tax saved in dollars by this schedule vs the naive plan.",
+          "type": "number"
+         },
+         "sellAllInTargetYearAfterTax": {
+          "description": "After-tax cash in dollars under that naive plan.",
+          "type": "number"
+         },
+         "sellAllInTargetYearTotalTax": {
+          "description": "Tax in dollars if all needed shares were sold in the target year.",
+          "type": "number"
+         }
+        },
+        "required": [
+         "sellAllInTargetYearTotalTax",
+         "sellAllInTargetYearAfterTax",
+         "optimizedSavingsVsTargetYearSale",
+         "optimizedSavingsPct"
+        ],
+        "type": "object"
+       },
+       "feasible": {
+        "description": "True when the schedule reaches the after-tax target by the target date.",
+        "type": "boolean"
+       },
+       "remainingNetByStack": {
+        "description": "Per-stack after-tax retained value in dollars, parallel to the input stacks array.",
+        "items": {
+         "type": "number"
+        },
+        "type": "array"
+       },
+       "remainingPositionAfterTax": {
+        "description": "After-tax value in dollars of liquidating all retained shares at the target date (the cash backstop if scheduled sales come in light).",
+        "type": "number"
+       },
+       "remainingPositionValue": {
+        "description": "Market value in dollars of retained shares at the projected target-date price.",
+        "type": "number"
+       },
+       "remainingShares": {
+        "description": "Shares retained after all scheduled sales.",
+        "type": "number"
+       },
+       "schedule": {
+        "description": "Per-year sale schedule. Each entry: year, saleDateISO, sales (array of per-lot entries: stackIndex, ticker, lotIndex, shares, grossProceeds, gainAmount, isLongTerm, federalTax, stateTax, niit, netCash), yearGrossProceeds, yearTotalTax, yearNetCash, runningCumulativeNet.",
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "shortfall": {
+        "description": "Present only when the target is not reachable from the available inventory.",
+        "properties": {
+         "gap": {
+          "description": "Dollars short of the target.",
+          "type": "number"
+         },
+         "maxAchievableAfterTax": {
+          "description": "Maximum after-tax cash in dollars achievable by the target date.",
+          "type": "number"
+         }
+        },
+        "required": [
+         "maxAchievableAfterTax",
+         "gap"
+        ],
+        "type": "object"
+       },
+       "targetAfterTax": {
+        "description": "Echo of the requested net cash target in dollars.",
+        "type": "number"
+       },
+       "targetDateISO": {
+        "description": "Echo of the target date as an ISO date string.",
+        "type": "string"
+       },
+       "totalAfterTaxAchieved": {
+        "description": "Net after-tax cash in dollars the schedule produces by the target date (including after-tax cash interest when cashInterestRate is set).",
+        "type": "number"
+       },
+       "totalGrossProceeds": {
+        "description": "Total gross sale proceeds in dollars.",
+        "type": "number"
+       },
+       "totalSharesSold": {
+        "description": "Total shares sold across the schedule.",
+        "type": "number"
+       },
+       "totalTaxes": {
+        "description": "Tax totals across all scheduled sales, in dollars.",
+        "properties": {
+         "federal": {
+          "description": "Federal capital gains / ordinary tax in dollars.",
+          "type": "number"
+         },
+         "niit": {
+          "description": "Net Investment Income Tax (3.8%) in dollars.",
+          "type": "number"
+         },
+         "state": {
+          "description": "State tax in dollars.",
+          "type": "number"
+         },
+         "total": {
+          "description": "Total tax in dollars.",
+          "type": "number"
+         }
+        },
+        "required": [
+         "federal",
+         "state",
+         "niit",
+         "total"
+        ],
+        "type": "object"
+       }
+      },
+      "required": [
+       "feasible",
+       "targetAfterTax",
+       "targetDateISO",
+       "totalAfterTaxAchieved",
+       "totalSharesSold",
+       "totalGrossProceeds",
+       "totalTaxes",
+       "schedule",
+       "comparison",
+       "remainingShares",
+       "remainingPositionValue",
+       "remainingPositionAfterTax",
+       "remainingNetByStack"
+      ],
+      "type": "object"
+     },
+     "planKey": {
+      "description": "Plan identifier. \"candidate\" entries appear only inside frontier.",
+      "enum": [
+       "recommended",
+       "lock_in_now",
+       "balanced",
+       "hold_for_growth",
+       "candidate"
+      ],
+      "type": "string"
+     },
+     "planLabel": {
+      "description": "Human-readable plan name.",
+      "type": "string"
+     },
+     "shortfallProbability": {
+      "description": "Lognormal probability (0..1) that realized cash lands below the target. 0 means a deterministic hit (sell everything today).",
+      "type": "number"
+     },
+     "totalTax": {
+      "description": "Total tax paid across the plan in dollars.",
+      "type": "number"
+     },
+     "wealthAtTarget": {
+      "description": "Total wealth in dollars at the target date: net cash plus retained shares at the projected price. The metric the recommendation maximizes.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "planKey",
+     "planLabel",
+     "plan",
+     "wealthAtTarget",
+     "totalTax",
+     "shortfallProbability"
+    ],
+    "type": "object"
+   },
+   "frontier": {
+    "description": "All candidate plans from the hybrid lock-in sweep plus the named plans, sorted by shortfall probability.",
+    "items": {
+     "description": "One sale plan on the risk/wealth frontier.",
+     "properties": {
+      "lockInFraction": {
+       "description": "Fraction (0..1) of the target locked in by an immediate sale, for hybrid candidates. Omitted on pure named plans.",
+       "type": "number"
+      },
+      "plan": {
+       "description": "The full sale schedule for this plan. Nested year/sale entries follow the shapes described here and may carry additional fields.",
+       "properties": {
+        "comparison": {
+         "description": "This schedule vs the naive sell-everything-in-the-target-year alternative.",
+         "properties": {
+          "optimizedSavingsPct": {
+           "description": "Tax saved as a fraction of the naive plan tax.",
+           "type": "number"
+          },
+          "optimizedSavingsVsTargetYearSale": {
+           "description": "Tax saved in dollars by this schedule vs the naive plan.",
+           "type": "number"
+          },
+          "sellAllInTargetYearAfterTax": {
+           "description": "After-tax cash in dollars under that naive plan.",
+           "type": "number"
+          },
+          "sellAllInTargetYearTotalTax": {
+           "description": "Tax in dollars if all needed shares were sold in the target year.",
+           "type": "number"
+          }
+         },
+         "required": [
+          "sellAllInTargetYearTotalTax",
+          "sellAllInTargetYearAfterTax",
+          "optimizedSavingsVsTargetYearSale",
+          "optimizedSavingsPct"
+         ],
+         "type": "object"
+        },
+        "feasible": {
+         "description": "True when the schedule reaches the after-tax target by the target date.",
+         "type": "boolean"
+        },
+        "remainingNetByStack": {
+         "description": "Per-stack after-tax retained value in dollars, parallel to the input stacks array.",
+         "items": {
+          "type": "number"
+         },
+         "type": "array"
+        },
+        "remainingPositionAfterTax": {
+         "description": "After-tax value in dollars of liquidating all retained shares at the target date (the cash backstop if scheduled sales come in light).",
+         "type": "number"
+        },
+        "remainingPositionValue": {
+         "description": "Market value in dollars of retained shares at the projected target-date price.",
+         "type": "number"
+        },
+        "remainingShares": {
+         "description": "Shares retained after all scheduled sales.",
+         "type": "number"
+        },
+        "schedule": {
+         "description": "Per-year sale schedule. Each entry: year, saleDateISO, sales (array of per-lot entries: stackIndex, ticker, lotIndex, shares, grossProceeds, gainAmount, isLongTerm, federalTax, stateTax, niit, netCash), yearGrossProceeds, yearTotalTax, yearNetCash, runningCumulativeNet.",
+         "items": {
+          "additionalProperties": true,
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "shortfall": {
+         "description": "Present only when the target is not reachable from the available inventory.",
+         "properties": {
+          "gap": {
+           "description": "Dollars short of the target.",
+           "type": "number"
+          },
+          "maxAchievableAfterTax": {
+           "description": "Maximum after-tax cash in dollars achievable by the target date.",
+           "type": "number"
+          }
+         },
+         "required": [
+          "maxAchievableAfterTax",
+          "gap"
+         ],
+         "type": "object"
+        },
+        "targetAfterTax": {
+         "description": "Echo of the requested net cash target in dollars.",
+         "type": "number"
+        },
+        "targetDateISO": {
+         "description": "Echo of the target date as an ISO date string.",
+         "type": "string"
+        },
+        "totalAfterTaxAchieved": {
+         "description": "Net after-tax cash in dollars the schedule produces by the target date (including after-tax cash interest when cashInterestRate is set).",
+         "type": "number"
+        },
+        "totalGrossProceeds": {
+         "description": "Total gross sale proceeds in dollars.",
+         "type": "number"
+        },
+        "totalSharesSold": {
+         "description": "Total shares sold across the schedule.",
+         "type": "number"
+        },
+        "totalTaxes": {
+         "description": "Tax totals across all scheduled sales, in dollars.",
+         "properties": {
+          "federal": {
+           "description": "Federal capital gains / ordinary tax in dollars.",
+           "type": "number"
+          },
+          "niit": {
+           "description": "Net Investment Income Tax (3.8%) in dollars.",
+           "type": "number"
+          },
+          "state": {
+           "description": "State tax in dollars.",
+           "type": "number"
+          },
+          "total": {
+           "description": "Total tax in dollars.",
+           "type": "number"
+          }
+         },
+         "required": [
+          "federal",
+          "state",
+          "niit",
+          "total"
+         ],
+         "type": "object"
+        }
+       },
+       "required": [
+        "feasible",
+        "targetAfterTax",
+        "targetDateISO",
+        "totalAfterTaxAchieved",
+        "totalSharesSold",
+        "totalGrossProceeds",
+        "totalTaxes",
+        "schedule",
+        "comparison",
+        "remainingShares",
+        "remainingPositionValue",
+        "remainingPositionAfterTax",
+        "remainingNetByStack"
+       ],
+       "type": "object"
+      },
+      "planKey": {
+       "description": "Plan identifier. \"candidate\" entries appear only inside frontier.",
+       "enum": [
+        "recommended",
+        "lock_in_now",
+        "balanced",
+        "hold_for_growth",
+        "candidate"
+       ],
+       "type": "string"
+      },
+      "planLabel": {
+       "description": "Human-readable plan name.",
+       "type": "string"
+      },
+      "shortfallProbability": {
+       "description": "Lognormal probability (0..1) that realized cash lands below the target. 0 means a deterministic hit (sell everything today).",
+       "type": "number"
+      },
+      "totalTax": {
+       "description": "Total tax paid across the plan in dollars.",
+       "type": "number"
+      },
+      "wealthAtTarget": {
+       "description": "Total wealth in dollars at the target date: net cash plus retained shares at the projected price. The metric the recommendation maximizes.",
+       "type": "number"
+      }
+     },
+     "required": [
+      "planKey",
+      "planLabel",
+      "plan",
+      "wealthAtTarget",
+      "totalTax",
+      "shortfallProbability"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "holdForGrowth": {
+    "description": "Sell only in the target year: maximum expected wealth, maximum price risk.",
+    "properties": {
+     "lockInFraction": {
+      "description": "Fraction (0..1) of the target locked in by an immediate sale, for hybrid candidates. Omitted on pure named plans.",
+      "type": "number"
+     },
+     "plan": {
+      "description": "The full sale schedule for this plan. Nested year/sale entries follow the shapes described here and may carry additional fields.",
+      "properties": {
+       "comparison": {
+        "description": "This schedule vs the naive sell-everything-in-the-target-year alternative.",
+        "properties": {
+         "optimizedSavingsPct": {
+          "description": "Tax saved as a fraction of the naive plan tax.",
+          "type": "number"
+         },
+         "optimizedSavingsVsTargetYearSale": {
+          "description": "Tax saved in dollars by this schedule vs the naive plan.",
+          "type": "number"
+         },
+         "sellAllInTargetYearAfterTax": {
+          "description": "After-tax cash in dollars under that naive plan.",
+          "type": "number"
+         },
+         "sellAllInTargetYearTotalTax": {
+          "description": "Tax in dollars if all needed shares were sold in the target year.",
+          "type": "number"
+         }
+        },
+        "required": [
+         "sellAllInTargetYearTotalTax",
+         "sellAllInTargetYearAfterTax",
+         "optimizedSavingsVsTargetYearSale",
+         "optimizedSavingsPct"
+        ],
+        "type": "object"
+       },
+       "feasible": {
+        "description": "True when the schedule reaches the after-tax target by the target date.",
+        "type": "boolean"
+       },
+       "remainingNetByStack": {
+        "description": "Per-stack after-tax retained value in dollars, parallel to the input stacks array.",
+        "items": {
+         "type": "number"
+        },
+        "type": "array"
+       },
+       "remainingPositionAfterTax": {
+        "description": "After-tax value in dollars of liquidating all retained shares at the target date (the cash backstop if scheduled sales come in light).",
+        "type": "number"
+       },
+       "remainingPositionValue": {
+        "description": "Market value in dollars of retained shares at the projected target-date price.",
+        "type": "number"
+       },
+       "remainingShares": {
+        "description": "Shares retained after all scheduled sales.",
+        "type": "number"
+       },
+       "schedule": {
+        "description": "Per-year sale schedule. Each entry: year, saleDateISO, sales (array of per-lot entries: stackIndex, ticker, lotIndex, shares, grossProceeds, gainAmount, isLongTerm, federalTax, stateTax, niit, netCash), yearGrossProceeds, yearTotalTax, yearNetCash, runningCumulativeNet.",
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "shortfall": {
+        "description": "Present only when the target is not reachable from the available inventory.",
+        "properties": {
+         "gap": {
+          "description": "Dollars short of the target.",
+          "type": "number"
+         },
+         "maxAchievableAfterTax": {
+          "description": "Maximum after-tax cash in dollars achievable by the target date.",
+          "type": "number"
+         }
+        },
+        "required": [
+         "maxAchievableAfterTax",
+         "gap"
+        ],
+        "type": "object"
+       },
+       "targetAfterTax": {
+        "description": "Echo of the requested net cash target in dollars.",
+        "type": "number"
+       },
+       "targetDateISO": {
+        "description": "Echo of the target date as an ISO date string.",
+        "type": "string"
+       },
+       "totalAfterTaxAchieved": {
+        "description": "Net after-tax cash in dollars the schedule produces by the target date (including after-tax cash interest when cashInterestRate is set).",
+        "type": "number"
+       },
+       "totalGrossProceeds": {
+        "description": "Total gross sale proceeds in dollars.",
+        "type": "number"
+       },
+       "totalSharesSold": {
+        "description": "Total shares sold across the schedule.",
+        "type": "number"
+       },
+       "totalTaxes": {
+        "description": "Tax totals across all scheduled sales, in dollars.",
+        "properties": {
+         "federal": {
+          "description": "Federal capital gains / ordinary tax in dollars.",
+          "type": "number"
+         },
+         "niit": {
+          "description": "Net Investment Income Tax (3.8%) in dollars.",
+          "type": "number"
+         },
+         "state": {
+          "description": "State tax in dollars.",
+          "type": "number"
+         },
+         "total": {
+          "description": "Total tax in dollars.",
+          "type": "number"
+         }
+        },
+        "required": [
+         "federal",
+         "state",
+         "niit",
+         "total"
+        ],
+        "type": "object"
+       }
+      },
+      "required": [
+       "feasible",
+       "targetAfterTax",
+       "targetDateISO",
+       "totalAfterTaxAchieved",
+       "totalSharesSold",
+       "totalGrossProceeds",
+       "totalTaxes",
+       "schedule",
+       "comparison",
+       "remainingShares",
+       "remainingPositionValue",
+       "remainingPositionAfterTax",
+       "remainingNetByStack"
+      ],
+      "type": "object"
+     },
+     "planKey": {
+      "description": "Plan identifier. \"candidate\" entries appear only inside frontier.",
+      "enum": [
+       "recommended",
+       "lock_in_now",
+       "balanced",
+       "hold_for_growth",
+       "candidate"
+      ],
+      "type": "string"
+     },
+     "planLabel": {
+      "description": "Human-readable plan name.",
+      "type": "string"
+     },
+     "shortfallProbability": {
+      "description": "Lognormal probability (0..1) that realized cash lands below the target. 0 means a deterministic hit (sell everything today).",
+      "type": "number"
+     },
+     "totalTax": {
+      "description": "Total tax paid across the plan in dollars.",
+      "type": "number"
+     },
+     "wealthAtTarget": {
+      "description": "Total wealth in dollars at the target date: net cash plus retained shares at the projected price. The metric the recommendation maximizes.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "planKey",
+     "planLabel",
+     "plan",
+     "wealthAtTarget",
+     "totalTax",
+     "shortfallProbability"
+    ],
+    "type": "object"
+   },
+   "lockInNow": {
+    "description": "Sell everything needed in the current calendar year: minimum price risk, usually highest tax.",
+    "properties": {
+     "lockInFraction": {
+      "description": "Fraction (0..1) of the target locked in by an immediate sale, for hybrid candidates. Omitted on pure named plans.",
+      "type": "number"
+     },
+     "plan": {
+      "description": "The full sale schedule for this plan. Nested year/sale entries follow the shapes described here and may carry additional fields.",
+      "properties": {
+       "comparison": {
+        "description": "This schedule vs the naive sell-everything-in-the-target-year alternative.",
+        "properties": {
+         "optimizedSavingsPct": {
+          "description": "Tax saved as a fraction of the naive plan tax.",
+          "type": "number"
+         },
+         "optimizedSavingsVsTargetYearSale": {
+          "description": "Tax saved in dollars by this schedule vs the naive plan.",
+          "type": "number"
+         },
+         "sellAllInTargetYearAfterTax": {
+          "description": "After-tax cash in dollars under that naive plan.",
+          "type": "number"
+         },
+         "sellAllInTargetYearTotalTax": {
+          "description": "Tax in dollars if all needed shares were sold in the target year.",
+          "type": "number"
+         }
+        },
+        "required": [
+         "sellAllInTargetYearTotalTax",
+         "sellAllInTargetYearAfterTax",
+         "optimizedSavingsVsTargetYearSale",
+         "optimizedSavingsPct"
+        ],
+        "type": "object"
+       },
+       "feasible": {
+        "description": "True when the schedule reaches the after-tax target by the target date.",
+        "type": "boolean"
+       },
+       "remainingNetByStack": {
+        "description": "Per-stack after-tax retained value in dollars, parallel to the input stacks array.",
+        "items": {
+         "type": "number"
+        },
+        "type": "array"
+       },
+       "remainingPositionAfterTax": {
+        "description": "After-tax value in dollars of liquidating all retained shares at the target date (the cash backstop if scheduled sales come in light).",
+        "type": "number"
+       },
+       "remainingPositionValue": {
+        "description": "Market value in dollars of retained shares at the projected target-date price.",
+        "type": "number"
+       },
+       "remainingShares": {
+        "description": "Shares retained after all scheduled sales.",
+        "type": "number"
+       },
+       "schedule": {
+        "description": "Per-year sale schedule. Each entry: year, saleDateISO, sales (array of per-lot entries: stackIndex, ticker, lotIndex, shares, grossProceeds, gainAmount, isLongTerm, federalTax, stateTax, niit, netCash), yearGrossProceeds, yearTotalTax, yearNetCash, runningCumulativeNet.",
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "shortfall": {
+        "description": "Present only when the target is not reachable from the available inventory.",
+        "properties": {
+         "gap": {
+          "description": "Dollars short of the target.",
+          "type": "number"
+         },
+         "maxAchievableAfterTax": {
+          "description": "Maximum after-tax cash in dollars achievable by the target date.",
+          "type": "number"
+         }
+        },
+        "required": [
+         "maxAchievableAfterTax",
+         "gap"
+        ],
+        "type": "object"
+       },
+       "targetAfterTax": {
+        "description": "Echo of the requested net cash target in dollars.",
+        "type": "number"
+       },
+       "targetDateISO": {
+        "description": "Echo of the target date as an ISO date string.",
+        "type": "string"
+       },
+       "totalAfterTaxAchieved": {
+        "description": "Net after-tax cash in dollars the schedule produces by the target date (including after-tax cash interest when cashInterestRate is set).",
+        "type": "number"
+       },
+       "totalGrossProceeds": {
+        "description": "Total gross sale proceeds in dollars.",
+        "type": "number"
+       },
+       "totalSharesSold": {
+        "description": "Total shares sold across the schedule.",
+        "type": "number"
+       },
+       "totalTaxes": {
+        "description": "Tax totals across all scheduled sales, in dollars.",
+        "properties": {
+         "federal": {
+          "description": "Federal capital gains / ordinary tax in dollars.",
+          "type": "number"
+         },
+         "niit": {
+          "description": "Net Investment Income Tax (3.8%) in dollars.",
+          "type": "number"
+         },
+         "state": {
+          "description": "State tax in dollars.",
+          "type": "number"
+         },
+         "total": {
+          "description": "Total tax in dollars.",
+          "type": "number"
+         }
+        },
+        "required": [
+         "federal",
+         "state",
+         "niit",
+         "total"
+        ],
+        "type": "object"
+       }
+      },
+      "required": [
+       "feasible",
+       "targetAfterTax",
+       "targetDateISO",
+       "totalAfterTaxAchieved",
+       "totalSharesSold",
+       "totalGrossProceeds",
+       "totalTaxes",
+       "schedule",
+       "comparison",
+       "remainingShares",
+       "remainingPositionValue",
+       "remainingPositionAfterTax",
+       "remainingNetByStack"
+      ],
+      "type": "object"
+     },
+     "planKey": {
+      "description": "Plan identifier. \"candidate\" entries appear only inside frontier.",
+      "enum": [
+       "recommended",
+       "lock_in_now",
+       "balanced",
+       "hold_for_growth",
+       "candidate"
+      ],
+      "type": "string"
+     },
+     "planLabel": {
+      "description": "Human-readable plan name.",
+      "type": "string"
+     },
+     "shortfallProbability": {
+      "description": "Lognormal probability (0..1) that realized cash lands below the target. 0 means a deterministic hit (sell everything today).",
+      "type": "number"
+     },
+     "totalTax": {
+      "description": "Total tax paid across the plan in dollars.",
+      "type": "number"
+     },
+     "wealthAtTarget": {
+      "description": "Total wealth in dollars at the target date: net cash plus retained shares at the projected price. The metric the recommendation maximizes.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "planKey",
+     "planLabel",
+     "plan",
+     "wealthAtTarget",
+     "totalTax",
+     "shortfallProbability"
+    ],
+    "type": "object"
+   },
+   "recommended": {
+    "description": "The wealth-maximal plan whose shortfall probability is at or below the applied risk tolerance. This is the plan the risk tolerance selects out of the frontier.",
+    "properties": {
+     "lockInFraction": {
+      "description": "Fraction (0..1) of the target locked in by an immediate sale, for hybrid candidates. Omitted on pure named plans.",
+      "type": "number"
+     },
+     "plan": {
+      "description": "The full sale schedule for this plan. Nested year/sale entries follow the shapes described here and may carry additional fields.",
+      "properties": {
+       "comparison": {
+        "description": "This schedule vs the naive sell-everything-in-the-target-year alternative.",
+        "properties": {
+         "optimizedSavingsPct": {
+          "description": "Tax saved as a fraction of the naive plan tax.",
+          "type": "number"
+         },
+         "optimizedSavingsVsTargetYearSale": {
+          "description": "Tax saved in dollars by this schedule vs the naive plan.",
+          "type": "number"
+         },
+         "sellAllInTargetYearAfterTax": {
+          "description": "After-tax cash in dollars under that naive plan.",
+          "type": "number"
+         },
+         "sellAllInTargetYearTotalTax": {
+          "description": "Tax in dollars if all needed shares were sold in the target year.",
+          "type": "number"
+         }
+        },
+        "required": [
+         "sellAllInTargetYearTotalTax",
+         "sellAllInTargetYearAfterTax",
+         "optimizedSavingsVsTargetYearSale",
+         "optimizedSavingsPct"
+        ],
+        "type": "object"
+       },
+       "feasible": {
+        "description": "True when the schedule reaches the after-tax target by the target date.",
+        "type": "boolean"
+       },
+       "remainingNetByStack": {
+        "description": "Per-stack after-tax retained value in dollars, parallel to the input stacks array.",
+        "items": {
+         "type": "number"
+        },
+        "type": "array"
+       },
+       "remainingPositionAfterTax": {
+        "description": "After-tax value in dollars of liquidating all retained shares at the target date (the cash backstop if scheduled sales come in light).",
+        "type": "number"
+       },
+       "remainingPositionValue": {
+        "description": "Market value in dollars of retained shares at the projected target-date price.",
+        "type": "number"
+       },
+       "remainingShares": {
+        "description": "Shares retained after all scheduled sales.",
+        "type": "number"
+       },
+       "schedule": {
+        "description": "Per-year sale schedule. Each entry: year, saleDateISO, sales (array of per-lot entries: stackIndex, ticker, lotIndex, shares, grossProceeds, gainAmount, isLongTerm, federalTax, stateTax, niit, netCash), yearGrossProceeds, yearTotalTax, yearNetCash, runningCumulativeNet.",
+        "items": {
+         "additionalProperties": true,
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "shortfall": {
+        "description": "Present only when the target is not reachable from the available inventory.",
+        "properties": {
+         "gap": {
+          "description": "Dollars short of the target.",
+          "type": "number"
+         },
+         "maxAchievableAfterTax": {
+          "description": "Maximum after-tax cash in dollars achievable by the target date.",
+          "type": "number"
+         }
+        },
+        "required": [
+         "maxAchievableAfterTax",
+         "gap"
+        ],
+        "type": "object"
+       },
+       "targetAfterTax": {
+        "description": "Echo of the requested net cash target in dollars.",
+        "type": "number"
+       },
+       "targetDateISO": {
+        "description": "Echo of the target date as an ISO date string.",
+        "type": "string"
+       },
+       "totalAfterTaxAchieved": {
+        "description": "Net after-tax cash in dollars the schedule produces by the target date (including after-tax cash interest when cashInterestRate is set).",
+        "type": "number"
+       },
+       "totalGrossProceeds": {
+        "description": "Total gross sale proceeds in dollars.",
+        "type": "number"
+       },
+       "totalSharesSold": {
+        "description": "Total shares sold across the schedule.",
+        "type": "number"
+       },
+       "totalTaxes": {
+        "description": "Tax totals across all scheduled sales, in dollars.",
+        "properties": {
+         "federal": {
+          "description": "Federal capital gains / ordinary tax in dollars.",
+          "type": "number"
+         },
+         "niit": {
+          "description": "Net Investment Income Tax (3.8%) in dollars.",
+          "type": "number"
+         },
+         "state": {
+          "description": "State tax in dollars.",
+          "type": "number"
+         },
+         "total": {
+          "description": "Total tax in dollars.",
+          "type": "number"
+         }
+        },
+        "required": [
+         "federal",
+         "state",
+         "niit",
+         "total"
+        ],
+        "type": "object"
+       }
+      },
+      "required": [
+       "feasible",
+       "targetAfterTax",
+       "targetDateISO",
+       "totalAfterTaxAchieved",
+       "totalSharesSold",
+       "totalGrossProceeds",
+       "totalTaxes",
+       "schedule",
+       "comparison",
+       "remainingShares",
+       "remainingPositionValue",
+       "remainingPositionAfterTax",
+       "remainingNetByStack"
+      ],
+      "type": "object"
+     },
+     "planKey": {
+      "description": "Plan identifier. \"candidate\" entries appear only inside frontier.",
+      "enum": [
+       "recommended",
+       "lock_in_now",
+       "balanced",
+       "hold_for_growth",
+       "candidate"
+      ],
+      "type": "string"
+     },
+     "planLabel": {
+      "description": "Human-readable plan name.",
+      "type": "string"
+     },
+     "shortfallProbability": {
+      "description": "Lognormal probability (0..1) that realized cash lands below the target. 0 means a deterministic hit (sell everything today).",
+      "type": "number"
+     },
+     "totalTax": {
+      "description": "Total tax paid across the plan in dollars.",
+      "type": "number"
+     },
+     "wealthAtTarget": {
+      "description": "Total wealth in dollars at the target date: net cash plus retained shares at the projected price. The metric the recommendation maximizes.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "planKey",
+     "planLabel",
+     "plan",
+     "wealthAtTarget",
+     "totalTax",
+     "shortfallProbability"
+    ],
+    "type": "object"
+   },
+   "targetAfterTax": {
+    "description": "Echo of the requested net cash target in dollars.",
+    "type": "number"
+   },
+   "targetDateISO": {
+    "description": "Echo of the target date as an ISO date string.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "recommended",
+   "lockInNow",
+   "balanced",
+   "holdForGrowth",
+   "frontier",
+   "targetAfterTax",
+   "targetDateISO",
+   "appliedRiskTolerance"
+  ],
+  "type": "object"
+ }
+}

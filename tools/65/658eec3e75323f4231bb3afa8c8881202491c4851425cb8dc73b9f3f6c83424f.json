@@ -1,0 +1,371 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Search Open Food Facts by full-text query, structured tag filters, or both at once. Returns a summary list with barcodes, product names, brands, Nutri-Score, NOVA group, and categories \u2014 enough for triage and selection, not full label data. Use off_get_product on the returned barcodes for complete details. A text query and tag filters combine: every word of the query must match the product name, generic name, categories, labels, or brand, and every filter provided must hold (e.g. query \"dark chocolate\" with labels_tag \"en:organic\" and countries_tag \"en:france\" returns organic chocolate sold in France); numeric nutrient_filters express per-100 g thresholds such as sugars below 8 g and combine the same way; additives_tag is the one exception, filtering only on searches carrying neither query nor nutrient_filters. Tag filter values are canonical tag IDs (e.g. \"en:organic\", \"en:no-gluten\") \u2014 use off_browse_taxonomy to resolve human terms to tag IDs. A case variant, synonym, or singular of a tag is resolved to its canonical ID where Open Food Facts recognizes it; anything else is matched exactly. exclude_allergens and exclude_traces drop products that declare an allergen or a \"may contain\" trace, but a product with no allergen or trace data entered passes them, so confirm a candidate with off_get_product before relying on it. At least one search parameter is required. The two paths read different indexes: a search carrying query is answered by the text index, a snapshot that lags the live database, while a tag-only search reads the live database and is current \u2014 so a recently contributed product can be missing from a text search and present in the same search without query. Data is crowd-sourced; result count reflects contributed products, not all products in the market. Data under ODbL 1.0 \u2014 cite Open Food Facts in downstream use.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "additives_tag": {
+    "description": "Canonical additive (E-number) tag ID. Example: \"en:e322\", \"en:e330\". Use off_browse_taxonomy with facet=\"additives\". Available only on searches carrying neither query nor nutrient_filters \u2014 both route to a backend with no additives field, so combining them is rejected instead of silently returning nothing.",
+    "type": "string"
+   },
+   "allergens_tag": {
+    "description": "Canonical allergen tag ID. Example: \"en:milk\", \"en:gluten\". Use off_browse_taxonomy with facet=\"allergens\". Selects products that declare this allergen; it cannot select allergen-free products, because a product with no allergen tags may simply have none entered yet. To leave an allergen out, use exclude_allergens.",
+    "type": "string"
+   },
+   "brands_tag": {
+    "description": "Brand slug (lowercased, hyphenated). Example: \"nutella\", \"kelloggs\". A brand name is slugged the way Open Food Facts slugs it (\"Ben & Jerry's\" \u2192 \"ben-jerry-s\") and then matched exactly \u2014 a partial or misspelled slug matches nothing rather than falling back to a near match, so put open-ended brand wording in query instead.",
+    "type": "string"
+   },
+   "categories_tag": {
+    "description": "Canonical category tag ID. Example: \"en:breakfast-cereals\", \"en:cheeses\". Use off_browse_taxonomy with facet=\"categories\" to discover valid values.",
+    "type": "string"
+   },
+   "countries_tag": {
+    "description": "Canonical country tag ID. Example: \"en:france\", \"en:united-states\". Filters to products sold in that country.",
+    "type": "string"
+   },
+   "exclude_allergens": {
+    "description": "Allergen tag IDs a product must not declare, all applied. Example: [\"en:nuts\", \"en:peanuts\"]. Each value must be an allergen tag Open Food Facts recognizes \u2014 resolve it with off_browse_taxonomy facet=\"allergens\" \u2014 and one it does not recognize is rejected rather than sent, because it would exclude nothing. A product with no allergen data entered passes an exclusion, so check a candidate with off_get_product before relying on it.",
+    "items": {
+     "description": "One canonical allergen tag ID to exclude, e.g. \"en:nuts\".",
+     "type": "string"
+    },
+    "maxItems": 14,
+    "type": "array"
+   },
+   "exclude_traces": {
+    "description": "Allergen tag IDs a product's label must not warn it may contain as traces, all applied. Example: [\"en:nuts\"]. Values are validated like exclude_allergens. A product with no trace data entered passes, so check a candidate with off_get_product before relying on it.",
+    "items": {
+     "description": "One canonical allergen tag ID to exclude as a trace, e.g. \"en:nuts\".",
+     "type": "string"
+    },
+    "maxItems": 14,
+    "type": "array"
+   },
+   "ingredients_analysis_tag": {
+    "description": "Vegan, vegetarian, or palm-oil verdict Open Food Facts computes from the parsed ingredients. Example: \"en:vegan\", \"en:palm-oil-free\". \"en:maybe-vegan\" and \"en:may-contain-palm-oil\" mean the ingredients could not settle it, and the \"-unknown\" values mean no verdict could be computed.",
+    "enum": [
+     "en:palm-oil",
+     "en:palm-oil-free",
+     "en:may-contain-palm-oil",
+     "en:palm-oil-content-unknown",
+     "en:vegan",
+     "en:maybe-vegan",
+     "en:non-vegan",
+     "en:vegan-status-unknown",
+     "en:vegetarian",
+     "en:maybe-vegetarian",
+     "en:non-vegetarian",
+     "en:vegetarian-status-unknown"
+    ],
+    "type": "string"
+   },
+   "labels_tag": {
+    "anyOf": [
+     {
+      "description": "One canonical label tag ID.",
+      "type": "string"
+     },
+     {
+      "description": "Up to 10 canonical label tag IDs, all of which must apply.",
+      "items": {
+       "description": "One canonical label tag ID.",
+       "type": "string"
+      },
+      "maxItems": 10,
+      "type": "array"
+     }
+    ],
+    "description": "Canonical label/certification tag ID, or an array of up to 10 that must all apply. Example: \"en:organic\", or [\"en:organic\", \"en:fair-trade\"] for products carrying both. Use off_browse_taxonomy with facet=\"labels\"."
+   },
+   "nova_group": {
+    "description": "Filter by NOVA food processing class. \"1\"=unprocessed/minimally processed, \"4\"=ultra-processed. Products without a NOVA score are excluded.",
+    "enum": [
+     "1",
+     "2",
+     "3",
+     "4"
+    ],
+    "type": "string"
+   },
+   "nutrient_filters": {
+    "description": "Numeric constraints on nutrient values per 100 g, combined as AND with each other and with every other filter. Pair two entries on the same nutrient to express a range (e.g. sugars gte 2 and sugars lte 8). Served only by the text backend, so supplying one routes the search there even without query \u2014 it then reads the lagging text index and is subject to the 10,000-result page window, and additives_tag cannot be combined with it. Per-serving and prepared-product values are not searchable.",
+    "items": {
+     "description": "One numeric constraint on a per-100 g nutrient value.",
+     "properties": {
+      "nutrient": {
+       "description": "Nutrient to constrain, measured per 100 g. Energy is kilocalories; every other value is grams per 100 g.",
+       "enum": [
+        "energy-kcal",
+        "fat",
+        "saturated-fat",
+        "carbohydrates",
+        "sugars",
+        "fiber",
+        "proteins",
+        "salt",
+        "sodium"
+       ],
+       "type": "string"
+      },
+      "operator": {
+       "description": "Comparison against value: \"lt\" below, \"lte\" at or below, \"gt\" above, \"gte\" at or above.",
+       "enum": [
+        "lt",
+        "lte",
+        "gt",
+        "gte"
+       ],
+       "type": "string"
+      },
+      "value": {
+       "description": "Threshold to compare against, in the nutrient's per-100 g unit.",
+       "minimum": 0,
+       "type": "number"
+      }
+     },
+     "required": [
+      "nutrient",
+      "operator",
+      "value"
+     ],
+     "type": "object"
+    },
+    "maxItems": 18,
+    "type": "array"
+   },
+   "nutrition_grade": {
+    "description": "Filter by Nutri-Score grade. \"a\" is highest nutritional quality, \"e\" is lowest. Products without a score are excluded.",
+    "enum": [
+     "a",
+     "b",
+     "c",
+     "d",
+     "e"
+    ],
+    "type": "string"
+   },
+   "page": {
+    "default": 1,
+    "description": "Page number (1-based). Use with page_size to paginate results. A search by tag filters alone is served through page 10 only, so at page_size 50 it reaches the first 500 matches. A search carrying query or nutrient_filters serves only the first 10000 results, so page * page_size must stay at or below 10000. A request past either bound is rejected rather than sent; narrow the filters or change sort_by to bring other products forward.",
+    "maximum": 9007199254740991,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "page_size": {
+    "default": 20,
+    "description": "Results per page (1\u201350, default 20). Keep low for initial exploration; increase for comparison workflows.",
+    "maximum": 50,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "query": {
+    "description": "Words to find. Every word must match the product name, generic name, categories, labels, or brand \u2014 ingredients and quantity are not searched \u2014 so put only words the product itself would carry. Stop words of English, French, Spanish, German, and Italian (\"with\", \"the\", \"de\", \"mit\", \u2026) are not required, and neither is a content word that is a stop word in one of them (such as Spanish \"soy\"), though it still ranks the results. Names are matched in the 31 languages the text index analyzes, so a product named only in French is found by its French name. At most 24 words, counting each part of a hyphenated word. Example: \"dark chocolate 70%\". Supplying it routes the search to the text index, a snapshot that lags the live Open Food Facts database; drop it to run the same tag filters against the current data.",
+    "type": "string"
+   },
+   "sort_by": {
+    "description": "Sort order, applied on every search. Each value orders newest or highest first: \"unique_scans_n\" surfaces the most-scanned products, \"last_modified_t\" and \"created_t\" the most recently updated and newest records, \"popularity_key\" the most popular. Omitting it leaves text searches relevance-ranked and tag-only searches in the default order.",
+    "enum": [
+     "last_modified_t",
+     "unique_scans_n",
+     "created_t",
+     "popularity_key"
+    ],
+    "type": "string"
+   },
+   "traces_tag": {
+    "description": "Canonical allergen tag ID the label warns the product may contain as a trace (\"may contain nuts\"). Example: \"en:nuts\". Trace tags are allergen tags, so off_browse_taxonomy with facet=\"allergens\" resolves them. Selects products carrying the warning; to leave them out, use exclude_traces.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "off_search_products",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "total",
+     "total_is_lower_bound",
+     "page",
+     "page_count",
+     "products"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cap": {
+    "description": "The page_size that was applied.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `no_filters`: No search query or filter was provided. `unrecognized_exclusion`: An exclude_allergens or exclude_traces value is not an allergen tag the Open Food Facts vocabulary confirms, or the vocabulary could not be reached to check it \u2014 an unrecognized exclusion would exclude nothing. `additives_filter_needs_tag_search`: additives_tag was combined with a query or nutrient_filters, which route to a backend that cannot filter by additive. `query_too_long`: query carries more than 24 words, more than the text backend can require at once. `page_out_of_range`: A search by tag filters alone asks for a page past 10, or a search the text backend serves asks for page * page_size beyond its 10000-result window. `upstream_error`: Open Food Facts returns a 5xx other than 501 or 504, serves an HTML error page with a 2xx or 5xx status, reports a search-engine failure inside an HTTP 200, or is unreachable. `upstream_timeout`: Open Food Facts did not answer within the request deadline, or answered 408, 425, or 504. `upstream_rejected`: Open Food Facts refuses the request with a 4xx other than 408, 425, or 429, or with 501 Not Implemented \u2014 the request as formed will be refused again. `rate_limited`: This server's own per-minute search budget is spent, or Open Food Facts answers 429. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "no_filters",
+         "unrecognized_exclusion",
+         "additives_filter_needs_tag_search",
+         "query_too_long",
+         "page_out_of_range",
+         "upstream_error",
+         "upstream_timeout",
+         "upstream_rejected",
+         "rate_limited"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "exclusion_coverage": {
+    "description": "Present only on searches carrying exclude_allergens or exclude_traces. States that products with no allergen or trace data entered pass an exclusion, so a result is not confirmed free of the excluded allergens, and names the off_get_product fields to check.",
+    "type": "string"
+   },
+   "last_page": {
+    "description": "Deepest page of this result set that holds products and can be requested, at the page_size used \u2014 capped at page 10 on a search by tag filters alone and by the 10000-result window on a search the text index answers. Absent when total_is_lower_bound is true \u2014 the total it would divide is the ceiling the backend stopped counting at, so no exact last page exists \u2014 and when nothing matched at all.",
+    "type": "number"
+   },
+   "notice": {
+    "description": "Guidance about this result set \u2014 echoes the filters and suggests how to broaden when nothing matched, or names the current page and how far the backend will actually paginate when more results exist.",
+    "type": "string"
+   },
+   "omitted": {
+    "description": "Matches on this page left off because Open Food Facts stores them under a code it cannot serve (not 4\u201340 digits once leading zeros are stripped), so off_get_product could not look them up either. Absent when none was. total still counts them.",
+    "type": "number"
+   },
+   "page": {
+    "description": "Current page number (1-based).",
+    "type": "number"
+   },
+   "page_count": {
+    "description": "Products returned on this page \u2014 page_size except on the last page, or when a match stored under a code Open Food Facts cannot serve was left off. Not the total number of pages.",
+    "type": "number"
+   },
+   "products": {
+    "description": "Matching products. Use barcodes with off_get_product for full label data.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A single matching product summary row.",
+     "properties": {
+      "barcode": {
+       "description": "Product barcode, 4\u201340 digits after any leading zeros \u2014 a code off_get_product accepts as is, so pass it there for full details. A match stored under a code Open Food Facts cannot serve is left off the page.",
+       "type": "string"
+      },
+      "brands": {
+       "description": "Brand name(s), comma-separated. Absent when not yet entered.",
+       "type": "string"
+      },
+      "categories_tags": {
+       "description": "Category tag IDs in canonical form. Use as filter values for off_search_products.",
+       "items": {
+        "description": "Canonical category tag ID (e.g. \"en:cheeses\").",
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "ecoscore_grade": {
+       "description": "Green-Score environmental impact grade: \"a-plus\" (lowest impact), then \"a\" through \"f\"; \"unknown\" when the data it needs is missing, or \"not-applicable\" for product categories the score does not cover. Absent when Open Food Facts sent none.",
+       "type": "string"
+      },
+      "nova_group": {
+       "description": "NOVA processing class (1\u20134). Absent when not assigned.",
+       "type": "number"
+      },
+      "nutriscore_grade": {
+       "description": "Nutri-Score grade: \"a\" through \"e\", \"unknown\" when the nutrition data entered is not enough to compute it, or \"not-applicable\" for product categories the score does not cover. Absent when Open Food Facts sent none.",
+       "type": "string"
+      },
+      "product_name": {
+       "description": "Product name. May be absent for incompletely entered products.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "barcode"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "shown": {
+    "description": "Number of products returned on this page.",
+    "type": "number"
+   },
+   "text_index_snapshot": {
+    "description": "Present only on searches the text backend answered. States that those results come from an index snapshot that lags the live Open Food Facts database, so a recently contributed product can be missing from them while the tag-only path still returns it. Absent on tag-only searches, which read the live database.",
+    "type": "string"
+   },
+   "total": {
+    "description": "Matching products in the database for this search. Exact unless total_is_lower_bound is true, in which case at least this many match and the real figure is unknown.",
+    "type": "number"
+   },
+   "total_is_lower_bound": {
+    "description": "True when the backend stopped counting at its ceiling and total is a floor, not the match total. Only text searches can hit it; add filters to bring the result set under the ceiling and get an exact count.",
+    "type": "boolean"
+   },
+   "truncated": {
+    "description": "True when more results exist beyond this page.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Search Food Products"
+}

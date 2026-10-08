@@ -1,0 +1,494 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Queries IBGE economic and social indicators.\n\nAvailable indicators:\n\n**Economic:**\n- pib: quarterly GDP at current prices, R$ million (Brazil only)\n- pib_variacao: quarterly GDP volume change, % over the same quarter of the previous year (Brazil only)\n- pib_per_capita: annual GDP per capita at current prices, R$ (Brazil only)\n- industria: industrial production index, general industry (2022=100)\n- comercio: retail sales volume index (2022=100)\n- servicos: services volume index (2022=100, Brazil only)\n\n**Prices:**\n- ipca: IPCA monthly change, %\n- ipca_acumulado: IPCA accumulated over 12 months, %\n- inpc: INPC monthly change, %\n\n**Labor:**\n- desemprego: Unemployment rate\n- ocupacao: Employed people (thousands)\n- rendimento: average real income from all jobs, R$ \u2014 each period is a ROLLING quarter (e.g. \"jun-jul-ago 2026\"), Brazil only\n- informalidade: Informality rate\n\n**Population:**\n- populacao: Population estimate\n- densidade: Population density\n\nExamples:\n- GDP: indicador=\"pib\"\n- IPCA last 12 months: indicador=\"ipca\", periodos=\"last 12\"\n- Unemployment by state: indicador=\"desemprego\", nivel_territorial=\"3\"\n- List indicators: indicador=\"listar\"\n\nEach indicator returns ONE variable \u2014 the one its name says; for another one of the same table (e.g. the year-to-date change) use ibge_sidra with variaveis.\n\nWhat each number is: every record carries the SIDRA period column (code and label, e.g. \"M\u00eas (C\u00f3digo)\" 202403 / \"M\u00eas\" \"mar\u00e7o 2024\") and the \"Vari\u00e1vel\" label \u2014 the only place that says whether a value is a monthly change, a year-to-date or 12-month accumulation, an index number or a level; read it before adding, subtracting or comparing values. A PNAD rolling quarter (\"jun-jul-ago 2026\") is a three-month window that moves every month, not a calendar quarter. Revisions: values are what SIDRA publishes at the extraction instant (retrieved_at); IBGE revises published figures (quarterly GDP at each release, PNAD reweighting, annual revisions of PIM/PMC/PMS) and the API keeps no earlier version.\n\nStatistics mode: for largest/smallest/mean/median/distribution/ranking questions (\"which state has the highest unemployment?\", \"median informality rate across states\") use estatisticas=true \u2014 full distribution + top/bottom over ALL rows before truncation; agruparPor=\"<column label>\" (e.g. \"Unidade da Federa\u00e7\u00e3o\", \"Trimestre\") ranks groups by descending sum. In this mode campos/formato are ignored and registros comes empty.\n\nUse a different tool when:\n- Comparing/ranking localities \u2192 ibge_comparar\n- Census themes \u2192 ibge_censo\n- One municipality's panel \u2192 ibge_cidades\n\nBehavior: read-only and idempotent \u2014 a live GET against the public IBGE SIDRA API. Returns Markdown plus a typed structuredContent payload.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "agruparPor": {
+    "description": "Com estatisticas=true, agrupa pela coluna informada (r\u00f3tulo, ex: 'Unidade da Federa\u00e7\u00e3o', 'Ano') e ranqueia os grupos por soma decrescente (grupos[0] = maior total), cada grupo com sua mini-distribui\u00e7\u00e3o. Nome curto ('UF', 'estado', 'cidade', 'regi\u00e3o') e r\u00f3tulo parcial ('Federa\u00e7\u00e3o') s\u00e3o resolvidos, e a resposta diz em `aviso` por qual coluna agrupou; r\u00f3tulo que casa com duas colunas \u00e9 recusado em vez de escolhido",
+    "type": "string"
+   },
+   "campos": {
+    "description": "Selecionar apenas algumas colunas por r\u00f3tulo, separadas por v\u00edrgula (ex: 'Valor,Ano'). Reduz o volume da resposta.",
+    "type": "string"
+   },
+   "categoria": {
+    "description": "Filtrar por categoria de indicadores",
+    "enum": [
+     "economico",
+     "precos",
+     "trabalho",
+     "populacao",
+     "agropecuaria",
+     "todos"
+    ],
+    "type": "string"
+   },
+   "estatisticas": {
+    "default": false,
+    "description": "Computa estat\u00edsticas (m\u00ednimo/m\u00e1ximo/m\u00e9dia/mediana/desvio-padr\u00e3o/percentis) sobre TODOS os registros da consulta, antes da pagina\u00e7\u00e3o, + ranking top/bottom. Use para 'qual o maior/menor', 'm\u00e9dia', 'mediana', 'distribui\u00e7\u00e3o', 'ranking'. Quando true, ignora pagina, campos e formato",
+    "type": "boolean"
+   },
+   "formato": {
+    "default": "tabela",
+    "description": "Formato de sa\u00edda",
+    "enum": [
+     "tabela",
+     "json"
+    ],
+    "type": "string"
+   },
+   "indicador": {
+    "description": "Nome do indicador (ex: \"pib\", \"ipca\", \"desemprego\", \"populacao\").\nUse \"listar\" para ver todos os indicadores dispon\u00edveis.",
+    "type": "string"
+   },
+   "localidades": {
+    "default": "all",
+    "description": "C\u00f3digos das localidades ou 'all'",
+    "type": "string"
+   },
+   "nivel_territorial": {
+    "default": "1",
+    "description": "N\u00edvel territorial (c\u00f3digo N): 1=Brasil, 2=Regi\u00e3o, 3=UF",
+    "type": "string"
+   },
+   "periodos": {
+    "default": "last",
+    "description": "Per\u00edodos (ex: '2023', 'last', 'last 4')",
+    "type": "string"
+   },
+   "topN": {
+    "default": 10,
+    "description": "Tamanho das listas top/bottom quando estatisticas=true sem agruparPor (padr\u00e3o: 10, m\u00e1x: 100)",
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   }
+  },
+  "type": "object"
+ },
+ "name": "ibge_indicadores",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "attribution": {
+    "description": "URLs can\u00f4nicas das fontes desta resposta (lista de atribui\u00e7\u00e3o)",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "colunas": {
+    "description": "R\u00f3tulos das colunas, na ordem",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "estatisticas": {
+    "additionalProperties": false,
+    "description": "Bloco estat\u00edstico presente quando estatisticas=true (registros vem vazio nesse modo)",
+    "properties": {
+     "agrupadoPor": {
+      "description": "R\u00f3tulo da coluna de agrupamento (com agruparPor)",
+      "type": "string"
+     },
+     "aviso": {
+      "description": "Avisos sobre agrupamento autom\u00e1tico, mistura de unidades ou truncamento",
+      "type": "string"
+     },
+     "bottom": {
+      "description": "Menores valores (sem agruparPor)",
+      "items": {
+       "additionalProperties": {},
+       "propertyNames": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "colunaValor": {
+      "description": "R\u00f3tulo da coluna num\u00e9rica analisada (sempre 'Valor' no SIDRA)",
+      "type": "string"
+     },
+     "distribuicao": {
+      "additionalProperties": false,
+      "description": "Distribui\u00e7\u00e3o do conjunto inteiro (sem agruparPor)",
+      "properties": {
+       "desvioPadrao": {
+        "type": "number"
+       },
+       "maximo": {
+        "type": "number"
+       },
+       "media": {
+        "type": "number"
+       },
+       "mediana": {
+        "type": "number"
+       },
+       "minimo": {
+        "type": "number"
+       },
+       "n": {
+        "description": "Registros com valor num\u00e9rico considerados",
+        "type": "number"
+       },
+       "percentis": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "percentil": {
+           "description": "Percentil (50 = mediana)",
+           "type": "number"
+          },
+          "rotulo": {
+           "description": "Enunciado por extenso, pronto para citar ao leitor",
+           "type": "string"
+          },
+          "valor": {
+           "type": "number"
+          }
+         },
+         "required": [
+          "percentil",
+          "valor",
+          "rotulo"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "soma": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "n",
+       "soma",
+       "minimo",
+       "maximo",
+       "media",
+       "mediana",
+       "desvioPadrao",
+       "percentis"
+      ],
+      "type": "object"
+     },
+     "grupos": {
+      "description": "Grupos ordenados por soma decrescente, cada um com sua mini-distribui\u00e7\u00e3o (com agruparPor)",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "desvioPadrao": {
+         "type": "number"
+        },
+        "grupo": {
+         "type": "string"
+        },
+        "maximo": {
+         "type": "number"
+        },
+        "media": {
+         "type": "number"
+        },
+        "mediana": {
+         "type": "number"
+        },
+        "minimo": {
+         "type": "number"
+        },
+        "n": {
+         "description": "Registros com valor num\u00e9rico considerados",
+         "type": "number"
+        },
+        "percentis": {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "percentil": {
+            "description": "Percentil (50 = mediana)",
+            "type": "number"
+           },
+           "rotulo": {
+            "description": "Enunciado por extenso, pronto para citar ao leitor",
+            "type": "string"
+           },
+           "valor": {
+            "type": "number"
+           }
+          },
+          "required": [
+           "percentil",
+           "valor",
+           "rotulo"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "soma": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "n",
+        "soma",
+        "minimo",
+        "maximo",
+        "media",
+        "mediana",
+        "desvioPadrao",
+        "percentis",
+        "grupo"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "registrosConsiderados": {
+      "description": "Registros com valor num\u00e9rico (contam no n)",
+      "type": "number"
+     },
+     "registrosSemValor": {
+      "description": "Registros exclu\u00eddos por marcador de aus\u00eancia SIDRA ('-', '..', '...', 'X') ou valor n\u00e3o num\u00e9rico",
+      "type": "number"
+     },
+     "top": {
+      "description": "Maiores valores, com as colunas de identifica\u00e7\u00e3o do registro (sem agruparPor)",
+      "items": {
+       "additionalProperties": {},
+       "propertyNames": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "totalGrupos": {
+      "description": "Total de grupos existentes antes do teto (com agruparPor)",
+      "type": "number"
+     }
+    },
+    "required": [
+     "colunaValor",
+     "registrosConsiderados",
+     "registrosSemValor"
+    ],
+    "type": "object"
+   },
+   "indicador": {
+    "description": "Chave do indicador consultado",
+    "type": "string"
+   },
+   "nome": {
+    "description": "Nome do indicador",
+    "type": "string"
+   },
+   "provenance": {
+    "additionalProperties": false,
+    "description": "Bloco de proveni\u00eancia (contrato v1.1): fonte, URL, per\u00edodo, extra\u00e7\u00e3o, diagn\u00f3stico de origem e licen\u00e7a",
+    "properties": {
+     "citation": {
+      "description": "Cita\u00e7\u00e3o pronta para uso",
+      "type": "string"
+     },
+     "data_vintage": {
+      "description": "Per\u00edodo de refer\u00eancia do dado segundo a fonte; null se a fonte n\u00e3o exp\u00f5e",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "field_sources": {
+      "description": "Proveni\u00eancia por sub-fonte (contrato v1.2): presente s\u00f3 quando a resposta junta partes extra\u00eddas de origens ou em momentos distintos, uma entrada por grupo de campos; ausente quando a resposta vem de uma \u00fanica extra\u00e7\u00e3o",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "data_vintage": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "dataset_id": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "fields": {
+         "items": {
+          "type": "string"
+         },
+         "minItems": 1,
+         "type": "array"
+        },
+        "retrieved_at": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "served_from_cache": {
+         "type": [
+          "boolean",
+          "null"
+         ]
+        },
+        "source_url": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "fields",
+        "source_url",
+        "dataset_id",
+        "data_vintage",
+        "retrieved_at"
+       ],
+       "type": "object"
+      },
+      "minItems": 1,
+      "type": "array"
+     },
+     "license": {
+      "description": "Regime legal do dado",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "retrieval": {
+      "anyOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "anomalies": {
+          "description": "Anomalias superadas at\u00e9 o sucesso, somadas por classe, em ordem fixa; [] se nenhuma",
+          "items": {
+           "additionalProperties": false,
+           "properties": {
+            "count": {
+             "description": "Ocorr\u00eancias desta classe na chamada",
+             "maximum": 9007199254740991,
+             "minimum": 1,
+             "type": "integer"
+            },
+            "kind": {
+             "description": "Classe da anomalia (vocabul\u00e1rio fechado do contrato)",
+             "enum": [
+              "timeout",
+              "network",
+              "http_4xx",
+              "http_5xx",
+              "rate_limited",
+              "malformed_body"
+             ],
+             "type": "string"
+            }
+           },
+           "required": [
+            "kind",
+            "count"
+           ],
+           "type": "object"
+          },
+          "type": "array"
+         },
+         "attempts": {
+          "description": "Tentativas somadas, incluindo as repetidas (>= requests)",
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+         },
+         "requests": {
+          "description": "Idas distintas \u00e0 origem que comp\u00f5em esta resposta (fatias, p\u00e1ginas)",
+          "maximum": 9007199254740991,
+          "minimum": 1,
+          "type": "integer"
+         },
+         "unstable": {
+          "description": "true se houve repeti\u00e7\u00e3o (attempts > requests) ou alguma anomalia",
+          "type": "boolean"
+         }
+        },
+        "required": [
+         "requests",
+         "attempts",
+         "anomalies",
+         "unstable"
+        ],
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Diagn\u00f3stico de origem desta chamada (contrato v1.1): idas \u00e0 API do IBGE, tentativas somadas e anomalias contornadas; unstable=true quando houve anomalia. null quando nada foi medido (resposta servida s\u00f3 do cache)"
+     },
+     "retrieved_at": {
+      "description": "Instante real da extra\u00e7\u00e3o no upstream (ISO-8601, hor\u00e1rio de Bras\u00edlia)",
+      "type": "string"
+     },
+     "source": {
+      "description": "Fonte oficial do dado (API do IBGE consultada)",
+      "type": "string"
+     },
+     "source_url": {
+      "description": "URL can\u00f4nica que reproduz a consulta",
+      "type": "string"
+     }
+    },
+    "required": [
+     "source",
+     "source_url",
+     "data_vintage",
+     "retrieved_at",
+     "retrieval",
+     "citation",
+     "license"
+    ],
+    "type": "object"
+   },
+   "registros": {
+    "description": "Registros: cada um mapeia r\u00f3tulo da coluna -> valor",
+    "items": {
+     "additionalProperties": {
+      "type": "string"
+     },
+     "propertyNames": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "tabela": {
+    "description": "Tabela SIDRA de origem",
+    "type": "string"
+   },
+   "totalRegistros": {
+    "description": "Total de registros de dados",
+    "type": "number"
+   }
+  },
+  "required": [
+   "totalRegistros",
+   "colunas",
+   "registros",
+   "provenance",
+   "attribution"
+  ],
+  "type": "object"
+ },
+ "title": "Indicadores econ\u00f4micos e sociais"
+}

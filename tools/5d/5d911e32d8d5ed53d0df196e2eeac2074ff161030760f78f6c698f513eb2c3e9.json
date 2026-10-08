@@ -1,0 +1,493 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Measure recurring inflows from bank credits"
+ },
+ "description": "Measure who pays the workspace on a regular cadence, from its bank and credit card inflows: each recurring payer, its cadence, what it brings in per month, and the total per currency. It draws no card.\n\nCall it when a cash forecast should count the inflows that keep arriving, or when the user asks which customers pay them regularly. For a forecast, pass the `forecast_inflows` entry of the forecast's currency to `well_render_cash_forecast` as `recurring_inflow`, as it is. When `forecast_inflows` holds no entry in that currency, no recurring inflow was found: draw the worst case with no `recurring_inflow` and say so.\n\n**The server applies every rule, and the result states each one in `rules`.** Quote the figures as returned: never recompute an amount, a total or a cadence, never add a payer the person expects, and never add a one-off payment, an invoice not yet paid or a deal to the figure.\n\nThe window is fixed: the last 24 complete calendar months in UTC and the running month. `measured_through` is the last complete month.\n\nWhat the result is:\n  - `recurring_inflows`: the payers on a cadence (monthly, bimonthly, quarterly, yearly), largest amount per month first, at most 50; `recurring_inflow_count` is the full count. Each carries its cadence evidence, its amount pattern (fixed, changed, varying), the amount per month, its latest month, `possibly_ended` and its category.\n  - `totals`: per currency, the payer count, the amount per month of every recurring payer (a quarterly or yearly payment spread over its months), the part from payers flagged as possibly ended, and `forecast_floor_per_month`, the inflow that arrives in every month.\n  - `forecast_inflows`: per currency with a positive `forecast_floor_per_month`, the `{ amount, currency, measured_through }` the cash forecast takes. It is a floor that holds month by month, so it counts only payers on a MONTHLY cadence that may not have stopped and that paid in every month of their span: every payer counts at its smallest month (the smallest amount it paid in a month of the window), never the mean. Payers on a bimonthly, quarterly or yearly cadence, and monthly payers that skipped a month (a gap of 2 in their evidence), are in `totals` and NOT in `forecast_inflows`, because they pay in some months only. A payer whose latest payment is neither in the last complete month nor in the running month is not in it either. Payers that may have stopped, payments on no cadence, possible duplicates and unattributed inflows are not in it either. Say that these were left out.\n  - `not_recurring_count`, `possible_duplicate_count` and `unattributed`: what was paid in but is in no total.\n  - `excluded`: what fell out, counted apart. `internal_transfers` are movements between the workspace's own accounts. `payments_from_own_accounts` are drawdowns from an owned loan, `own_company` money in from the workspace's own company, `category_excluded` the inflows whose category is a transfer, treasury, financing or tax key (`category_keys`), `unreadable_rows` rows with no readable amount or currency, `no_asset_movement` rows with no leg on an owned bank account or credit card. A `null` count was not measured, which is not zero.\n\n`partial: true` means nothing was measured: the read was cut short, or the workspace holds no bank account and no credit card. `forecast_inflows` is then empty: say so rather than reporting no recurring inflow. `rows_truncated: true` means the smallest counterparties were not read, so every total is a floor.\n\n`scope` is required: `own_and_adopted` is the population the burn counts, `own` the workspace's own rows only. Use the scope the forecast's burn used.\n\nWhen the token authorizes one workspace, call this directly \u2014 no other tool call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "scope": {
+    "description": "Which rows are this workspace's: `own_and_adopted` for the population the burn counts, `own` for its own rows only. Required; see the description.",
+    "enum": [
+     "own",
+     "own_and_adopted"
+    ],
+    "type": "string"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several: this read reports one workspace's own figures and will not choose which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   },
+   "workspace_scope": {
+    "description": "Restrict this call to the family: the token's primary workspace plus the company workspaces under it that you are a member of. Unrelated authorized workspaces drop out of the read; row reads merge across the family, while a per-workspace figure still reports exactly one workspace.",
+    "enum": [
+     "family"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "scope"
+  ],
+  "type": "object"
+ },
+ "name": "well_measure_recurring_inflows",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "current_month": {
+    "type": "string"
+   },
+   "error": {
+    "type": "string"
+   },
+   "excluded": {
+    "additionalProperties": false,
+    "properties": {
+     "category_excluded": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "category_keys": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "internal_transfers": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "no_asset_movement": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "own_company": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "payments_from_own_accounts": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "unreadable_rows": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "internal_transfers",
+     "no_asset_movement",
+     "payments_from_own_accounts",
+     "own_company",
+     "category_excluded",
+     "unreadable_rows",
+     "category_keys"
+    ],
+    "type": "object"
+   },
+   "forecast_inflows": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "amount": {
+       "type": "number"
+      },
+      "currency": {
+       "type": "string"
+      },
+      "measured_through": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "amount",
+      "currency",
+      "measured_through"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "measured_through": {
+    "type": "string"
+   },
+   "newly_connected": {
+    "description": "Tools that connected to this workspace since the last result and that no session was told about yet, oldest first. Present only when at least one tool is new. Start the reply with one line per entry, in the person's language: \"<name> is connected.\". Never fold several entries into one sentence. Each entry comes back once, on one result only: never repeat its line later.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "not_recurring_count": {
+    "type": "number"
+   },
+   "partial": {
+    "type": "boolean"
+   },
+   "possible_duplicate_count": {
+    "type": "number"
+   },
+   "recurring_inflow_count": {
+    "type": "number"
+   },
+   "recurring_inflows": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "amount_basis": {
+       "enum": [
+        "latest",
+        "mean"
+       ],
+       "type": "string"
+      },
+      "amount_pattern": {
+       "enum": [
+        "fixed",
+        "changed",
+        "varying"
+       ],
+       "type": "string"
+      },
+      "amount_per_month": {
+       "type": "number"
+      },
+      "basis_amount": {
+       "type": "number"
+      },
+      "cadence": {
+       "enum": [
+        "monthly",
+        "bimonthly",
+        "quarterly",
+        "yearly"
+       ],
+       "type": "string"
+      },
+      "category": {
+       "additionalProperties": false,
+       "properties": {
+        "key": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "label": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        }
+       },
+       "required": [
+        "key",
+        "label"
+       ],
+       "type": "object"
+      },
+      "company_id": {
+       "type": "string"
+      },
+      "currency": {
+       "type": "string"
+      },
+      "domain": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "evidence": {
+       "additionalProperties": false,
+       "properties": {
+        "gaps": {
+         "items": {
+          "type": "number"
+         },
+         "type": "array"
+        },
+        "months_with_payments": {
+         "type": "number"
+        },
+        "payment_count": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "months_with_payments",
+        "payment_count",
+        "gaps"
+       ],
+       "type": "object"
+      },
+      "latest_month": {
+       "type": "string"
+      },
+      "name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "possibly_ended": {
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "company_id",
+      "name",
+      "domain",
+      "currency",
+      "cadence",
+      "evidence",
+      "amount_pattern",
+      "amount_basis",
+      "basis_amount",
+      "amount_per_month",
+      "latest_month",
+      "possibly_ended",
+      "category"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "recurring_inflows_truncated": {
+    "type": "boolean"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "rows_truncated": {
+    "type": "boolean"
+   },
+   "rules": {
+    "additionalProperties": {},
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "scope": {
+    "enum": [
+     "own",
+     "own_and_adopted"
+    ],
+    "type": "string"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "totals": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "amount_per_month": {
+       "type": "number"
+      },
+      "currency": {
+       "type": "string"
+      },
+      "forecast_floor_per_month": {
+       "type": "number"
+      },
+      "possibly_ended_amount_per_month": {
+       "type": "number"
+      },
+      "recurring_payer_count": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "currency",
+      "recurring_payer_count",
+      "amount_per_month",
+      "possibly_ended_amount_per_month",
+      "forecast_floor_per_month"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "unattributed": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "amount": {
+       "type": "number"
+      },
+      "currency": {
+       "type": "string"
+      },
+      "payment_count": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "currency",
+      "payment_count",
+      "amount"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "window": {
+    "additionalProperties": false,
+    "properties": {
+     "from": {
+      "type": "string"
+     },
+     "to": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "from",
+     "to"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "window",
+   "current_month",
+   "measured_through",
+   "scope",
+   "recurring_inflows",
+   "recurring_inflow_count",
+   "recurring_inflows_truncated",
+   "totals",
+   "forecast_inflows",
+   "not_recurring_count",
+   "possible_duplicate_count",
+   "unattributed",
+   "excluded",
+   "partial",
+   "rows_truncated",
+   "rules",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Measure recurring inflows from bank credits"
+}

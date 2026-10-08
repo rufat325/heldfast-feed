@@ -1,0 +1,194 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Get historical daily exchange rates for a currency pair over a date range. ECB publishes on business days only \u2014 weekends and holidays produce no entry, and no date outside the requested range is ever returned, so a range covering only non-publication days comes back with an empty rates map and a notice explaining why. A same-currency pair returns a rate of 1 on each publication day in the range. Inline results are returned as a date\u2192rate map paged at 500 publication days: rate_count is always the total for the requested range, and when a page is cut short the response carries truncated=true and next_start_date \u2014 call again with start_date set to next_start_date and the same end_date for the next page. When DataCanvas is enabled (CANVAS_PROVIDER_TYPE=duckdb) long ranges (>90 days by default) spill to it instead: the response carries spilled=true, a canvas_id, and a table_name \u2014 call fx_dataframe_describe to inspect the staged table, then fx_dataframe_query to run SQL against it. Without DataCanvas long ranges are paged inline (spilled=false) and the notice says so.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "base_currency": {
+    "description": "ISO 4217 base currency code (e.g. USD). Call fx_list_currencies to get valid codes.",
+    "type": "string"
+   },
+   "canvas_id": {
+    "description": "Optional canvas ID from a prior call. Omit on the first call to start a fresh canvas; pass the returned canvas_id to append tables to an existing canvas.",
+    "pattern": "^[A-Za-z0-9_-]{10}$",
+    "type": "string"
+   },
+   "end_date": {
+    "description": "ISO 8601 end date (YYYY-MM-DD). Must be >= start_date. Future dates are not supported.",
+    "type": "string"
+   },
+   "quote_currency": {
+    "description": "ISO 4217 quote currency code (e.g. EUR). Call fx_list_currencies to get valid codes.",
+    "type": "string"
+   },
+   "start_date": {
+    "description": "ISO 8601 start date (YYYY-MM-DD). ECB data starts 1999-01-04. The actual first data point may be later if start_date falls on a weekend/holiday.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "base_currency",
+   "quote_currency",
+   "start_date",
+   "end_date"
+  ],
+  "type": "object"
+ },
+ "name": "fx_get_timeseries",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "base_currency",
+     "quote_currency",
+     "start_date",
+     "end_date",
+     "rates",
+     "rate_count",
+     "truncated",
+     "rate_type",
+     "source",
+     "spilled"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "base_currency": {
+    "description": "Base currency code.",
+    "type": "string"
+   },
+   "canvas_id": {
+    "description": "Canvas ID \u2014 present when spilled is true. Pass to fx_dataframe_describe to inspect the staged table, then to fx_dataframe_query to run SQL.",
+    "type": "string"
+   },
+   "end_date": {
+    "description": "Last publication date in the requested range. Always inside the requested range \u2014 earlier than the requested end when that day had no ECB fix, and equal to it when the series is empty. Later than the last key in rates when truncated is true.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_date_format`: start_date or end_date is not a real calendar date written as YYYY-MM-DD. `unsupported_currency`: base_currency or quote_currency is not in the ECB currency set. `date_out_of_range`: start_date is before 1999-01-04 or end_date is in the future. `invalid_range`: start_date is after end_date. `upstream_no_data`: Both currencies are supported but the ECB published no rates across this range. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_date_format",
+         "unsupported_currency",
+         "date_out_of_range",
+         "invalid_range",
+         "upstream_no_data"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "next_start_date": {
+    "description": "Present only when an inline page was cut short: the first publication date not in rates. Pass it as start_date with the same end_date to get the next page. Absent on the final page.",
+    "type": "string"
+   },
+   "notice": {
+    "description": "Explains a result that would otherwise look broken or incomplete: an empty series (no publication day in the range); an inline page cut short (the start_date to continue from, plus why a long range was not staged when DataCanvas is not configured); or a spilled series (the canvas and table it was staged to, and the tools that read it).",
+    "type": "string"
+   },
+   "quote_currency": {
+    "description": "Quote currency code.",
+    "type": "string"
+   },
+   "rate_count": {
+    "description": "Total publication days in the requested range (the start_date through end_date passed on this call) \u2014 not the number of entries in rates, which is smaller when truncated is true. On a continuation call it counts the days from that start_date onward.",
+    "type": "number"
+   },
+   "rate_type": {
+    "description": "Always \"ECB reference (mid-market)\" \u2014 these are reference rates, not tradeable bid/ask.",
+    "type": "string"
+   },
+   "rates": {
+    "additionalProperties": {
+     "type": "number"
+    },
+    "description": "Date \u2192 rate map in date order, publication days inside the requested range only. Holds every publication day when truncated is false; otherwise the first 500 of an inline page (continue with next_start_date) or the preview of a spilled series (the full series is on the canvas). Empty when the range contains no publication day at all.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "source": {
+    "description": "Always \"ECB via Frankfurter\" \u2014 the upstream data provider.",
+    "type": "string"
+   },
+   "spilled": {
+    "description": "True when the full result was staged on the DataCanvas (range exceeded threshold).",
+    "type": "boolean"
+   },
+   "start_date": {
+    "description": "First publication date in the requested range, and the first key in rates. Always inside the requested range \u2014 later than the requested start when that day had no ECB fix, and equal to it when the series is empty.",
+    "type": "string"
+   },
+   "table_name": {
+    "description": "Canvas table name \u2014 present when spilled is true. Use it as the FROM target in fx_dataframe_query SQL; fx_dataframe_describe lists its columns.",
+    "type": "string"
+   },
+   "truncated": {
+    "description": "True when rates holds only part of the series: an inline page (next_start_date continues it) or a spilled preview (spilled is true). False when rates holds every publication day in the requested range.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Fx Get Timeseries"
+}

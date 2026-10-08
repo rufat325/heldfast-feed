@@ -1,0 +1,1234 @@
+{
+ "_meta": {
+  "ui": {
+   "resourceUri": "ui://well/widget/214f64de"
+  },
+  "ui/resourceUri": "ui://well/widget/214f64de"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Render a caller-computed cash forecast"
+ },
+ "description": "Put a cash forecast YOU computed onto the forecast card.\n\n**This tool measures nothing.** It takes the settled month-end series, the anchor, the burn and the projection you computed, and returns them for rendering. Call it only after you have computed both halves yourself: the month-end totals under your cash scope, and the burn under your stated policy. Never call it to \"get\" a forecast.\n\nWithout `recurring_inflow` the projection is WORST CASE: no revenue arrives, and cash declines by the burn each month until it reaches zero, where it stops. Take the anchor and the burn each to the cent, then each point is `max(0, anchor \u2212 k \u00d7 burn)` for the k-th month after the anchor.\n\nWith `recurring_inflow`, the projection counts the recurring inflow `well_measure_recurring_inflows` measured, and nothing else: each point is `max(0, anchor \u2212 k \u00d7 (burn \u2212 inflow))`, each figure to the cent. An inflow larger than the burn makes the series grow. Pass the `forecast_inflows` entry of the cash's currency as it is; never add a one-off payment, an unpaid invoice or a deal to it. The tool re-derives the series from the amount you state and cannot check where that amount came from. The amount is a floor that holds month by month: only monthly payers that may not have stopped and paid in every month are in it, and quarterly, yearly, month-skipping, ended and no-cadence payers are not.\n\nThe tool re-derives every point from the figures you state here, in cents.\n\n**The card draws the series, the anchor clause and the caveat: the worst-case one, or the recurring-inflow one when `recurring_inflow` is sent.** The cash scope, the burn policy and `partial` are REQUIRED and reach no pixel. All of it comes back in this tool's text result, which is what you write the prose from.\n\nREQUIRED:\n  - `currency`, and `as_of`: the full ISO time of the balances read the series came from\n  - `actuals`: one `{ month, amount }` per month, oldest first, ending on the last month that has ended at `as_of` (UTC). A month no account covered is `null`, never 0, and it stays in the list.\n  - `anchor`: `{ month, amount, basis }`. `closed_month_end` is the latest settled month-end in `actuals`. `current_position` is today's cash when no month has a settled total. It sits on the grid at the last actual month.\n  - `burn`: the POSITIVE monthly magnitude, its currency, `trailing_months`, and the `window` it averaged (`from` inclusive and `to` exclusive, each `YYYY-MM-01`). The window ends with the last actual month.\n  - `months_forward` (at most 12), and `projection`: one `{ month, amount }` per projected month. When the anchor sits before the last actual month, the months between are projected too, so `months_forward` must reach past them.\n  - `cash_scope`: the counted account types, whether unknown ownership was counted, `anchor_missing_accounts` (counted accounts with no reading at a closed-month anchor; 0 under `current_position`), and the four exclusion groups\n  - `burn_policy`: the elected convention and its counts, the exclusions (`internal_transfers` is the sum's `excluded_multi_leg`, `unreadable_rows` its malformed rows), and `unplaceable_count` (the sum's `excluded_no_owned_leg`)\n  - `partial`: the forecast's own floor, which is WIDER than a cash total's `is_floor`. It is checked against `cash_scope` and must be `true` exactly when an account was left out with no readable balance, no rate, OR no reading at the anchor month \u2014 that last one is the forecast's alone, and a caller that forwards its cash total's `is_floor` unchanged is refused on it. It never means a cut-short read: a cut-short balances read or sum stops the run before this call.\n\nOPTIONAL:\n  - `recurring_inflow`: `{ amount, currency, measured_through }`, the `forecast_inflows` entry of `well_measure_recurring_inflows` in the cash's currency, as it is. Leave it out when that measure returned no entry in the cash's currency.\n\nREFUSED rather than rendered, each because your own figures disagree:\n  - a projection point that is not `max(0, anchor \u2212 k \u00d7 burn)` within a cent, or `max(0, anchor \u2212 k \u00d7 (burn \u2212 inflow))` when `recurring_inflow` is sent\n  - a `recurring_inflow` in another currency than the cash, or measured through a month other than the last actual month\n  - a `recurring_inflow` above the burn on an anchor at or below zero: the balance is recovering, which a series clamped at zero cannot draw. Report the overdraft and the inflow instead\n  - a projection that does not start the month after the anchor, skips a month, continues after a zero, or has the wrong length\n  - a projection ending on a month that has already ended. The refusal names which of the three causes fired: the cash ran out (report that), the horizon was too narrow for the gap (widen it), or the gap exceeds every legal horizon (the feed is too far behind to project across)\n  - a cash currency that differs from the burn's\n  - a negative burn, a burn elected \"magnitude\", `signed` elected from no negative rows, or one of `unplaceable_count` and `internal_transfers` null without the other\n  - a `closed_month_end` anchor that is not the latest settled actual, or whose amount differs from it\n  - a `current_position` anchor beside a settled actual, off the last actual month, or with an account missing at it\n  - actual months out of order, repeated, skipped, or ending on any month but the last one that has ended at `as_of`\n  - a burn window that disagrees with `trailing_months`, or ends on a different month than the actuals\n  - a `partial` that disagrees with the floor your own `cash_scope` implies\n  - an `as_of` in the future\n\nThis tool renders its own chart card. Do not re-plot the series with a charting tool.\n\nOPTIONAL, and send it whenever you computed a cash-flow bridge over the same cash:\n  - `cash_bridge` \u2014 `{ unexplained, closing }`, the two terms you sent `well_render_cash_flow_bridge`, in this card's currency. The server applies the bridge's own tolerance and returns `cash_check`. `\"provisional\"`: the bridge does not reconcile, the gap is in `unexplained_gap`, and the card marks the figure Provisional; say so in prose too: the figure stands on cash with an unexplained gap of that amount. `\"reconciled\"`: say nothing about it. Leave `cash_bridge` off when you computed no bridge: the result is `cash_check: \"not_checked\"` and the card marks the figure Not checked.\n\nWhen the token authorizes one workspace, call this directly \u2014 no other tool call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "actuals": {
+    "items": {
+     "properties": {
+      "amount": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "month": {
+       "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+       "type": "string"
+      }
+     },
+     "required": [
+      "month",
+      "amount"
+     ],
+     "type": "object"
+    },
+    "maxItems": 24,
+    "minItems": 1,
+    "type": "array"
+   },
+   "anchor": {
+    "properties": {
+     "amount": {
+      "type": "number"
+     },
+     "basis": {
+      "enum": [
+       "closed_month_end",
+       "current_position"
+      ],
+      "type": "string"
+     },
+     "month": {
+      "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "month",
+     "amount",
+     "basis"
+    ],
+    "type": "object"
+   },
+   "as_of": {
+    "format": "date-time",
+    "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d(?::[0-5]\\d(?:\\.\\d+)?)?(?:Z))$",
+    "type": "string"
+   },
+   "burn": {
+    "properties": {
+     "amount": {
+      "type": "number"
+     },
+     "currency": {
+      "enum": [
+       "USD",
+       "EUR",
+       "GBP",
+       "JPY",
+       "CHF",
+       "CAD",
+       "AUD",
+       "NZD",
+       "SEK",
+       "NOK",
+       "DKK",
+       "PLN",
+       "CZK",
+       "HUF",
+       "RON",
+       "BGN",
+       "HRK",
+       "ISK",
+       "ALL",
+       "BAM",
+       "BYN",
+       "MDL",
+       "MKD",
+       "RSD",
+       "FOK",
+       "GGP",
+       "GIP",
+       "IMP",
+       "JEP",
+       "CNY",
+       "CNH",
+       "KRW",
+       "SGD",
+       "HKD",
+       "TWD",
+       "THB",
+       "MYR",
+       "IDR",
+       "PHP",
+       "VND",
+       "INR",
+       "PKR",
+       "LKR",
+       "BDT",
+       "BND",
+       "BTN",
+       "KHR",
+       "LAK",
+       "MMK",
+       "MNT",
+       "MOP",
+       "MVR",
+       "NPR",
+       "KID",
+       "AED",
+       "SAR",
+       "QAR",
+       "KWD",
+       "BHD",
+       "OMR",
+       "JOD",
+       "ILS",
+       "EGP",
+       "ZAR",
+       "NGN",
+       "KES",
+       "GHS",
+       "MAD",
+       "TND",
+       "DZD",
+       "CVE",
+       "GMD",
+       "GNF",
+       "LRD",
+       "MGA",
+       "MRU",
+       "SHP",
+       "SLE",
+       "SLL",
+       "SSP",
+       "STN",
+       "YER",
+       "MXN",
+       "BRL",
+       "ARS",
+       "CLP",
+       "COP",
+       "PEN",
+       "UYU",
+       "VES",
+       "GTQ",
+       "HNL",
+       "NIO",
+       "CRC",
+       "PAB",
+       "DOP",
+       "JMD",
+       "TTD",
+       "BBD",
+       "XCD",
+       "ANG",
+       "AWG",
+       "BMD",
+       "BOB",
+       "BSD",
+       "BZD",
+       "CUP",
+       "GYD",
+       "HTG",
+       "KYD",
+       "PYG",
+       "SRD",
+       "XCG",
+       "FKP",
+       "FJD",
+       "PGK",
+       "SBD",
+       "TOP",
+       "TVD",
+       "VUV",
+       "WST",
+       "RUB",
+       "TRY",
+       "UAH",
+       "KZT",
+       "UZS",
+       "AZN",
+       "GEL",
+       "AMD",
+       "KGS",
+       "TJS",
+       "TMT",
+       "AFN",
+       "IRR",
+       "IQD",
+       "SYP",
+       "LBP",
+       "LYD",
+       "SDG",
+       "ETB",
+       "UGX",
+       "TZS",
+       "MWK",
+       "ZMW",
+       "BWP",
+       "SZL",
+       "LSL",
+       "NAD",
+       "MUR",
+       "SCR",
+       "KMF",
+       "DJF",
+       "ERN",
+       "SOS",
+       "AOA",
+       "MZN",
+       "ZWL",
+       "ZWG",
+       "BIF",
+       "RWF",
+       "CDF",
+       "XAF",
+       "XOF",
+       "XPF"
+      ],
+      "type": "string"
+     },
+     "trailing_months": {
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     "window": {
+      "properties": {
+       "from": {
+        "pattern": "^\\d{4}-(0[1-9]|1[0-2])-\\d{2}$",
+        "type": "string"
+       },
+       "to": {
+        "pattern": "^\\d{4}-(0[1-9]|1[0-2])-\\d{2}$",
+        "type": "string"
+       }
+      },
+      "required": [
+       "from",
+       "to"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "amount",
+     "currency",
+     "trailing_months",
+     "window"
+    ],
+    "type": "object"
+   },
+   "burn_policy": {
+    "properties": {
+     "convention": {
+      "enum": [
+       "signed",
+       "magnitude"
+      ],
+      "type": "string"
+     },
+     "convention_counts": {
+      "properties": {
+       "negative": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+       },
+       "positive": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+       }
+      },
+      "required": [
+       "negative",
+       "positive"
+      ],
+      "type": "object"
+     },
+     "excluded": {
+      "properties": {
+       "exempt_categories": {
+        "items": {
+         "maxLength": 200,
+         "type": "string"
+        },
+        "maxItems": 100,
+        "type": "array"
+       },
+       "internal_transfers": {
+        "anyOf": [
+         {
+          "maximum": 9007199254740991,
+          "minimum": 0,
+          "type": "integer"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "unreadable_rows": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+       }
+      },
+      "required": [
+       "internal_transfers",
+       "exempt_categories",
+       "unreadable_rows"
+      ],
+      "type": "object"
+     },
+     "unplaceable_count": {
+      "anyOf": [
+       {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "convention",
+     "convention_counts",
+     "excluded",
+     "unplaceable_count"
+    ],
+    "type": "object"
+   },
+   "cash_bridge": {
+    "additionalProperties": false,
+    "description": "The cash-flow bridge over the same cash, when you computed one. The server decides whether it reconciles and returns the figure's `cash_check`. Leave it off when you computed no bridge: the figure is then `not_checked`.",
+    "properties": {
+     "closing": {
+      "description": "The bridge's `closing.amount`, exactly as you sent it to `well_render_cash_flow_bridge`, in this card's currency.",
+      "type": "number"
+     },
+     "unexplained": {
+      "description": "The bridge's SIGNED `unexplained` gap, exactly as you sent it to `well_render_cash_flow_bridge`, in this card's currency.",
+      "type": "number"
+     }
+    },
+    "required": [
+     "unexplained",
+     "closing"
+    ],
+    "type": "object"
+   },
+   "cash_scope": {
+    "properties": {
+     "account_types": {
+      "items": {
+       "enum": [
+        "deposit",
+        "credit",
+        "loan",
+        "investment",
+        "payroll",
+        "other"
+       ],
+       "type": "string"
+      },
+      "minItems": 1,
+      "type": "array"
+     },
+     "anchor_missing_accounts": {
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "counted_unknown_ownership": {
+      "type": "boolean"
+     },
+     "excluded": {
+      "properties": {
+       "no_fx_rate": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+       },
+       "no_readable_balance": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+       },
+       "not_owned": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+       },
+       "out_of_scope_type": {
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+       }
+      },
+      "required": [
+       "not_owned",
+       "out_of_scope_type",
+       "no_readable_balance",
+       "no_fx_rate"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "account_types",
+     "counted_unknown_ownership",
+     "anchor_missing_accounts",
+     "excluded"
+    ],
+    "type": "object"
+   },
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "currency": {
+    "enum": [
+     "USD",
+     "EUR",
+     "GBP",
+     "JPY",
+     "CHF",
+     "CAD",
+     "AUD",
+     "NZD",
+     "SEK",
+     "NOK",
+     "DKK",
+     "PLN",
+     "CZK",
+     "HUF",
+     "RON",
+     "BGN",
+     "HRK",
+     "ISK",
+     "ALL",
+     "BAM",
+     "BYN",
+     "MDL",
+     "MKD",
+     "RSD",
+     "FOK",
+     "GGP",
+     "GIP",
+     "IMP",
+     "JEP",
+     "CNY",
+     "CNH",
+     "KRW",
+     "SGD",
+     "HKD",
+     "TWD",
+     "THB",
+     "MYR",
+     "IDR",
+     "PHP",
+     "VND",
+     "INR",
+     "PKR",
+     "LKR",
+     "BDT",
+     "BND",
+     "BTN",
+     "KHR",
+     "LAK",
+     "MMK",
+     "MNT",
+     "MOP",
+     "MVR",
+     "NPR",
+     "KID",
+     "AED",
+     "SAR",
+     "QAR",
+     "KWD",
+     "BHD",
+     "OMR",
+     "JOD",
+     "ILS",
+     "EGP",
+     "ZAR",
+     "NGN",
+     "KES",
+     "GHS",
+     "MAD",
+     "TND",
+     "DZD",
+     "CVE",
+     "GMD",
+     "GNF",
+     "LRD",
+     "MGA",
+     "MRU",
+     "SHP",
+     "SLE",
+     "SLL",
+     "SSP",
+     "STN",
+     "YER",
+     "MXN",
+     "BRL",
+     "ARS",
+     "CLP",
+     "COP",
+     "PEN",
+     "UYU",
+     "VES",
+     "GTQ",
+     "HNL",
+     "NIO",
+     "CRC",
+     "PAB",
+     "DOP",
+     "JMD",
+     "TTD",
+     "BBD",
+     "XCD",
+     "ANG",
+     "AWG",
+     "BMD",
+     "BOB",
+     "BSD",
+     "BZD",
+     "CUP",
+     "GYD",
+     "HTG",
+     "KYD",
+     "PYG",
+     "SRD",
+     "XCG",
+     "FKP",
+     "FJD",
+     "PGK",
+     "SBD",
+     "TOP",
+     "TVD",
+     "VUV",
+     "WST",
+     "RUB",
+     "TRY",
+     "UAH",
+     "KZT",
+     "UZS",
+     "AZN",
+     "GEL",
+     "AMD",
+     "KGS",
+     "TJS",
+     "TMT",
+     "AFN",
+     "IRR",
+     "IQD",
+     "SYP",
+     "LBP",
+     "LYD",
+     "SDG",
+     "ETB",
+     "UGX",
+     "TZS",
+     "MWK",
+     "ZMW",
+     "BWP",
+     "SZL",
+     "LSL",
+     "NAD",
+     "MUR",
+     "SCR",
+     "KMF",
+     "DJF",
+     "ERN",
+     "SOS",
+     "AOA",
+     "MZN",
+     "ZWL",
+     "ZWG",
+     "BIF",
+     "RWF",
+     "CDF",
+     "XAF",
+     "XOF",
+     "XPF"
+    ],
+    "type": "string"
+   },
+   "months_forward": {
+    "exclusiveMinimum": 0,
+    "maximum": 12,
+    "type": "integer"
+   },
+   "partial": {
+    "type": "boolean"
+   },
+   "projection": {
+    "items": {
+     "properties": {
+      "amount": {
+       "type": "number"
+      },
+      "month": {
+       "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+       "type": "string"
+      }
+     },
+     "required": [
+      "month",
+      "amount"
+     ],
+     "type": "object"
+    },
+    "maxItems": 12,
+    "minItems": 1,
+    "type": "array"
+   },
+   "recurring_inflow": {
+    "additionalProperties": false,
+    "properties": {
+     "amount": {
+      "exclusiveMinimum": 0,
+      "type": "number"
+     },
+     "currency": {
+      "enum": [
+       "USD",
+       "EUR",
+       "GBP",
+       "JPY",
+       "CHF",
+       "CAD",
+       "AUD",
+       "NZD",
+       "SEK",
+       "NOK",
+       "DKK",
+       "PLN",
+       "CZK",
+       "HUF",
+       "RON",
+       "BGN",
+       "HRK",
+       "ISK",
+       "ALL",
+       "BAM",
+       "BYN",
+       "MDL",
+       "MKD",
+       "RSD",
+       "FOK",
+       "GGP",
+       "GIP",
+       "IMP",
+       "JEP",
+       "CNY",
+       "CNH",
+       "KRW",
+       "SGD",
+       "HKD",
+       "TWD",
+       "THB",
+       "MYR",
+       "IDR",
+       "PHP",
+       "VND",
+       "INR",
+       "PKR",
+       "LKR",
+       "BDT",
+       "BND",
+       "BTN",
+       "KHR",
+       "LAK",
+       "MMK",
+       "MNT",
+       "MOP",
+       "MVR",
+       "NPR",
+       "KID",
+       "AED",
+       "SAR",
+       "QAR",
+       "KWD",
+       "BHD",
+       "OMR",
+       "JOD",
+       "ILS",
+       "EGP",
+       "ZAR",
+       "NGN",
+       "KES",
+       "GHS",
+       "MAD",
+       "TND",
+       "DZD",
+       "CVE",
+       "GMD",
+       "GNF",
+       "LRD",
+       "MGA",
+       "MRU",
+       "SHP",
+       "SLE",
+       "SLL",
+       "SSP",
+       "STN",
+       "YER",
+       "MXN",
+       "BRL",
+       "ARS",
+       "CLP",
+       "COP",
+       "PEN",
+       "UYU",
+       "VES",
+       "GTQ",
+       "HNL",
+       "NIO",
+       "CRC",
+       "PAB",
+       "DOP",
+       "JMD",
+       "TTD",
+       "BBD",
+       "XCD",
+       "ANG",
+       "AWG",
+       "BMD",
+       "BOB",
+       "BSD",
+       "BZD",
+       "CUP",
+       "GYD",
+       "HTG",
+       "KYD",
+       "PYG",
+       "SRD",
+       "XCG",
+       "FKP",
+       "FJD",
+       "PGK",
+       "SBD",
+       "TOP",
+       "TVD",
+       "VUV",
+       "WST",
+       "RUB",
+       "TRY",
+       "UAH",
+       "KZT",
+       "UZS",
+       "AZN",
+       "GEL",
+       "AMD",
+       "KGS",
+       "TJS",
+       "TMT",
+       "AFN",
+       "IRR",
+       "IQD",
+       "SYP",
+       "LBP",
+       "LYD",
+       "SDG",
+       "ETB",
+       "UGX",
+       "TZS",
+       "MWK",
+       "ZMW",
+       "BWP",
+       "SZL",
+       "LSL",
+       "NAD",
+       "MUR",
+       "SCR",
+       "KMF",
+       "DJF",
+       "ERN",
+       "SOS",
+       "AOA",
+       "MZN",
+       "ZWL",
+       "ZWG",
+       "BIF",
+       "RWF",
+       "CDF",
+       "XAF",
+       "XOF",
+       "XPF"
+      ],
+      "type": "string"
+     },
+     "measured_through": {
+      "pattern": "^\\d{4}-(0[1-9]|1[0-2])$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "amount",
+     "currency",
+     "measured_through"
+    ],
+    "type": "object"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several: this read reports one workspace's own figures and will not choose which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   },
+   "workspace_scope": {
+    "description": "Restrict this call to the family: the token's primary workspace plus the company workspaces under it that you are a member of. Unrelated authorized workspaces drop out of the read; row reads merge across the family, while a per-workspace figure still reports exactly one workspace.",
+    "enum": [
+     "family"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "currency",
+   "as_of",
+   "actuals",
+   "anchor",
+   "burn",
+   "months_forward",
+   "projection",
+   "cash_scope",
+   "burn_policy",
+   "partial"
+  ],
+  "type": "object"
+ },
+ "name": "well_render_cash_forecast",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "anchor": {
+    "additionalProperties": false,
+    "properties": {
+     "amount": {
+      "type": "number"
+     },
+     "basis": {
+      "enum": [
+       "closed_month_end",
+       "current_position"
+      ],
+      "type": "string"
+     },
+     "month": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "month",
+     "amount",
+     "basis"
+    ],
+    "type": "object"
+   },
+   "as_of": {
+    "type": "string"
+   },
+   "burn": {
+    "additionalProperties": false,
+    "properties": {
+     "amount": {
+      "type": "number"
+     },
+     "currency": {
+      "type": "string"
+     },
+     "trailing_months": {
+      "type": "number"
+     },
+     "window": {
+      "additionalProperties": false,
+      "properties": {
+       "from": {
+        "type": "string"
+       },
+       "to": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "from",
+       "to"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "amount",
+     "currency",
+     "trailing_months",
+     "window"
+    ],
+    "type": "object"
+   },
+   "burn_policy": {
+    "additionalProperties": false,
+    "properties": {
+     "convention": {
+      "type": "string"
+     },
+     "convention_counts": {
+      "additionalProperties": false,
+      "properties": {
+       "negative": {
+        "type": "number"
+       },
+       "positive": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "negative",
+       "positive"
+      ],
+      "type": "object"
+     },
+     "excluded": {
+      "additionalProperties": false,
+      "properties": {
+       "exempt_categories": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "internal_transfers": {
+        "anyOf": [
+         {
+          "type": "number"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "unreadable_rows": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "internal_transfers",
+       "exempt_categories",
+       "unreadable_rows"
+      ],
+      "type": "object"
+     },
+     "unplaceable_count": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     }
+    },
+    "required": [
+     "convention",
+     "convention_counts",
+     "excluded",
+     "unplaceable_count"
+    ],
+    "type": "object"
+   },
+   "cash_check": {
+    "enum": [
+     "reconciled",
+     "provisional",
+     "not_checked"
+    ],
+    "type": "string"
+   },
+   "cash_scope": {
+    "additionalProperties": false,
+    "properties": {
+     "account_types": {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "anchor_missing_accounts": {
+      "type": "number"
+     },
+     "counted_unknown_ownership": {
+      "type": "boolean"
+     },
+     "excluded": {
+      "additionalProperties": false,
+      "properties": {
+       "no_fx_rate": {
+        "type": "number"
+       },
+       "no_readable_balance": {
+        "type": "number"
+       },
+       "not_owned": {
+        "type": "number"
+       },
+       "out_of_scope_type": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "not_owned",
+       "out_of_scope_type",
+       "no_readable_balance",
+       "no_fx_rate"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "account_types",
+     "counted_unknown_ownership",
+     "anchor_missing_accounts",
+     "excluded"
+    ],
+    "type": "object"
+   },
+   "computed_by": {
+    "const": "caller",
+    "type": "string"
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "currency": {
+    "type": "string"
+   },
+   "entries": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "actuals": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "month": {
+       "type": "string"
+      },
+      "projection": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "month",
+      "actuals",
+      "projection"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "months_forward": {
+    "type": "number"
+   },
+   "newly_connected": {
+    "description": "Tools that connected to this workspace since the last result and that no session was told about yet, oldest first. Present only when at least one tool is new. Start the reply with one line per entry, in the person's language: \"<name> is connected.\". Never fold several entries into one sentence. Each entry comes back once, on one result only: never repeat its line later.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "partial": {
+    "type": "boolean"
+   },
+   "recurring_inflow": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "amount": {
+        "type": "number"
+       },
+       "currency": {
+        "type": "string"
+       },
+       "measured_through": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "amount",
+       "currency",
+       "measured_through"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "unexplained_gap": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   }
+  },
+  "required": [
+   "entries",
+   "currency",
+   "as_of",
+   "anchor",
+   "burn",
+   "months_forward",
+   "cash_scope",
+   "burn_policy",
+   "partial",
+   "computed_by",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Render a caller-computed cash forecast"
+}

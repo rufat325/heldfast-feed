@@ -1,0 +1,43 @@
+{
+ "description": "Use for any deploy intent: 'publish', 'deploy', 'ship', 'host this', 'put this online'. Always follow `recovery.nextAction` exactly on every response \u2014 never regex-parse summaries. MCP defaults to async (`waitForLive=false`) unless the user asks to block; resume with percher_wait_for_deploy. Do NOT use for unknown failures or 'why is my app broken?' \u2014 call percher_doctor.\n\nReturns the live URL on success or a `recovery.nextAction` on failure. Replaces percher_login/percher_init for end-to-end flows.\n\nUse when: you have the project's files on local disk (Claude Code, a terminal) \u2014 this reads your cwd. Not when: no local filesystem (a browser session) \u2014 the hosted connector's publish tools handle inline files / public-repo URLs / connected repos there. Guide: percher.app/docs/hosted-mcp.\n\n### Inputs\n  - `dryRun` \u2014 verify bundle without uploading; consumes no slot.\n  - `check` \u2014 validation deploy: build \u2192 start \u2192 health \u2192 teardown (no swap/route). Shares live managed PocketBase and /app/data; writes remain after teardown. Use a separate app for isolated data. Runs code; dryRun is manifest-only. Consumes PREVIEW quota. Success: `status: 'check_passed'`, `recovery.nextAction: 'none'`, no URL.\n  - `preview` \u2014 <app>--p-<slug>.percher.run; keeps the live version. Shares managed PocketBase and /app/data with live; writes remain after discard. Use a separate app for isolated data. Free: 1 slot/app, auto-rotates (`replacedPreview=true`). Paid: parallel previews; explicit discard at the limit.\n  - `force` \u2014 skip suspicious-bundle warnings.\n  - `message` \u2014 note shown in deploy history.\n  - `noCache` \u2014 skip image cache, force fresh build. Use when 'my changes aren't showing up'. Response `cacheStatus` tells you which path ran: `image_reused` (no build, prior image re-tagged \u2014 re-run with `noCache: true` if changes aren't reflected), `layer_hit` (fresh build, BuildKit reused most layers), or `fresh` (fresh build, no meaningful cache). Legacy `cacheHit` boolean is `true` iff `cacheStatus === 'image_reused'`.\n  - `waitForLive` \u2014 MCP defaults to `false`. Pass `true` only if the user asks to block until live.\n\n### Recovery actions (all values of `recovery.nextAction`)\n  - `none` \u2192 success.\n  - `open_login` \u2192 call percher_login.\n  - `wait_auth` \u2192 MCP-only. status='auth_pending' \u2014 call percher_wait_for_auth with `recovery.args` ({ deviceCode, publishArgs, pollIntervalSec }) to short-poll login + resume publish. Tarball was NOT packed; the resume call does the packing.\n  - `set_env_vars` \u2192 ask the user for each value in `recovery.args.keys`, then percher_env_set with `values`. Slot refunded; retry is safe.\n  - `run_doctor` \u2192 call percher_doctor with `recovery.args` ({ app, deployId?, mode? }) for any ambiguous failure. Follow its `recovery.nextAction` recursively. Don't strip `mode`/`deployId` \u2014 load-bearing.\n  - `wait_deploy` \u2192 call percher_wait_for_deploy with `recovery.args` ({ app, deployId, timeoutSeconds }).\n  - `inspect_build_log` \u2192 call percher_deploys_inspect with `recovery.args` ({ id, app }); never percher_logs (runtime only). Only emitted after percher_doctor hands off.\n  - `fix_problems` \u2192 edit the files in `recovery.problems`.\n  - `retry` \u2192 safe to call percher_publish again (transient infra).\n  - `fix_config` \u2192 percher.toml invalid; ask user or auto-repair.\n  - `ask_user` \u2192 surface the explanation and let the user decide.\n\n### Quota notes\n  - Free: 50 live + 25 preview/day. Starter: 100/50. Maker: 200/100. max: 1000/500. Reset at 00:00 UTC.\n  - When `recovery.reasonCode === 'quota_exceeded'`, surface `recovery.prompt` \u2014 DO NOT retry until UTC midnight. Live and preview counters are independent (a live 429 still allows preview deploys).\n\n### Examples\n\n1) Async queued (the MCP default) \u2014 resume with percher_wait_for_deploy\nIn:  {}\nOut: { status: 'queued', deployId: 'dep_abc', recovery: { nextAction: 'wait_deploy', suggestedTool: 'percher_wait_for_deploy', args: { app: 'my-app', deployId: 'dep_abc', timeoutSeconds: 120 }, retryable: false } }\n\n2) Not authenticated \u2014 call percher_login next\nIn:  {}\nOut: { status: 'needs_login', loginUrl: 'https://percher.app/cli?code=ABCD-1234', recovery: { nextAction: 'open_login', suggestedTool: 'percher_login', retryable: false } }\n\n3) Missing env vars \u2014 ask the user, then percher_env_set (slot refunded)\nIn:  {}\nOut: { status: 'failed', error: { errorClass: 'missing_env', missingEnvVars: ['ANTHROPIC_API_KEY'] }, recovery: { nextAction: 'set_env_vars', suggestedTool: 'percher_env_set', retryable: false, args: { keys: ['ANTHROPIC_API_KEY'] } } }\n\n4) Quota reached \u2014 surface recovery.prompt; do NOT retry\nIn:  {}\nOut: { status: 'failed', recovery: { nextAction: 'ask_user', retryable: false, reasonCode: 'quota_exceeded', prompt: 'Daily live-deploy quota reached (50/50). Resets 2026-04-30T00:00:00.000Z. Wait, deploy a preview, or upgrade at https://percher.app/settings.' } }\n\n5) Sync success (waitForLive=true) \u2014 live URL ready, useful build/cache fields\nIn:  { waitForLive: true }\nOut: { status: 'live', url: 'https://my-app.percher.run', deployId: 'dep_abc', timing: { totalSeconds: 42 }, cacheStatus: 'fresh', cacheHit: false, bundle: { fileCount: 23, sizeBytes: 1240000 } }\n\n6) Dry run \u2014 verify bundle without uploading; no quota slot consumed\nIn:  { dryRun: true }\nOut: { status: 'dry_run_ok', bundle: { fileCount: 23, sizeBytes: 1240000 }, recovery: { nextAction: 'none', retryable: false } }\n\n7) Auth pending (MCP-only) \u2014 pre-fetched device code; resume with percher_wait_for_auth\nIn:  {}\nOut: { status: 'auth_pending', loginUrl: 'https://percher.app/cli?code=ABCD', deviceCode: '<opaque>', expiresAt: '...', recovery: { nextAction: 'wait_auth', suggestedTool: 'percher_wait_for_auth', args: { deviceCode: '<opaque>', publishArgs: {}, pollIntervalSec: 5 }, retryable: false } }",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "anonymous": {
+    "description": "Publish WITHOUT an account. Creates a throwaway anonymous app that expires in 72h unless claimed (percher_claim_app). The app runs with no outbound network, no database, and no env vars until claimed. Only honored when the caller has no token; ignored once signed in. Server-gated \u2014 fails with ANON_DEPLOYS_DISABLED if the instance hasn't enabled it.",
+    "type": "boolean"
+   },
+   "check": {
+    "description": "Validation deploy: build \u2192 start \u2192 health, then tear the container down (no swap, no route). Keeps the live version running, but executes code against shared managed PocketBase and /app/data; writes remain after teardown. Use a separate app for isolated data. Consumes the PREVIEW daily quota. Beyond a manifest-only dry run \u2014 it actually builds and runs. On success: status='check_passed'.",
+    "type": "boolean"
+   },
+   "dryRun": {
+    "description": "Show what would be deployed (file count, bytes, top files) without uploading or building. Useful for verifying the bundle before a real deploy.",
+    "type": "boolean"
+   },
+   "force": {
+    "description": "Deploy even if the bundle omits git-tracked directories; also silences the size and missing-build-env warnings",
+    "type": "boolean"
+   },
+   "message": {
+    "description": "Deploy note (visible in deploy history and version timeline)",
+    "type": "string"
+   },
+   "noCache": {
+    "description": "Skip the image-cache lookup and force a fresh build. Use this when you suspect the cached image doesn't reflect your latest source \u2014 the new build's resulting image still gets cached, so future deploys benefit.",
+    "type": "boolean"
+   },
+   "preview": {
+    "description": "Deploy as preview without replacing the live version. Shares managed PocketBase and /app/data with live; writes remain after discard. Use a separate app for isolated data.",
+    "type": "boolean"
+   },
+   "waitForLive": {
+    "description": "If true (default), publish blocks until the deploy is live or failed. If false, publish returns as soon as the deploy is queued and the agent can resume with percher_wait_for_deploy. Recommended for AI agents \u2014 gives back control quickly with a deployId so they can decide between waiting, asking the user, or working on something else.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "name": "percher_publish"
+}

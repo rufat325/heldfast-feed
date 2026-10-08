@@ -1,0 +1,333 @@
+{
+ "annotations": {
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Fetches data from a leaf route with optional facet filters, date range, frequency, and column selection. Use eia_describe_route first to discover valid facet IDs, facet values, column IDs, and frequency codes. Data values are strings in the response (EIA API returns all numeric values as strings, e.g. \"9.13\"); cast to DOUBLE in SQL when arithmetic is needed. Returns a preview inline and stages nothing by default \u2014 one upstream request, whatever total says. Pass stage: true to also page past the preview and stage the accumulated set as a DataCanvas table, then pass the returned dataset name to eia_dataframe_query for SQL. Every dataset a tenant stages lands in the same canvas, so tables from different routes cross-join by name with nothing to thread between calls.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "columns": {
+    "description": "Data column IDs to return (reduces payload). Defaults to all. IDs discoverable via eia_describe_route.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "end": {
+    "description": "Period end (same format as start).",
+    "type": "string"
+   },
+   "filters": {
+    "additionalProperties": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     ]
+    },
+    "description": "Facet filters keyed by facet ID (e.g. { \"stateid\": \"TX\", \"sectorid\": [\"RES\", \"COM\"] }). Use the facets[].id values returned by eia_describe_route as keys here.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "frequency": {
+    "description": "Aggregation frequency ID (e.g. \"monthly\", \"annual\"). Defaults to route default. Valid IDs from eia_describe_route.",
+    "type": "string"
+   },
+   "length": {
+    "default": 100,
+    "description": "Rows in the inline preview (default 100, max 5000 per EIA limit). With stage: true, staging is not bounded by this \u2014 it pages past the preview on its own.",
+    "maximum": 5000,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "offset": {
+    "default": 0,
+    "description": "Row offset into the matching set (default 0). An offset at or beyond total returns zero rows.",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "route": {
+    "description": "Leaf route path (e.g. \"electricity/retail-sales\", \"steo\"). Discoverable via eia_browse_routes or eia_search_routes. Leading, trailing, and doubled slashes are stripped, so an EIA-doc spelling like \"/electricity/retail-sales/\" resolves to the same route.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "sort": {
+    "description": "Result ordering.",
+    "items": {
+     "description": "A sort criterion.",
+     "properties": {
+      "column": {
+       "description": "Column ID to sort by.",
+       "type": "string"
+      },
+      "direction": {
+       "description": "Sort direction.",
+       "enum": [
+        "asc",
+        "desc"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "column",
+      "direction"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "stage": {
+    "default": false,
+    "description": "Stage the matching rows as a DataCanvas table for SQL (default false). Off, the call makes one upstream request and returns the preview alone. On, the service pages past the preview up to EIA_CANVAS_MAX_ROWS and registers the accumulated rows, returning the handle in dataset \u2014 several extra upstream requests and seconds of latency on a large route, so turn it on when moving to analysis, not while exploring. Requires a canvas (CANVAS_PROVIDER_TYPE=duckdb); without one nothing is staged whatever this is set to.",
+    "type": "boolean"
+   },
+   "start": {
+    "description": "Period start in the route date format (e.g. \"2020-01\" for monthly, \"2020\" for annual). Format from eia_describe_route.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "route"
+  ],
+  "type": "object"
+ },
+ "name": "eia_query_route",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "route",
+     "data",
+     "total",
+     "returned_count",
+     "frequency",
+     "date_format",
+     "effectiveRoute",
+     "totalCount",
+     "returnedCount",
+     "appliedOffset",
+     "appliedLength"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "appliedColumns": {
+    "description": "Echo of the column projection as applied, when columns were provided.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "appliedEnd": {
+    "description": "Echo of the end period as applied, when an end was provided.",
+    "type": "string"
+   },
+   "appliedFilters": {
+    "additionalProperties": {
+     "anyOf": [
+      {
+       "type": "string"
+      },
+      {
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      }
+     ]
+    },
+    "description": "Facet filters applied to the query, when provided.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "appliedFrequency": {
+    "description": "Echo of the frequency as applied, when a frequency was provided.",
+    "type": "string"
+   },
+   "appliedLength": {
+    "description": "Preview row count requested for this call.",
+    "type": "number"
+   },
+   "appliedOffset": {
+    "description": "Row offset applied to the query \u2014 the cause when a page comes back empty.",
+    "type": "number"
+   },
+   "appliedSort": {
+    "description": "Echo of the result ordering as applied, when a sort was provided \u2014 the ordering that decided which rows a capped stage holds.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A sort criterion as applied.",
+     "properties": {
+      "column": {
+       "description": "Column ID sorted by.",
+       "type": "string"
+      },
+      "direction": {
+       "description": "Sort direction.",
+       "enum": [
+        "asc",
+        "desc"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "column",
+      "direction"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "appliedStart": {
+    "description": "Echo of the start period as applied, when a start was provided.",
+    "type": "string"
+   },
+   "canvas_preview_note": {
+    "description": "Human-readable note when total exceeds the inline preview. On a stage: true call it names how many rows actually reached the canvas table, and where in the matching set those rows sit whenever the stage does not start at row 1; when staging also stopped short of total (the EIA_CANVAS_MAX_ROWS cap, or an upstream page that did not return), it says so and gives the offset to resume from. Where staging was not requested it places the inline page against total and names stage: true as the way to get SQL access to the rest; where no canvas is configured at all, staging is unavailable, so it names offset paging and CANVAS_PROVIDER_TYPE=duckdb instead.",
+    "type": "string"
+   },
+   "data": {
+    "description": "Preview rows. All numeric values are strings per the EIA API (e.g. \"9.13\"). Cast to DOUBLE in SQL for arithmetic: CAST(value AS DOUBLE). Per-column units appear as {col}-units fields inline in each row. Keys are dynamic column IDs from the EIA route.",
+    "items": {
+     "additionalProperties": {},
+     "description": "A single data row with dynamic column keys.",
+     "properties": {},
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "dataset": {
+    "description": "df_<id> table handle for the registered dataset \u2014 pass directly to eia_dataframe_query SQL (SELECT ... FROM df_<id>). Present only on a stage: true call against a deployment with a canvas configured; absent otherwise, since nothing was staged. Every dataset a tenant stages shares one canvas, so handles from different routes join directly.",
+    "type": "string"
+   },
+   "date_format": {
+    "description": "Period format for the returned data (e.g. \"YYYY-MM\").",
+    "type": "string"
+   },
+   "effectiveRoute": {
+    "description": "The route path that was queried.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `route_not_found`: Route does not exist in the EIA taxonomy. `route_not_queryable`: Route is a category node with sub-routes, not a queryable leaf. `invalid_facet`: An unknown facet key was used in filters. `invalid_column`: An unknown data column ID was passed in columns. `invalid_frequency`: An unknown frequency code was passed. `invalid_sort`: A sort entry named a column the route does not sort by. `invalid_period`: start or end was not in a period format the route accepts. `no_data`: Date range is inverted (start is after end). `rate_limited`: EIA rate limit hit (OVER_RATE_LIMIT). Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "route_not_found",
+         "route_not_queryable",
+         "invalid_facet",
+         "invalid_column",
+         "invalid_frequency",
+         "invalid_sort",
+         "invalid_period",
+         "no_data",
+         "rate_limited"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "frequency": {
+    "description": "Frequency of the returned data.",
+    "type": "string"
+   },
+   "notice": {
+    "description": "Informational message when the response carries no rows \u2014 either zero rows matched the filters (broaden the query) or offset paged past the last row (reduce offset below total).",
+    "type": "string"
+   },
+   "returnedCount": {
+    "description": "Rows in this response. When returnedCount < totalCount, use offset or canvas for the rest.",
+    "type": "number"
+   },
+   "returned_count": {
+    "description": "Number of rows in this response. When returned_count < total, use offset pagination or DataCanvas for the rest.",
+    "type": "number"
+   },
+   "route": {
+    "description": "The route path queried, in canonical spelling \u2014 any leading, trailing, or doubled slashes the input carried are stripped. Reusable verbatim in a follow-up call.",
+    "type": "string"
+   },
+   "total": {
+    "description": "Total matching rows in the EIA dataset for this query (may exceed returned rows when pagination or spillover applies).",
+    "type": "number"
+   },
+   "totalCount": {
+    "description": "Total matching rows in the EIA dataset.",
+    "type": "number"
+   },
+   "truncation_warning": {
+    "description": "Upstream advisories forwarded verbatim from EIA's warnings[], joined with '; ' when more than one applies. These describe the inline page \u2014 EIA's \"incomplete return\" entry fires whenever the requested length is under total, at any size \u2014 not a 5,000-row ceiling on this response. Absent when the response already accounts for the gap the advisory names (the staged table reaches the last row, notice explains the empty page, or canvas_preview_note places the inline page against total because nothing was staged).",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Query EIA Route Data"
+}

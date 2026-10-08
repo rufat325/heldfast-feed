@@ -1,0 +1,541 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "Prepare one unpaid reservation and binding offer for an eligible new ride only after the customer explicitly requests it. Use quote_ride for price alone, or prepare_booking_change for an existing booking. Public offer preparation needs no account; private booking access remains separately authorized.\n\nPair caller-generated submissionId and private resumeToken with one unchanged ride, contact, locale, service selection and supplied partner capability. Changing language or recipient conflicts; it does not edit the original offer. Keep that pair for retries and get_offer_status; never create another pair merely to escape pending, ambiguous or conflict. Contact supplies a reachable recipient, not booking-access authority.\n\nReview and explicitly confirm the bound offer via checkoutUrl, then use get_offer_status with the original pair to read the outcome. Wait retryAfterSeconds when pending or rate_limited. The resume proof lasts 24 hours from first claimed intake; offer expiry is separate. prepared returns review links; available supplies this booking's identifiers for its customer-authorized lifecycle. This call does not charge or confirm a booking.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "contact": {
+    "additionalProperties": false,
+    "description": "Customer/booker contact for this explicitly requested offer: email OR E.164 phone is required. Contact does not authorize private booking/history access.",
+    "properties": {
+     "email": {
+      "description": "Reachable customer/booker email, at most 254 characters; required if no phone is supplied.",
+      "format": "email",
+      "maxLength": 254,
+      "pattern": "^(?:[A-Za-z0-9_'+\\-]+\\.)*[A-Za-z0-9_'+\\-]*[A-Za-z0-9_+-]@(?:[A-Za-z0-9][A-Za-z0-9\\-]*\\.)+[A-Za-z]{2,}$",
+      "type": "string"
+     },
+     "fullName": {
+      "description": "Optional customer/booker full name, 2\u2013120 characters.",
+      "maxLength": 120,
+      "minLength": 2,
+      "type": "string"
+     },
+     "phone": {
+      "description": "Reachable international E.164 phone, + followed by 7\u201315 digits, no spaces; required if no email is supplied.",
+      "pattern": "^\\+[1-9][0-9]{6,14}$",
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "distributionPartnerCapability": {
+    "description": "Optional existing opaque dp_live_ capability issued to an approved distribution partner. Omit for normal customers; do not create or guess one.",
+    "pattern": "^dp_live_[a-f0-9]{64}$",
+    "type": "string"
+   },
+   "firstTouchTrackingToken": {
+    "description": "Optional existing server-issued first-touch UUID token for this tenant and consented attribution. Omit if none; never invent a token or source.",
+    "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+    "type": "string"
+   },
+   "locale": {
+    "default": "en",
+    "description": "Use the customer's requested language for text and booking links: en by default, de for German. Preserve it on retries; pickup times stay in the provider time zone.",
+    "enum": [
+     "de",
+     "en"
+    ],
+    "type": "string"
+   },
+   "offerKey": {
+    "description": "Optional existing published provider/supplier offer key. Selects its configured service location; it is not a customer bookingKey or bookingReference and grants no booking access.",
+    "pattern": "^[a-z0-9][a-z0-9_-]{0,79}$",
+    "type": "string"
+   },
+   "offerRequested": {
+    "const": true,
+    "description": "Must be true only after the customer explicitly requests an offer; a price question alone is insufficient consent.",
+    "type": "boolean"
+   },
+   "resumeToken": {
+    "description": "Caller-generated private 64-character hexadecimal secret for this submission (32 random bytes). Keep its original submissionId pair. The stored resume proof expires 24 hours after first claimed intake; unchanged retries do not renew it. This is separate from offer.expiresAt and is not an account credential.",
+    "pattern": "^[a-f0-9]{64}$",
+    "type": "string"
+   },
+   "ride": {
+    "additionalProperties": false,
+    "description": "Ride facts with distinct pickup/destination and valid local dates/times. Return requires returnDate/returnTime after pickup; one_way omits both. Hourly requires one_way and hours; transfers omit hours.",
+    "properties": {
+     "date": {
+      "description": "Service date as YYYY-MM-DD in the provider timeZone returned by get_service_options; resolve relative dates first.",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "type": "string"
+     },
+     "destination": {
+      "description": "Destination distinct from pickup, with city/municipality or postcode; e.g. M\u00fcnchen Hauptbahnhof, 80335 M\u00fcnchen. For hourly service describe the planned route or As directed.",
+      "maxLength": 240,
+      "minLength": 2,
+      "type": "string"
+     },
+     "flightNumber": {
+      "description": "Flight number for an airport pickup, such as LH123; omit when not applicable.",
+      "maxLength": 240,
+      "minLength": 1,
+      "type": "string"
+     },
+     "hours": {
+      "description": "Booked duration for hourly service; omit for transfers.",
+      "maximum": 24,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "luggage": {
+      "description": "Luggage count/type or fit requirements; unusual luggage may require review.",
+      "maxLength": 240,
+      "minLength": 1,
+      "type": "string"
+     },
+     "passengers": {
+      "description": "Total people travelling; determines vehicle requirements, not availability or acceptance.",
+      "maximum": 60,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "pickup": {
+      "description": "Pickup address or named place with city/municipality or postcode; e.g. Flughafen M\u00fcnchen (MUC), 85356 M\u00fcnchen-Flughafen.",
+      "maxLength": 240,
+      "minLength": 2,
+      "type": "string"
+     },
+     "returnDate": {
+      "description": "Return pickup date in the same local format as date, in the provider timeZone; provide only for return trips, after the outbound pickup.",
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "type": "string"
+     },
+     "returnTime": {
+      "description": "Return pickup time in the same local format as time and the same provider timeZone; provide only for return trips.",
+      "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
+      "type": "string"
+     },
+     "serviceType": {
+      "description": "Set hourly for service booked by duration; omit for transfers.",
+      "enum": [
+       "hourly"
+      ],
+      "type": "string"
+     },
+     "time": {
+      "description": "Local pickup time in 24-hour HH:mm format, in the provider timeZone (Samuelz: Europe/Berlin); not UTC or an offset timestamp.",
+      "pattern": "^(?:[01]\\d|2[0-3]):[0-5]\\d$",
+      "type": "string"
+     },
+     "tripType": {
+      "description": "one_way for a single transfer or hourly service; return for outbound plus a separate later return transfer.",
+      "enum": [
+       "one_way",
+       "return"
+      ],
+      "type": "string"
+     },
+     "vehiclePreference": {
+      "description": "Volunteered vehicle preference only; no class, price or availability guarantee. Additional requirements may require review.",
+      "maxLength": 240,
+      "minLength": 1,
+      "type": "string"
+     }
+    },
+    "required": [
+     "pickup",
+     "destination",
+     "date",
+     "time",
+     "passengers",
+     "tripType"
+    ],
+    "type": "object"
+   },
+   "specialRequests": {
+    "description": "Optional ride requirements, at most 500 characters. Additional stops or unusual requirements may require review; do not include contact details in a quote.",
+    "maxLength": 500,
+    "minLength": 1,
+    "type": "string"
+   },
+   "submissionId": {
+    "description": "Caller-generated UUID for one explicitly requested offer intent. Keep the same submissionId/resumeToken and unchanged facts for retries and status; a new explicit intent needs a new pair. This is not a bookingKey.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "submissionId",
+   "resumeToken",
+   "offerRequested",
+   "contact",
+   "ride"
+  ],
+  "type": "object"
+ },
+ "name": "prepare_offer",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+   {
+    "additionalProperties": false,
+    "properties": {
+     "status": {
+      "const": "invalid_request",
+      "description": "Input does not match this operation's contract; correct the facts before retrying.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "bookingUrl": {
+      "description": "Published customer booking page for this provider and locale; the URL does not grant private booking access or confirm availability.",
+      "format": "uri",
+      "type": "string"
+     },
+     "status": {
+      "const": "unavailable",
+      "description": "The requested information could not be supplied safely; this is not vehicle-unavailability evidence.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "retryAfterSeconds": {
+      "description": "Wait at least this many seconds, then use the same original submissionId/resumeToken pair for status or unchanged retry.",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     "status": {
+      "const": "pending",
+      "description": "The original offer-intent execution is still pending; no completed offer result is available.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "retryAfterSeconds"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "retryAfterSeconds": {
+      "description": "Wait at least this many seconds before retrying the unchanged submissionId/resumeToken and facts.",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991,
+      "type": "integer"
+     },
+     "status": {
+      "const": "rate_limited",
+      "description": "Offer preparation admission was rate-limited; retry only the unchanged explicit offer intent.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "retryAfterSeconds"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "status": {
+      "description": "conflict means stored intent/offer facts disagree; ambiguous means execution or bound evidence cannot safely be resolved; not_found denies access to the original submission proof. Inspect status rather than blindly creating another offer.",
+      "enum": [
+       "conflict",
+       "ambiguous",
+       "not_found"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "booking": {
+      "additionalProperties": false,
+      "description": "Booking state read from the stored reservation; it may lag provider events.",
+      "properties": {
+       "recordedStatus": {
+        "description": "Stored reservation status string. It is not a new provider confirmation.",
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+       }
+      },
+      "required": [
+       "recordedStatus"
+      ],
+      "type": "object"
+     },
+     "bookingKey": {
+      "description": "Internal reservation ID for this selected booking. Returned in the available branch of get_offer_status/prepare_offer or an authorized booking read, not in prepared. It grants no access by itself.",
+      "maxLength": 128,
+      "minLength": 1,
+      "type": "string"
+     },
+     "bookingReference": {
+      "description": "Stored customer-visible reservation reference, falling back to bookingKey when absent. Customer OAuth accepts it only for its already-selected booking; it is not the supplier offerKey.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "customerPortalUrl": {
+      "description": "Private customer-login entry for the original submission proof. This available branch also returns this booking's ID/reference; no history or write authority is granted.",
+      "format": "uri",
+      "type": "string"
+     },
+     "fulfillment": {
+      "additionalProperties": false,
+      "description": "Flags derived from stored assignments and status, not live fulfillment confirmation.",
+      "properties": {
+       "chauffeurAssignmentRecorded": {
+        "description": "True when a chauffeur ID is stored on the reservation; it does not confirm dispatch or acceptance.",
+        "type": "boolean"
+       },
+       "completionRecorded": {
+        "description": "True only when the stored reservation status is completed; no fresh service-completion check is made.",
+        "type": "boolean"
+       },
+       "vehicleAssignmentRecorded": {
+        "description": "True when a vehicle ID is stored on the reservation; it does not confirm availability or execution.",
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "chauffeurAssignmentRecorded",
+       "vehicleAssignmentRecorded",
+       "completionRecorded"
+      ],
+      "type": "object"
+     },
+     "payment": {
+      "additionalProperties": false,
+      "description": "Recorded payment state from this booking, without a payment-provider refresh.",
+      "properties": {
+       "recordedStatus": {
+        "description": "Stored reservation payment-status string; no payment or refund is initiated or newly confirmed.",
+        "maxLength": 64,
+        "minLength": 1,
+        "type": "string"
+       }
+      },
+      "required": [
+       "recordedStatus"
+      ],
+      "type": "object"
+     },
+     "status": {
+      "const": "available",
+      "description": "The selected booking was accessible and its stored fields passed validation; no provider refresh occurred.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "bookingKey",
+     "bookingReference",
+     "booking",
+     "payment",
+     "fulfillment",
+     "customerPortalUrl"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "bookingUrl": {
+      "description": "Published customer booking page for this provider and locale; the URL does not grant private booking access or confirm availability.",
+      "format": "uri",
+      "type": "string"
+     },
+     "message": {
+      "description": "Customer-language explanation of the required review.",
+      "type": "string"
+     },
+     "review": {
+      "additionalProperties": false,
+      "description": "Structured reason and safe next step for requirements review.",
+      "properties": {
+       "availabilityConfirmed": {
+        "const": false,
+        "description": "This review result does not confirm availability.",
+        "type": "boolean"
+       },
+       "code": {
+        "description": "Reason for further requirements, model, address, service-scope, booking-window or route review; not vehicle-unavailability evidence.",
+        "enum": [
+         "additional_requirements_review",
+         "model_guarantee_review",
+         "address_review",
+         "service_scope_review",
+         "booking_window_review",
+         "route_review"
+        ],
+        "type": "string"
+       },
+       "customerContactRequired": {
+        "const": false,
+        "description": "No customer contact is required for this price/requirements review.",
+        "type": "boolean"
+       },
+       "nextAction": {
+        "const": "review_requirements",
+        "description": "Review the stated requirements before proceeding; do not infer acceptance or confirmed availability.",
+        "type": "string"
+       }
+      },
+      "required": [
+       "code",
+       "customerContactRequired",
+       "availabilityConfirmed",
+       "nextAction"
+      ],
+      "type": "object"
+     },
+     "status": {
+      "const": "review_required",
+      "description": "Offer preparation requires review of the ride facts/requirements; availability is not confirmed.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "bookingUrl",
+     "message",
+     "review"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "status": {
+      "const": "expired",
+      "description": "The existing bound offer has expired; this does not extend or describe the separate resume-proof lifetime.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "bookingConfirmed": {
+      "const": false,
+      "description": "Offer preparation does not confirm a booking or charge the customer.",
+      "type": "boolean"
+     },
+     "checkoutUrl": {
+      "description": "Private bound offer-review page to review complete terms and explicitly confirm using the existing flow. Treat this offer link as private.",
+      "format": "uri",
+      "type": "string"
+     },
+     "customerPortalUrl": {
+      "description": "Existing private customer-login entry with the original submissionId/resumeToken in its fragment. Keep it private; current session/proof authority is still required.",
+      "format": "uri",
+      "type": "string"
+     },
+     "nextAction": {
+      "description": "Guidance to open checkoutUrl, review the bound terms and explicitly confirm; no confirmation occurred in this call.",
+      "type": "string"
+     },
+     "offer": {
+      "additionalProperties": false,
+      "description": "Existing offer amount, expiry and confirmation/terms requirements.",
+      "properties": {
+       "completeTermsBound": {
+        "const": true,
+        "description": "Complete service/legal terms were verified as bound to this offer.",
+        "type": "boolean"
+       },
+       "currency": {
+        "const": "EUR",
+        "description": "Currency of the bound offer: EUR.",
+        "type": "string"
+       },
+       "customerConfirmationRequired": {
+        "const": true,
+        "description": "The customer must explicitly review and confirm the offer on its page.",
+        "type": "boolean"
+       },
+       "expiresAt": {
+        "description": "Stored offer expiry timestamp from offer_expires_at. Separate from the 24-hour submission resume-proof lifetime; re-review an expired or revised offer.",
+        "type": "string"
+       },
+       "grossTotalCents": {
+        "description": "Bound offer gross total in EUR cents, including applicable tax.",
+        "maximum": 9007199254740991,
+        "minimum": 0,
+        "type": "integer"
+       }
+      },
+      "required": [
+       "currency",
+       "grossTotalCents",
+       "expiresAt",
+       "customerConfirmationRequired",
+       "completeTermsBound"
+      ],
+      "type": "object"
+     },
+     "status": {
+      "const": "prepared",
+      "description": "The existing unpaid draft and its bound offer links are ready for customer review; this branch does not return bookingKey/bookingReference.",
+      "type": "string"
+     },
+     "termsUrl": {
+      "description": "The same offer page with complete bound service/legal terms.",
+      "format": "uri",
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "bookingConfirmed",
+     "checkoutUrl",
+     "termsUrl",
+     "offer",
+     "nextAction"
+    ],
+    "type": "object"
+   }
+  ],
+  "type": "object"
+ },
+ "title": "Prepare an unpaid chauffeur offer"
+}

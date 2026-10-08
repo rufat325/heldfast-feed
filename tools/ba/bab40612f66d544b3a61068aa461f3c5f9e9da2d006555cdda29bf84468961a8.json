@@ -1,0 +1,233 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true
+ },
+ "description": "Searches for ISPs by holding company name, filtered by state and technology type. Returns a deduplicated list of matching providers with hoconum identifiers for follow-up calls to fcc_get_provider. Answers \"which ISPs serve Washington with fiber?\" and \"find all Comcast entities.\" Geographic filtering is state-level; sub-state granularity requires cross-referencing block data. Against the live FCC API the search reads a bounded window of deployment rows to find which holding companies match, so when scanTruncated comes back true the providers are a sample of the matches rather than every one of them and no true match count is available; a narrower filter raises the share of matches the sample surfaces but cannot make it complete, and only a deployment running the local Form 477 mirror returns every match. The sample is of which companies come back \u2014 every company that does carries its complete national footprint, since statesServed and techCodes are resolved per company rather than read off the window, at the cost of one lookup per provider returned. Data is from FCC Form 477 (as of June 2021).",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "limit": {
+    "default": 50,
+    "description": "Maximum number of distinct providers to return.",
+    "maximum": 200,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "name_search": {
+    "description": "Partial holding company name to search (case-insensitive). e.g., \"Comcast\", \"T-Mobile\", \"Frontier\". Omit to list all providers in a state.",
+    "type": "string"
+   },
+   "state": {
+    "description": "2-letter state abbreviation (e.g., \"WA\") to limit results to providers serving that state. Matches individual deployment filings, so every filter given must hold on one filing together \u2014 a provider is returned for state=\"WA\" with tech_filter=[\"50\"] only if it filed fiber in Washington, not if it filed fiber elsewhere and something else in Washington.",
+    "pattern": "^[A-Z]{2}$",
+    "type": "string"
+   },
+   "tech_filter": {
+    "description": "Technology codes to filter, from the complete Form 477 taxonomy: 0=All other, 10=Asymmetric xDSL, 11=ADSL2, 12=VDSL, 20=Symmetric xDSL, 30=Other copper wireline, 40=Cable modem, 41=Cable modem DOCSIS 1/1.1/2.0, 42=Cable modem DOCSIS 3.0, 43=Cable modem DOCSIS 3.1, 50=Fiber to the end user, 60=Satellite, 70=Terrestrial fixed wireless, 90=Electric power line. Omit for all technologies. Matches individual deployment filings like state does, so pairing this with name_search narrows to filings made under the matched name \u2014 a holding company that files some technologies under an acquired brand name can come back empty here while its techCodes list the technology. To ask what one company deploys, search the name alone and read techCodes off the result.",
+    "items": {
+     "enum": [
+      "0",
+      "10",
+      "11",
+      "12",
+      "20",
+      "30",
+      "40",
+      "41",
+      "42",
+      "43",
+      "50",
+      "60",
+      "70",
+      "90"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "name": "fcc_search_providers",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "providers",
+     "totalFound",
+     "dataVintage",
+     "appliedFilters"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "appliedFilters": {
+    "additionalProperties": false,
+    "description": "Filters applied to this query.",
+    "properties": {
+     "nameSearch": {
+      "description": "Name fragment searched. Absent when no name search was used.",
+      "type": "string"
+     },
+     "state": {
+      "description": "State filter applied. Absent for nationwide searches.",
+      "type": "string"
+     },
+     "techFilter": {
+      "description": "Technology code filter applied. Absent when no tech filter was used.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "type": "object"
+   },
+   "cap": {
+    "description": "The limit that was applied. Present when capped.",
+    "type": "number"
+   },
+   "dataVintage": {
+    "description": "Data vintage \u2014 Form 477 data as of June 2021.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `live_search_timeout`: A live FCC Open Data provider search exceeded its 30-second budget, on either the bounded windowed read or one of the per-provider footprint lookups; both are shapes that answer in seconds or not at all, so a retry reaches the same result. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "live_search_timeout"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Guidance about the result set \u2014 that the list was capped at the limit, that the upstream scan returned a sample rather than every match, and how to broaden the search when nothing matched. Absent when none applies.",
+    "type": "string"
+   },
+   "providers": {
+    "description": "Matching providers, deduplicated by holding company.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A deduplicated ISP holding company entry.",
+     "properties": {
+      "hoconum": {
+       "description": "Holding company number \u2014 use with fcc_get_provider for a national profile.",
+       "type": "string"
+      },
+      "holdingCompanyName": {
+       "description": "Holding company name as filed on the deployment rows this search matched. One holding company number can carry more than one name in Form 477 \u2014 an acquired brand still filing under the parent number \u2014 and this is the name the matched rows carry, not necessarily every name filed under the number.",
+       "type": "string"
+      },
+      "statesServed": {
+       "description": "Every state, district, and territory this holding company filed deployments in nationally \u2014 its complete footprint, resolved per company. Not narrowed by the state filter, and complete even when the provider list is a sample.",
+       "items": {
+        "description": "State abbreviation (e.g., \"WA\").",
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "techCodes": {
+       "description": "Every technology code this holding company deployed nationally \u2014 its complete set, resolved per company. Not narrowed by tech_filter, and complete even when the provider list is a sample. Drawn from block-level deployment filings, so it can exceed the technologies fcc_get_provider reports, which counts only those with reported covered population.",
+       "items": {
+        "description": "FCC technology code (e.g., \"50\" = fiber).",
+        "type": "string"
+       },
+       "type": "array"
+      }
+     },
+     "required": [
+      "hoconum",
+      "holdingCompanyName",
+      "statesServed",
+      "techCodes"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "scanRowCap": {
+    "description": "Raw upstream row ceiling that bound the scan. Present only when scanTruncated is true.",
+    "type": "number"
+   },
+   "scanTruncated": {
+    "description": "True when the upstream row scan stopped at its ceiling before reaching the end of the matching data, so the providers returned are a sample of the matches rather than the complete set. Bounds which companies came back, not what each one reports \u2014 statesServed and techCodes are resolved per company and stay complete. Absent when the scan read every matching row.",
+    "type": "boolean"
+   },
+   "shown": {
+    "description": "Number of providers returned. Present when capped.",
+    "type": "number"
+   },
+   "totalCount": {
+    "description": "Distinct providers matching the query, before the limit. Present only when the scan read every matching row \u2014 absent when scanTruncated is true, because the true match count is then unknown.",
+    "type": "number"
+   },
+   "totalFound": {
+    "description": "Providers in this response. Not the number matching the query \u2014 that is totalCount, and it is only knowable when the scan read every matching row.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when results were capped at the limit and more providers may exist. Absent when not capped.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Search Broadband Providers"
+}

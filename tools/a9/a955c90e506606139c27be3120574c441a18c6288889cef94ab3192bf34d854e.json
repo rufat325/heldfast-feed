@@ -1,0 +1,35 @@
+{
+ "description": "Only use when `recovery.nextAction = 'wait_deploy'` (e.g. percher_publish returned status='queued', or percher_doctor pointed here), or when you already have a deployId and need to know whether the deploy is live yet. Never starts a new deploy \u2014 for that use percher_publish. Short-polls a single deploy and returns within `timeoutSeconds` (default 30, max 720). The default keeps each call short so the agent can resume; the bumped max equals the platform's full publish poll budget for callers that want to ride a single build to completion.  Returns one of five statuses; in every case follow `result.recovery.nextAction` literally:   - `live` \u2192 deploy is up; surface result.url to the user. recovery.nextAction='none'.   - `failed` \u2192 terminal failure; result.error + result.recovery describe what to do. After FUTURE12 Phase 4 ambiguous build failures (generic build_failed, missing_dependency, runtime_crash, oom_killed without file-located problems) emit recovery.nextAction='run_doctor' as the primary action \u2014 call percher_doctor with recovery.args (carries `mode='deploy'` + `deployId`) and follow doctor's recovery recursively. Direct-action recoveries still emit when publish/wait already knows the answer: `set_env_vars` (missing_env with extracted keys), `fix_problems` (build problems with file/line), `retry` (infra_unavailable), `fix_config` (config_invalid), `ask_user` (quota_exceeded / unknown). `inspect_build_log` only appears when doctor explicitly hands off after classification yielded nothing.   - `replaced` \u2192 terminal-but-not-failed: this row was superseded. Resolver looked at the latest deploy and the recovery field tells you what to do next: `nextAction: 'none'` with `result.url` set means the app is currently live at that URL via a newer deploy; `nextAction: 'wait_deploy'` means a newer deploy is still in flight (call percher_wait_for_deploy with the args); `nextAction: 'run_doctor'` or `nextAction: 'ask_user'` means resolution was ambiguous (no other deploys, list fetch failed, latest also failed) \u2014 call percher_doctor or surface to the user. Do NOT retry the replaced deployId, do NOT inspect its build log.   - `check_passed` \u2192 a `check` validation deploy built and booted, then was torn down. No URL; the live app was not replaced. recovery.nextAction='none'.   - `still_running` \u2192 timeout hit before terminal status. Call this tool again with the same deployId \u2014 the recovery field already has the args pre-filled.  When the failure is unclear, prefer percher_doctor over manually picking percher_logs / percher_deploys_inspect / percher_reproduce \u2014 doctor is the recovery hub and will return a recovery that points at the right low-level tool if one is needed.  Stall detection: result.totalElapsedSeconds is wall-clock seconds since deployment.createdAt (server-side). If it exceeds ~10 minutes while still in `building`, the API watchdog will auto-fail it with DEPLOY_STALLED \u2014 keep calling this tool; you'll get a `failed` with retryable=true.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "app": {
+    "description": "App name (the value of [app].name in percher.toml)",
+    "type": "string"
+   },
+   "deployId": {
+    "description": "Deploy id returned by percher_publish (e.g. dep_abc123)",
+    "type": "string"
+   },
+   "pollIntervalSeconds": {
+    "description": "Seconds between polls (default 2).",
+    "maximum": 30,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "timeoutSeconds": {
+    "description": "Maximum wall-clock seconds to wait before returning still_running (default 30, max 720). Keeping this short is the point \u2014 the agent can resume in another short call without holding a long-lived connection.",
+    "maximum": 720,
+    "minimum": 1,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "app",
+   "deployId"
+  ],
+  "type": "object"
+ },
+ "name": "percher_wait_for_deploy"
+}

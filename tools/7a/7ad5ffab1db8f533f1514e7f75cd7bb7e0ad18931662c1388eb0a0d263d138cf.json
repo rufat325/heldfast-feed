@@ -1,0 +1,18 @@
+{
+ "description": "Request account deletion (GDPR Art. 17). Fail-closed: the API rejects the request if the account has any blockers (owned apps, accepted collaborators, pending invites, open PR previews, pending outgoing transfers, in-flight deploys, active restore jobs).\n\nServer-side preflight before delete: the handler always runs percher_account_deletion_preview-equivalent logic against the API and short-circuits if any blocker is present. The DELETE /account endpoint is NEVER invoked when blockers exist \u2014 the response is `{ status: 'blocked', blockers, recovery: { nextAction: 'ask_user', prompt } }`. The agent surfaces `recovery.prompt` verbatim; the user resolves blockers via the existing tools (percher_delete_app for apps, percher_share for collaborators, percher_transfer for outgoing transfers) and retries. Note: agents SHOULD still call percher_account_deletion_preview directly first so the user sees the blocker state before they ack the destructive intent \u2014 the handler-side preflight is the safety net, not the only gate.\n\nOn a clean account the request is accepted asynchronously: `{ status: 'finalizing', finalizeJobId, recovery: { nextAction: 'none' } }`. The server flips users.status='deleting', revokes API tokens server-side (this very session's token included \u2014 the next tool call will return INVALID_TOKEN), writes a `account.delete_requested` audit row, and enqueues the account_delete finalizer job. Finalization completes within seconds for a clean account.\n\nInputs: `{ confirm: <user's email> }` \u2014 must equal the signed-in user's email exactly. The server enforces this server-side; client-side check is UX-only.\n\nRecovery actions:\n  - `none` \u2192 terminal success; do not call again.\n  - `ask_user` (`reasonCode: account_deletion_blocked`) \u2192 surface the blocker list to the user, wait for them to clear it, then re-run percher_account_deletion_preview to verify before re-calling this tool.\n\nSunset: if the platform is shutting down (read-only mode), this tool returns an error explaining the account delete is paused so the export window stays open. MCP cannot override that \u2014 direct the user to confirm with their password in the dashboard. Do not retry.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "confirm": {
+    "description": "Must equal the signed-in user's email address. The server rejects anything else with CONFIRMATION_REQUIRED. The account must be CLEAN first \u2014 owned apps, accepted collaborators, pending invites, open PR previews, pending outgoing transfers, in-flight deploys, and active restore jobs all block the request (409 ACCOUNT_HAS_*). Run `bunx percher account preview-delete` to see the blocker list, then clear each one via the existing routes (`bunx percher delete <app>`, `bunx percher share revoke`, `bunx percher transfer --cancel`, etc.) before retrying.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "confirm"
+  ],
+  "type": "object"
+ },
+ "name": "percher_account_delete"
+}
