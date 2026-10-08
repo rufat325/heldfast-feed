@@ -1,0 +1,49 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": false
+ },
+ "description": "Run JavaScript against the Wix REST API on site \"CodeStringers\" (https://www.codestringers.com/_api/mcp), on the visitor's behalf. The code runs in a sandbox and you get back whatever it returns.\n\nPREFER THIS TOOL OVER CallWixSiteAPI. CallWixSiteAPI makes a single HTTP request; ExecuteWixAPI runs real code, so you can chain calls, paginate, filter, and shape the result in one step. Use ExecuteWixAPI for any Wix API work on this site, and fall back to CallWixSiteAPI only for a trivial one-shot read where code adds nothing.\n\nDO A WHOLE RECIPE IN ONE CALL. When a task needs several requests \u2014 e.g. query to resolve an id, then mutate; create then confirm; read a list then act on a match \u2014 write ONE ExecuteWixAPI call whose code performs every step in sequence and returns the final result. Do NOT split a multi-request recipe into multiple separate tool calls; that wastes round-trips and loses intermediate state. If a recipe from the docs lists steps 1..N, the code should run steps 1..N.\n\nCRITICAL CODE SHAPE:\n- The `code` parameter MUST be the function expression itself: `async function() { ... }` or `async () => { ... }`.\n- Do NOT send a script body like `const result = await ...; return result;`.\n- Do NOT call the function yourself. The tool calls it for you.\n- Put all `const`, `await`, and `return` statements inside the function body.\n\nDo not rely on memory for Wix API endpoints, methods, schemas, or request bodies. Before writing code, use SearchSiteApiDocs (and ReadFullDocsArticle / ReadFullDocsMethodSchema) to confirm the exact API URL, HTTP method, request body structure, field names, required fields, and enum values. The URL usually starts with `https://www.wixapis.com`. Before reading fields off a response, know its exact shape \u2014 don't guess paths like `result.id` when it may be `result.results[0].item.id`. Pass every docs/recipe URL you relied on in the `sourceDocUrls` parameter.\n\nAuthentication: pass the `visitorToken` parameter (from GenerateVisitorToken; reuse the one already in your context, do not create a new one each call). Everything runs against this visitor site automatically \u2014 do NOT set `scope`, `siteId`, Authorization, wix-site-id, or wix-account-id.\n\nFile and export limits: ExecuteWixAPI is only for Wix REST API calls and in-memory data shaping. It does not provide Node.js built-in modules or filesystem access, and it cannot create downloadable files. Do not import `fs`, `path`, or `node:*`, write files, or promise a generated downloadable file from inside this tool. For large exports, return compact summaries or the specific fields needed for the answer; if the user needs a full downloadable CSV/JSON file, direct them to the product's native export flow or ask for a smaller filtered export.\n\nProbing should be read-only: use GET/query/list/search to inspect state, resolve real ids, or verify a previous write. For create/update/delete, read the docs first and call the mutation only with real resolved inputs \u2014 no speculative mutations just to learn the response shape.\n\nError handling: `wix.request()` throws when the Wix API returns an error. For dependent steps, let it throw so the failure is reported clearly. For independent read-only probes you may wrap each in `try/catch` and return partial results; when running them in parallel use `Promise.allSettled` (not `Promise.all`) so one failure doesn't discard the rest.\n\nAvailable in your code:\n```typescript\ninterface WixRequestOptions {\n  method: \"GET\" | \"POST\" | \"PUT\" | \"PATCH\" | \"DELETE\";\n  url: string;           // Full Wix API URL, e.g. \"https://www.wixapis.com/stores-reader/v1/products/query\"; paths starting with \"/\" resolve against https://www.wixapis.com\n  body?: unknown;\n}\n\ninterface WixResponse<T = unknown> {\n  status: number;\n  data: T;\n  json(): Promise<T>; // Fetch-compatible alias for data\n}\n\ndeclare const wix: {\n  request<T = unknown>(options: WixRequestOptions): Promise<WixResponse<T>>;\n};\n```\n\nReturn compact, task-focused data instead of raw API responses. For list/query/search endpoints, paginate in code and map each item to just the fields the task needs. When the code CREATES entities (create, bulk create, import, duplicate, upload), ALWAYS include the ID of every created entity in the returned object \u2014 e.g. `{ cartId }` or `{ createdIds: [...] }` \u2014 even if the user did not ask for them; follow-up steps, verification, and cleanup all need those IDs, and recovering them later costs extra query calls.\n\nExample \u2014 a multi-step recipe (resolve a product by name, then add it to the cart) done in ONE call:\n```javascript\nasync function() {\n  // Step 1: find the product\n  const found = await wix.request({\n    method: \"POST\",\n    url: \"https://www.wixapis.com/stores-reader/v1/products/query\",\n    body: { query: { filter: JSON.stringify({ name: \"Florie Eau de Parfum\" }) } }\n  });\n  const product = found.data.products?.[0];\n  if (!product) return { error: \"PRODUCT_NOT_FOUND\" };\n\n  // Step 2: create a cart with that product\n  const cart = await wix.request({\n    method: \"POST\",\n    url: \"https://www.wixapis.com/ecom/v1/carts/create-cart\",\n    body: { cart: { lineItems: [{ catalogReference: {\n      appId: \"215238eb-22a5-4c36-9e7b-e7c08025e04e\",\n      catalogItemId: product.id\n    }, quantity: 1 }] } }\n  });\n\n  return { cartId: cart.data.cart?.id, productId: product.id, name: product.name };\n}\n```",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "code": {
+    "description": "JavaScript async function expression to execute against the Wix REST API. The value must be the function itself, for example `async function() { ... }` or `async () => { ... }`, not a script body and not an invoked function. Return the final answer from inside the function. Do not write top-level `const`, top-level `await`, or top-level `return` outside the function body. Do not import Node.js built-ins such as `fs`, `path`, or `node:*`, and do not try to write files from this code; ExecuteWixAPI only returns data from the function. Use `wix.request({ method, url, body })` for Wix API calls. Every call runs against the current visitor site; do not set `scope`, `siteId`, or auth headers. Full Wix API URLs and paths starting with `/` are supported. Wix REST API page size limits vary \u2014 use 100 as a safe default unless the method schema (via SearchWixAPISpec) confirms a higher limit is supported. For cursor-based APIs, pass the next cursor as `cursorPaging: { limit: 100, cursor: pagingMetadata.cursors.next }` \u2014 not inside `paging`. Check the method schema to confirm whether the API uses `paging` (offset-based) or `cursorPaging` (cursor-based) before paginating.",
+    "type": "string"
+   },
+   "hasMutations": {
+    "description": "Whether this code creates, updates, deletes, publishes, imports, uploads, or otherwise mutates site data on the visitor\u2019s behalf. Set this to true for create/update/delete/bulk create/import/upload calls even if the reason is inspection, verification, or response-shape discovery. Read-only GET/query/list/search calls can use false.",
+    "type": "boolean"
+   },
+   "reason": {
+    "description": "One sentence explaining the original user request and why you are executing code to complete it.",
+    "type": "string"
+   },
+   "sourceDocUrls": {
+    "description": "The URLs of the documentation, recipes, API articles, or schema sources where you confirmed the Wix REST endpoints, HTTP methods, request body shapes, auth contexts, and required fields used by this code.\nInclude every docs/schema source needed for the endpoints and request shapes used in the code.\nMAKE SURE THE ENDPOINT URLS AND REQUEST SHAPES ARE REALLY THERE AND YOU ARE NOT GUESSING THEM !!!\nEach value must be a valid URL like:\n- https://dev.wix.com/docs/api-reference/... (REST API reference docs)\nUse [\"user-provided\"] if the user gave you all endpoint and request details directly.\nUse [\"other\"] ONLY IF YOU HAVE A VERY GOOD REASON TO DO SO",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "visitorToken": {
+    "description": "Visitor access token. If you have it in your context, ALWAYS use it and do not create a new one. If you do not have it in your context, use the GenerateVisitorToken tool to get it.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "code",
+   "reason",
+   "hasMutations",
+   "sourceDocUrls",
+   "visitorToken"
+  ],
+  "type": "object"
+ },
+ "name": "ExecuteWixAPI"
+}
