@@ -1,0 +1,713 @@
+{
+ "description": "Paid Agent Tool Router ($0.002 USDC on Base). Finds and ranks machine-payable MCP services and x402 HTTP endpoints before your agent chooses or pays a provider. Uses structured capability matching, hard constraints, price, observed latency/reliability, and cold-start trust confidence; no LLM call is required. Returns the best tool, confidence, reason, price, relevant workflow, next-best option, and a context-aware recommended_next when useful. This is recommendation metadata only: it never invokes the selected provider or makes a second payment. Without X402_BAZAAR_DISCOVERY_URLS, results come only from this platform's local service registry and are marked degraded.\n\nAgent entry points: risky external action \u2192 use Agent Action Gate when a combined action-specific safety assessment is needed; unclear capability/provider \u2192 use free /api/discover; constrained comparison between callable alternatives \u2192 use paid route_tool; known single capability \u2192 call the direct tool; multi-step objective \u2192 read the matching workflow recipe and call only relevant steps. Workflows are stateless recipes, not executors; calls are paid separately and are not bundle charged. Agent Action Gate does not approve payment, sign or broadcast transactions, evaluate seller reputation, replace transaction simulation, replace route_tool, or replace human approval.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "capability": {
+    "maxLength": 80,
+    "minLength": 2,
+    "pattern": "^[a-zA-Z][a-zA-Z0-9_.-]*$",
+    "type": "string"
+   },
+   "completed_tools": {
+    "items": {
+     "maxLength": 128,
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 30,
+    "type": "array"
+   },
+   "constraints": {
+    "additionalProperties": false,
+    "properties": {
+     "max_latency_ms": {
+      "maximum": 600000,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "max_price_usd": {
+      "maximum": 1000000,
+      "minimum": 0,
+      "type": "number"
+     },
+     "min_success_rate": {
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+     }
+    },
+    "type": "object"
+   },
+   "preferences": {
+    "additionalProperties": false,
+    "properties": {
+     "optimize_for": {
+      "enum": [
+       "cheapest",
+       "fastest",
+       "quality",
+       "reliability",
+       "balanced"
+      ],
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "query": {
+    "maxLength": 300,
+    "type": "string"
+   }
+  },
+  "required": [
+   "capability"
+  ],
+  "type": "object"
+ },
+ "name": "route_tool",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "agent_ux": {
+    "additionalProperties": false,
+    "properties": {
+     "error": {
+      "anyOf": [
+       {},
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "meta": {
+      "additionalProperties": {},
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "next": {
+      "items": {},
+      "type": "array"
+     },
+     "payment": {
+      "additionalProperties": false,
+      "properties": {
+       "execution_status": {
+        "enum": [
+         "not_started",
+         "succeeded",
+         "failed",
+         "unknown"
+        ],
+        "type": "string"
+       },
+       "status": {
+        "enum": [
+         "not_required",
+         "required",
+         "settled",
+         "failed",
+         "unknown"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "status",
+       "execution_status"
+      ],
+      "type": "object"
+     },
+     "result": {},
+     "status": {
+      "enum": [
+       "succeeded",
+       "failed",
+       "partial",
+       "outcome_unknown"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "result",
+     "error",
+     "meta",
+     "payment",
+     "next"
+    ],
+    "type": "object"
+   },
+   "alternatives": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "capability_score": {
+       "type": "number"
+      },
+      "currency": {
+       "type": "string"
+      },
+      "endpoint": {
+       "format": "uri",
+       "type": "string"
+      },
+      "estimated_latency_ms": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "latency_confidence": {
+       "enum": [
+        "low",
+        "medium",
+        "high"
+       ],
+       "type": "string"
+      },
+      "metadata_is_untrusted": {
+       "type": "boolean"
+      },
+      "network": {
+       "type": "string"
+      },
+      "overall_score": {
+       "type": "number"
+      },
+      "price_confidence": {
+       "enum": [
+        "low",
+        "medium",
+        "high"
+       ],
+       "type": "string"
+      },
+      "price_usd": {
+       "type": "number"
+      },
+      "protocol": {
+       "enum": [
+        "x402",
+        "mcp",
+        "https_api"
+       ],
+       "type": "string"
+      },
+      "provider": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      },
+      "status": {
+       "enum": [
+        "active",
+        "degraded",
+        "unavailable",
+        "unknown"
+       ],
+       "type": "string"
+      },
+      "success_rate": {
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "tool_name": {
+       "type": "string"
+      },
+      "trust_confidence": {
+       "enum": [
+        "low",
+        "medium",
+        "high"
+       ],
+       "type": "string"
+      },
+      "trust_score": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "service_id",
+      "provider",
+      "endpoint",
+      "protocol",
+      "price_usd",
+      "capability_score",
+      "trust_score",
+      "trust_confidence",
+      "success_rate",
+      "estimated_latency_ms",
+      "latency_confidence",
+      "status",
+      "overall_score",
+      "price_confidence",
+      "metadata_is_untrusted"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "best_tool": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "cached": {
+    "type": "boolean"
+   },
+   "candidates_after_filters": {
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "candidates_found": {
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   },
+   "capability": {
+    "type": "string"
+   },
+   "checked_at": {
+    "type": "string"
+   },
+   "confidence": {
+    "type": "number"
+   },
+   "confidence_semantics": {
+    "type": "string"
+   },
+   "degraded": {
+    "type": "boolean"
+   },
+   "error": {
+    "anyOf": [
+     {},
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "expected_total_cost_usd": {
+    "type": [
+     "number",
+     "null"
+    ]
+   },
+   "match_found": {
+    "type": "boolean"
+   },
+   "meta": {
+    "additionalProperties": {},
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "next": {
+    "items": {},
+    "type": "array"
+   },
+   "next_best_tool": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "optimize_for": {
+    "enum": [
+     "cheapest",
+     "fastest",
+     "quality",
+     "reliability",
+     "balanced"
+    ],
+    "type": "string"
+   },
+   "payment": {
+    "additionalProperties": false,
+    "properties": {
+     "execution_status": {
+      "enum": [
+       "not_started",
+       "succeeded",
+       "failed",
+       "unknown"
+      ],
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "not_required",
+       "required",
+       "settled",
+       "failed",
+       "unknown"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "execution_status"
+    ],
+    "type": "object"
+   },
+   "provider_availability_observed_at": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "provider_availability_source": {
+    "type": "string"
+   },
+   "query": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "reason": {
+    "const": "NO_SERVICE_MATCHES_CONSTRAINTS",
+    "type": "string"
+   },
+   "recommended": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "capability_score": {
+        "type": "number"
+       },
+       "currency": {
+        "type": "string"
+       },
+       "endpoint": {
+        "format": "uri",
+        "type": "string"
+       },
+       "estimated_latency_ms": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "latency_confidence": {
+        "enum": [
+         "low",
+         "medium",
+         "high"
+        ],
+        "type": "string"
+       },
+       "metadata_is_untrusted": {
+        "type": "boolean"
+       },
+       "network": {
+        "type": "string"
+       },
+       "overall_score": {
+        "type": "number"
+       },
+       "price_confidence": {
+        "enum": [
+         "low",
+         "medium",
+         "high"
+        ],
+        "type": "string"
+       },
+       "price_usd": {
+        "type": "number"
+       },
+       "protocol": {
+        "enum": [
+         "x402",
+         "mcp",
+         "https_api"
+        ],
+        "type": "string"
+       },
+       "provider": {
+        "type": "string"
+       },
+       "service_id": {
+        "type": "string"
+       },
+       "status": {
+        "enum": [
+         "active",
+         "degraded",
+         "unavailable",
+         "unknown"
+        ],
+        "type": "string"
+       },
+       "success_rate": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "tool_name": {
+        "type": "string"
+       },
+       "trust_confidence": {
+        "enum": [
+         "low",
+         "medium",
+         "high"
+        ],
+        "type": "string"
+       },
+       "trust_score": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "service_id",
+       "provider",
+       "endpoint",
+       "protocol",
+       "price_usd",
+       "capability_score",
+       "trust_score",
+       "trust_confidence",
+       "success_rate",
+       "estimated_latency_ms",
+       "latency_confidence",
+       "status",
+       "overall_score",
+       "price_confidence",
+       "metadata_is_untrusted"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "recommended_next": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "availability": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "availability_observation": {
+        "type": "string"
+       },
+       "condition": {
+        "type": "string"
+       },
+       "price": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "reason": {
+        "type": "string"
+       },
+       "recommendation_id": {
+        "format": "uuid",
+        "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+        "type": "string"
+       },
+       "tool": {
+        "type": "string"
+       },
+       "workflow_id": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "tool",
+       "reason",
+       "price"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "recommended_workflow": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "estimated_cost": {
+        "additionalProperties": false,
+        "properties": {
+         "basis": {
+          "type": "string"
+         },
+         "conditional_call_count": {
+          "type": "number"
+         },
+         "currency": {
+          "type": "string"
+         },
+         "expected": {
+          "type": "number"
+         },
+         "max": {
+          "type": "number"
+         },
+         "min": {
+          "type": "number"
+         },
+         "optional_call_count": {
+          "type": "number"
+         },
+         "required_call_count": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "min",
+         "expected",
+         "max",
+         "currency",
+         "basis",
+         "required_call_count",
+         "conditional_call_count",
+         "optional_call_count"
+        ],
+        "type": "object"
+       },
+       "estimated_total_price_usd": {
+        "type": "number"
+       },
+       "id": {
+        "type": "string"
+       },
+       "name": {
+        "type": "string"
+       },
+       "next_required_step": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "condition": {
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "tool": {
+            "type": "string"
+           },
+           "type": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "tool",
+           "type",
+           "condition"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "state_mode": {
+        "enum": [
+         "client_managed"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "id",
+       "name",
+       "estimated_total_price_usd"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "registry_sources": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "relevance_score": {
+    "type": "number"
+   },
+   "result": {},
+   "routing_data_age_seconds": {
+    "type": "number"
+   },
+   "routing_reason": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "status": {
+    "enum": [
+     "succeeded",
+     "failed",
+     "partial",
+     "outcome_unknown"
+    ],
+    "type": "string"
+   },
+   "success": {
+    "const": true,
+    "type": "boolean"
+   },
+   "why": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "success",
+   "match_found",
+   "capability",
+   "query",
+   "optimize_for",
+   "recommended",
+   "alternatives",
+   "candidates_found",
+   "candidates_after_filters",
+   "routing_reason",
+   "registry_sources",
+   "degraded",
+   "cached",
+   "routing_data_age_seconds",
+   "checked_at"
+  ],
+  "type": "object"
+ }
+}

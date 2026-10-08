@@ -1,0 +1,593 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Build the profit and loss and balance sheet from the ledger"
+ },
+ "description": "Build a profit and loss (compte de r\u00e9sultat) and a balance sheet (bilan) from the trial balance of the workspace's connected Pennylane. Pennylane shares no ready profit and loss or balance sheet, only its trial balance (`getTrialBalance`). Well reads every page of it and computes the totals itself, account class by account class of the French chart of accounts (PCG). Every amount is a decimal string in euros, such as `\"5000.00\"`. State each amount exactly as returned and name the source: \"computed by Well from the Pennylane trial balance\". Never add, round or recompute an amount, and never call `getTrialBalance` yourself to rebuild one.\n\nUse it when the user asks for a profit and loss, an income statement, a compte de r\u00e9sultat, a balance sheet or a bilan, and the workspace's accounting tool is Pennylane. Do not use it for QuickBooks or Xero, whose own reports `well_invoke_connector_tool` reads.\n\n**Inputs.** `workspace_connector_id` is the Pennylane accounting row's id from `well_get_connector_coverage`. `statements` is `income_statement`, `balance_sheet` or `both`. `to` is the last day, YYYY-MM-DD, never after today: the profit and loss ends on it and the balance sheet is dated on it. `from` is the first day of the profit and loss, required for `income_statement` and `both`. The period must sit inside one Pennylane fiscal year.\n\n**Output.** `income_statement` gives `revenue` (class 7) and `expenses` (class 6), each with its `total` and its two-digit PCG `groups`, and `net_result` (revenue minus expenses, negative is a loss). `balance_sheet` gives `assets` and `equity_and_liabilities`, each with its `total` and `sections`, and `result_for_the_year` (from the fiscal year start to `to`, inside equity). The two totals are equal. `source` names the connection, the tool, the chart and each trial balance read with its dates and row count. `opening_balances` says how the balance sheet was shown to include the opening balances: carried from the closed previous year, or an opening entry on the first day of the fiscal year. `fiscal_year.status` is the year's status in Pennylane: `open` or `reopen` means entries can still be booked in it, so the figures can still change; say so once.\n\n**Refusals carry no statement.** `opening_balances_unverified`: Well cannot show that the balance sheet includes the opening balances (\u00e0-nouveaux) of the fiscal year, usually because the previous year is not closed in Pennylane yet or its opening entry is not imported yet; the profit and loss alone still works. `trial_balance_semantics_unproven`: Well cannot show that Pennylane's trial balance holds only the movements of the dates asked for. Before every profit and loss and every balance sheet, Well splits the trial balance at one day (the day before `from` for a profit and loss that starts after the fiscal year start, otherwise the day before `to`) and checks that the two parts add up to the whole on every class 6 and 7 account. The check failed, or a statement dated on the first day of the fiscal year left no day to split at. Well then builds neither statement, and the refusal carries `trial_balance`: Pennylane's trial balance for the dates asked for, with its full `row_count` and at most its first twenty rows, each exactly as Pennylane returned it. `closing_entries_suspected`: either every profit and loss account nets to zero on `to` although the earlier days of the year moved some, or the result of the year (chapter 12) moves on `to` (checked on the last day of the span, and on the last day of the fiscal year for a later period), which means Pennylane probably booked the closing entries of the fiscal year on that day; Well builds no statement and the refusal carries `trial_balance` the same way. Show those rows as Pennylane's trial balance, never as a profit and loss or a balance sheet, and add nothing up; when `row_count` is above the rows returned, say the full trial balance is in Pennylane. `connection_not_found`: no Pennylane connection matches `workspace_connector_id` in this workspace. `unsupported_source`: the connection is not a Pennylane input connection served over MCP (`pennylane` or `pennylane-token`). `unsupported_currency`: the workspace's base currency is not EUR. `unsupported_framework`: the Pennylane company does not use a French chart of accounts. `framework_not_reviewed`: the company uses a French sector chart (agriculture, non-profit or notary) that Well's statements do not cover yet. `scope_missing`: the connection was not granted the trial balance; it needs a reconnect. `tool_not_read_only`: Well's record of the connection does not mark a Pennylane read as read-only, so Well calls nothing. `connection_not_readable`: the connection is not enabled, or its grant expired during the read (`connection_status` says which state). When the connection is in the state `need_reconnect` or `error`, a `scope_missing` or `connection_not_readable` refusal carries `reconnect_url`, the link that reconnects this Pennylane connection: give it to the user as a clickable link, exactly as returned, and never build a connector link yourself. Without `reconnect_url`, give no link. `read_incomplete`: the trial balance did not come back whole. `invalid_trial_balance`: the trial balance came back whole but does not balance or holds a row Well cannot read (`defect` says which). `fiscal_year_not_found` and `invalid_period`: the dates do not fit one Pennylane fiscal year. `failed`: the read failed and nothing is known. Say each refusal in one plain line and state no figure, except the `trial_balance` rows of `trial_balance_semantics_unproven` and `closing_entries_suspected`, shown as returned.\n\nWhen the token authorizes one workspace, call this directly \u2014 no other tool call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "from": {
+    "description": "First day of the profit and loss, YYYY-MM-DD. Required for `income_statement` and `both`.",
+    "type": "string"
+   },
+   "statements": {
+    "description": "`income_statement`, `balance_sheet`, or `both`.",
+    "enum": [
+     "income_statement",
+     "balance_sheet",
+     "both"
+    ],
+    "type": "string"
+   },
+   "to": {
+    "description": "Last day, YYYY-MM-DD, never after today: the profit and loss ends on it and the balance sheet is dated on it.",
+    "type": "string"
+   },
+   "workspace_connector_id": {
+    "description": "The Pennylane accounting row's workspace_connector_id, from well_get_connector_coverage.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several: this read reports one workspace's own figures and will not choose which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   },
+   "workspace_scope": {
+    "description": "Restrict this call to the family: the token's primary workspace plus the company workspaces under it that you are a member of. Unrelated authorized workspaces drop out of the read; row reads merge across the family, while a per-workspace figure still reports exactly one workspace.",
+    "enum": [
+     "family"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "workspace_connector_id",
+   "statements",
+   "to"
+  ],
+  "type": "object"
+ },
+ "name": "well_get_pennylane_statements",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "balance_sheet": {
+    "additionalProperties": false,
+    "properties": {
+     "as_of": {
+      "type": "string"
+     },
+     "assets": {
+      "additionalProperties": false,
+      "properties": {
+       "sections": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "amount": {
+           "description": "A decimal amount in euros, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "label": {
+           "description": "The section's French name.",
+           "type": "string"
+          },
+          "section": {
+           "enum": [
+            "fixed_assets",
+            "inventory",
+            "receivables",
+            "cash",
+            "equity",
+            "provisions",
+            "financial_debts",
+            "bank_overdrafts",
+            "payables"
+           ],
+           "type": "string"
+          }
+         },
+         "required": [
+          "section",
+          "label",
+          "amount"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "total": {
+        "description": "A decimal amount in euros, always two decimals, such as `5000.00`. State it as returned.",
+        "pattern": "^-?\\d+\\.\\d{2}$",
+        "type": "string"
+       }
+      },
+      "required": [
+       "total",
+       "sections"
+      ],
+      "type": "object"
+     },
+     "equity_and_liabilities": {
+      "additionalProperties": false,
+      "properties": {
+       "sections": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "amount": {
+           "description": "A decimal amount in euros, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "label": {
+           "description": "The section's French name.",
+           "type": "string"
+          },
+          "section": {
+           "enum": [
+            "fixed_assets",
+            "inventory",
+            "receivables",
+            "cash",
+            "equity",
+            "provisions",
+            "financial_debts",
+            "bank_overdrafts",
+            "payables"
+           ],
+           "type": "string"
+          }
+         },
+         "required": [
+          "section",
+          "label",
+          "amount"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "total": {
+        "description": "A decimal amount in euros, always two decimals, such as `5000.00`. State it as returned.",
+        "pattern": "^-?\\d+\\.\\d{2}$",
+        "type": "string"
+       }
+      },
+      "required": [
+       "total",
+       "sections"
+      ],
+      "type": "object"
+     },
+     "result_for_the_year": {
+      "description": "A decimal amount in euros, always two decimals, such as `5000.00`. State it as returned.",
+      "pattern": "^-?\\d+\\.\\d{2}$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "as_of",
+     "assets",
+     "equity_and_liabilities",
+     "result_for_the_year"
+    ],
+    "type": "object"
+   },
+   "connection_status": {
+    "description": "Set on `connection_not_readable`: the connection's state.",
+    "type": "string"
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "currency": {
+    "const": "EUR",
+    "type": "string"
+   },
+   "defect": {
+    "description": "Set on `invalid_trial_balance`.",
+    "enum": [
+     "invalid_account_number",
+     "invalid_amount",
+     "duplicate_account",
+     "amount_out_of_range",
+     "unbalanced",
+     "off_statement_balance"
+    ],
+    "type": "string"
+   },
+   "error": {
+    "type": "string"
+   },
+   "fiscal_year": {
+    "additionalProperties": false,
+    "properties": {
+     "finish": {
+      "type": "string"
+     },
+     "start": {
+      "type": "string"
+     },
+     "status": {
+      "description": "The year's status in Pennylane. `open` or `reopen`: entries can still be booked, so the figures can still change.",
+      "enum": [
+       "open",
+       "reopen",
+       "closed",
+       "frozen"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "start",
+     "finish",
+     "status"
+    ],
+    "type": "object"
+   },
+   "income_statement": {
+    "additionalProperties": false,
+    "properties": {
+     "expenses": {
+      "additionalProperties": false,
+      "properties": {
+       "groups": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "amount": {
+           "description": "A decimal amount in euros, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "group": {
+           "description": "The two-digit PCG chapter, such as `60`.",
+           "type": "string"
+          },
+          "label": {
+           "description": "The chapter's French name.",
+           "type": "string"
+          }
+         },
+         "required": [
+          "group",
+          "label",
+          "amount"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "total": {
+        "description": "A decimal amount in euros, always two decimals, such as `5000.00`. State it as returned.",
+        "pattern": "^-?\\d+\\.\\d{2}$",
+        "type": "string"
+       }
+      },
+      "required": [
+       "total",
+       "groups"
+      ],
+      "type": "object"
+     },
+     "net_result": {
+      "description": "A decimal amount in euros, always two decimals, such as `5000.00`. State it as returned.",
+      "pattern": "^-?\\d+\\.\\d{2}$",
+      "type": "string"
+     },
+     "period": {
+      "additionalProperties": false,
+      "properties": {
+       "from": {
+        "type": "string"
+       },
+       "to": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "from",
+       "to"
+      ],
+      "type": "object"
+     },
+     "revenue": {
+      "additionalProperties": false,
+      "properties": {
+       "groups": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "amount": {
+           "description": "A decimal amount in euros, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "group": {
+           "description": "The two-digit PCG chapter, such as `60`.",
+           "type": "string"
+          },
+          "label": {
+           "description": "The chapter's French name.",
+           "type": "string"
+          }
+         },
+         "required": [
+          "group",
+          "label",
+          "amount"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "total": {
+        "description": "A decimal amount in euros, always two decimals, such as `5000.00`. State it as returned.",
+        "pattern": "^-?\\d+\\.\\d{2}$",
+        "type": "string"
+       }
+      },
+      "required": [
+       "total",
+       "groups"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "period",
+     "revenue",
+     "expenses",
+     "net_result"
+    ],
+    "type": "object"
+   },
+   "newly_connected": {
+    "description": "Tools that connected to this workspace since the last result and that no session was told about yet, oldest first. Present only when at least one tool is new. Start the reply with one line per entry, in the person's language: \"<name> is connected.\". Never fold several entries into one sentence. Each entry comes back once, on one result only: never repeat its line later.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "opening_balances": {
+    "enum": [
+     "carried_from_previous_year",
+     "opening_entries_on_first_day"
+    ],
+    "type": "string"
+   },
+   "reconnect_url": {
+    "description": "Set on `scope_missing` and `connection_not_readable` when the connection is in the state `need_reconnect` or `error`: the link that reconnects this Pennylane connection. Give it as returned.",
+    "type": "string"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "source": {
+    "additionalProperties": false,
+    "properties": {
+     "accounting_logic": {
+      "type": "string"
+     },
+     "computed_by": {
+      "const": "well",
+      "type": "string"
+     },
+     "connector_slug": {
+      "type": "string"
+     },
+     "provider": {
+      "type": "string"
+     },
+     "reads": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "from": {
+         "type": "string"
+        },
+        "pages": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "purpose": {
+         "enum": [
+          "income_statement",
+          "balance_sheet",
+          "year_to_date",
+          "before_period",
+          "previous_year_closing",
+          "opening_day",
+          "check_before_last_day",
+          "check_last_day"
+         ],
+         "type": "string"
+        },
+        "row_count": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "to": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "purpose",
+        "from",
+        "to",
+        "row_count",
+        "pages"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "tool": {
+      "const": "getTrialBalance",
+      "type": "string"
+     }
+    },
+    "required": [
+     "provider",
+     "connector_slug",
+     "tool",
+     "accounting_logic",
+     "computed_by",
+     "reads"
+    ],
+    "type": "object"
+   },
+   "status": {
+    "description": "Where the call ended. Only `ok` carries figures.",
+    "enum": [
+     "ok",
+     "invalid_period",
+     "connection_not_found",
+     "unsupported_source",
+     "connection_not_readable",
+     "unsupported_currency",
+     "unsupported_framework",
+     "framework_not_reviewed",
+     "scope_missing",
+     "tool_not_read_only",
+     "fiscal_year_not_found",
+     "opening_balances_unverified",
+     "trial_balance_semantics_unproven",
+     "closing_entries_suspected",
+     "read_incomplete",
+     "invalid_trial_balance",
+     "failed"
+    ],
+    "type": "string"
+   },
+   "success": {
+    "description": "True only when `status` is `ok`.",
+    "type": "boolean"
+   },
+   "trial_balance": {
+    "additionalProperties": false,
+    "description": "Set on `trial_balance_semantics_unproven` and `closing_entries_suspected`: Pennylane's trial balance for the dates asked for. `row_count` is the full count and `rows` holds at most the first twenty, each exactly as Pennylane returned it. Show it as Pennylane's trial balance, not as a statement, and add nothing up.",
+    "properties": {
+     "from": {
+      "type": "string"
+     },
+     "row_count": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "rows": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "credits": {
+         "type": "string"
+        },
+        "debits": {
+         "type": "string"
+        },
+        "label": {
+         "type": "string"
+        },
+        "number": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "number",
+        "label",
+        "debits",
+        "credits"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "to": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "from",
+     "to",
+     "row_count",
+     "rows"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "status",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Build the profit and loss and balance sheet from the ledger"
+}
