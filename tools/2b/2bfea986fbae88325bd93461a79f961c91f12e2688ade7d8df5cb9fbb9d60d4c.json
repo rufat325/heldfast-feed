@@ -1,0 +1,584 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Sum payslips"
+ },
+ "description": "The payroll total of a window of whole months, summed on the server from the payslips: gross pay, net pay, employee deductions, employer charges and the payslip cost, one group per currency, and per month when `axes` holds \"month\". It draws nothing.\n\nUse it for any payroll or payslip total: \"what did payroll cost last month\", \"total employer charges this quarter\", \"masse salariale\", \"co\u00fbt employeur total\". State the figures it returns and never add payslip amounts yourself, and never sum payslips with `well_query_records` or a records statistic: this read applies one rule on every surface, so the same question gives the same figure. For the payslips behind a figure, read the rows with `well_show_records`.\n\n**The window** is `from` (inclusive) to `to` (exclusive), each the first day of a month as YYYY-MM-01, at most 12 months, cut on the pay period end. One month is `from: \"2026-09-01\", to: \"2026-10-01\"`.\n\n**The rule is fixed, and `rule` echoes it.** Statuses summed: `approved` and `paid`, and a payslip with no status, unless `statuses` names others. `employee_deductions` adds each deduction line by its magnitude; `employer_charges` adds the charge lines as printed, so a negative one is a reversal. Memo lines count nowhere. `payslip_cost` is `gross_pay + employer_charges`.\n\n**Every figure is per currency and never converted.** Do not add two groups of different currencies.\n\n**What the figures leave out is returned so you can say it:** `gross_unread_count` and `net_unread_count` (payslips that printed no amount there, in no total: say unread, never zero), `unclassified_line_count` and `unclassified_line_amount` (lines with no side, in no side total), `held_back` (payslips of other statuses, by status: drafts, pending, cancelled), `unplaced_count` (no pay period end, in no window) and `no_currency_count`.\n\n**People floor.** On a WhatsApp turn each amount needs at least 3 people (distinct employment contracts) behind it: payslips that printed it for `gross_pay` and `net_pay`, deduction or charge lines for `employee_deductions` and `employer_charges`, both of those for `payslip_cost`. A person counts toward an amount only when their share of it is not zero: a payslip or line of 0.00, or none, adds no one. An amount under 3 people, or a total over several months where one month is under 3 people for it, is `null` and listed in `suppressed` as `{ amount, reason: \"below_people_floor\" }`. `unclassified_line_amount` is always `null` there (`reason: \"not_on_whatsapp\"`). State the amounts that remain and say the others show in the Well web app. On WhatsApp `payslip_count` and `contract_count` are `null` and `meets_people_floor` says whether at least 3 people of the group have a non-zero gross or net pay: never state or guess a headcount there. On WhatsApp omit `statuses`; the read refuses it there. Never rebuild a held-back amount from other reads, other amounts or other windows. There is no per-person total.\n\n`partial: true` means part of the payroll is not in the figures, and `partial_reasons` says why: `read_cut_short` (a read was cut short and a figure may be a floor) or `currency_cap` (the window holds more than 4 currencies; `currencies_not_summed` names those in no group, so say they are left out) or `deadline` (the read ran out of time: `months_not_summed` names the months in no group, so say those months are missing and never read them as zero; a month with no group that is not listed there had no payslip to sum). When `success` is false the read failed: the empty `groups` is not a measured zero.\n\nWhen the token authorizes one workspace, call this directly \u2014 no other tool call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "axes": {
+    "description": "[\"month\"] for one group per month and currency. Omit for one group per currency over the window.",
+    "items": {
+     "enum": [
+      "month"
+     ],
+     "type": "string"
+    },
+    "maxItems": 1,
+    "type": "array"
+   },
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "from": {
+    "description": "Inclusive start of the window: the first day of a month, YYYY-MM-01.",
+    "pattern": "^(\\d{4})-(\\d{2})-01$",
+    "type": "string"
+   },
+   "statuses": {
+    "description": "The payslip statuses to sum. Omit for the rule's default (approved, paid and no status).",
+    "items": {
+     "enum": [
+      "draft",
+      "pending",
+      "approved",
+      "paid",
+      "cancelled"
+     ],
+     "type": "string"
+    },
+    "maxItems": 5,
+    "minItems": 1,
+    "type": "array"
+   },
+   "to": {
+    "description": "EXCLUSIVE end of the window: the first day of the month after the last one, YYYY-MM-01.",
+    "pattern": "^(\\d{4})-(\\d{2})-01$",
+    "type": "string"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several: this read reports one workspace's own figures and will not choose which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   },
+   "workspace_scope": {
+    "description": "Restrict this call to the family: the token's primary workspace plus the company workspaces under it that you are a member of. Unrelated authorized workspaces drop out of the read; row reads merge across the family, while a per-workspace figure still reports exactly one workspace.",
+    "enum": [
+     "family"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "from",
+   "to"
+  ],
+  "type": "object"
+ },
+ "name": "well_sum_payslips",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "axes": {
+    "items": {
+     "enum": [
+      "month"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "currencies_not_summed": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "error": {
+    "type": "string"
+   },
+   "groups": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "contract_count": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "currency": {
+       "type": "string"
+      },
+      "employee_deductions": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "employer_charges": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "gross_pay": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "gross_unread_count": {
+       "type": "number"
+      },
+      "meets_people_floor": {
+       "type": "boolean"
+      },
+      "month": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "net_pay": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "net_unread_count": {
+       "type": "number"
+      },
+      "payslip_cost": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "payslip_count": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "suppressed": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "amount": {
+          "enum": [
+           "gross_pay",
+           "net_pay",
+           "employee_deductions",
+           "employer_charges",
+           "payslip_cost",
+           "unclassified_line_amount"
+          ],
+          "type": "string"
+         },
+         "reason": {
+          "enum": [
+           "below_people_floor",
+           "not_on_whatsapp"
+          ],
+          "type": "string"
+         }
+        },
+        "required": [
+         "amount",
+         "reason"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "unclassified_line_amount": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "unclassified_line_count": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "month",
+      "currency",
+      "payslip_count",
+      "contract_count",
+      "meets_people_floor",
+      "gross_unread_count",
+      "net_unread_count",
+      "unclassified_line_count",
+      "gross_pay",
+      "net_pay",
+      "employee_deductions",
+      "employer_charges",
+      "payslip_cost",
+      "unclassified_line_amount",
+      "suppressed"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "held_back": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "payslip_count": {
+       "type": "number"
+      },
+      "status": {
+       "anyOf": [
+        {
+         "enum": [
+          "draft",
+          "pending",
+          "approved",
+          "paid",
+          "cancelled"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "status",
+      "payslip_count"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "months_not_summed": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "newly_connected": {
+    "description": "Tools that connected to this workspace since the last result and that no session was told about yet, oldest first. Present only when at least one tool is new. Start the reply with one line per entry, in the person's language: \"<name> is connected.\". Never fold several entries into one sentence. Each entry comes back once, on one result only: never repeat its line later.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "no_currency_count": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "no_status_counted": {
+    "type": "boolean"
+   },
+   "partial": {
+    "type": "boolean"
+   },
+   "partial_reasons": {
+    "items": {
+     "enum": [
+      "read_cut_short",
+      "currency_cap",
+      "deadline"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "people_floor_applied": {
+    "type": "boolean"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "rule": {
+    "additionalProperties": false,
+    "properties": {
+     "currency_from": {
+      "const": "payslips.currency",
+      "type": "string"
+     },
+     "default_statuses": {
+      "items": {
+       "enum": [
+        "draft",
+        "pending",
+        "approved",
+        "paid",
+        "cancelled"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "employee_deductions_side": {
+      "const": "employee_deduction",
+      "type": "string"
+     },
+     "employee_deductions_sign": {
+      "const": "magnitude",
+      "type": "string"
+     },
+     "employer_charges_side": {
+      "const": "employer_charge",
+      "type": "string"
+     },
+     "employer_charges_sign": {
+      "const": "as_printed",
+      "type": "string"
+     },
+     "gross_from": {
+      "const": "payslips.gross_pay",
+      "type": "string"
+     },
+     "line_side_from": {
+      "const": "payslip_line_rubric.line_side",
+      "type": "string"
+     },
+     "max_currencies": {
+      "const": 4,
+      "type": "number"
+     },
+     "memo_lines_counted": {
+      "type": "boolean"
+     },
+     "net_from": {
+      "const": "payslips.net_pay",
+      "type": "string"
+     },
+     "no_status_counts_by_default": {
+      "type": "boolean"
+     },
+     "payslip_cost": {
+      "const": "gross_pay + employer_charges",
+      "type": "string"
+     },
+     "people_counted_on": {
+      "const": "distinct_employment_contracts",
+      "type": "string"
+     },
+     "people_counts_on_whatsapp": {
+      "const": "floor_met_only",
+      "type": "string"
+     },
+     "people_floor": {
+      "type": "number"
+     },
+     "people_floor_applies_on": {
+      "const": "whatsapp",
+      "type": "string"
+     },
+     "people_floor_checks_every_month": {
+      "const": true,
+      "type": "boolean"
+     },
+     "people_floor_counts_people_per_amount": {
+      "const": true,
+      "type": "boolean"
+     },
+     "people_floor_counts_zero_shares": {
+      "const": false,
+      "type": "boolean"
+     },
+     "statuses_on_whatsapp": {
+      "const": "default_only",
+      "type": "string"
+     },
+     "unclassified_line_amount_on_whatsapp": {
+      "const": "never",
+      "type": "string"
+     },
+     "window_on": {
+      "const": "period_end",
+      "type": "string"
+     }
+    },
+    "required": [
+     "window_on",
+     "default_statuses",
+     "no_status_counts_by_default",
+     "gross_from",
+     "net_from",
+     "line_side_from",
+     "employee_deductions_side",
+     "employer_charges_side",
+     "employee_deductions_sign",
+     "employer_charges_sign",
+     "memo_lines_counted",
+     "payslip_cost",
+     "currency_from",
+     "people_floor",
+     "people_counted_on",
+     "people_floor_applies_on",
+     "people_floor_counts_people_per_amount",
+     "people_floor_counts_zero_shares",
+     "people_floor_checks_every_month",
+     "people_counts_on_whatsapp",
+     "unclassified_line_amount_on_whatsapp",
+     "statuses_on_whatsapp",
+     "max_currencies"
+    ],
+    "type": "object"
+   },
+   "statuses": {
+    "items": {
+     "enum": [
+      "draft",
+      "pending",
+      "approved",
+      "paid",
+      "cancelled"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "unplaced_count": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "window": {
+    "additionalProperties": false,
+    "properties": {
+     "from": {
+      "type": "string"
+     },
+     "to": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "from",
+     "to"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "window",
+   "axes",
+   "statuses",
+   "no_status_counted",
+   "groups",
+   "held_back",
+   "unplaced_count",
+   "no_currency_count",
+   "people_floor_applied",
+   "partial",
+   "partial_reasons",
+   "currencies_not_summed",
+   "months_not_summed",
+   "rule",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Sum payslips"
+}

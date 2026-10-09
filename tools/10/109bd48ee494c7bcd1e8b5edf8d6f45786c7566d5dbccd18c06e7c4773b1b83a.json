@@ -1,0 +1,211 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Plans one transaction (two when paying in USDG: its approval first) from ETH or USDG to a ladder in a v4 pool of the token against the quote, and returns it unsigned. The sides the wallet's asset is not are bought in the chain's own pools inside the transaction, the ladder is built for the owner, and when the pair has no pool on LoomDesk's hook one is opened on the way. Use whenever the caller pays in ETH or USDG; it replaces plan_swap, plan_open_pool and plan_ladder together. Not for assets the wallet already holds (plan_ladder) or for an order at one price (plan_limit_order). Returns: transactions[] (to, data, value in wei, gas), check (simulated, ok, failedStep, reason, ethNeeded, ethHeld), sendWithin, ifItReverts, slippagePct, pool (which, or that it opens), priceNow, band, rungs, bought[] (each side, expected, atLeast, via), paid, fees, recentMovePct. Behavior: read-only on our side; nothing is signed or sent. The plan is laid out from the chain at this block and simulated from the owner; send it within check.sendWithin, and plan again rather than resend one that reverted. Costs quota units (agent_quota). Errors: refused when the amount does not cover the opening fee, the token has no pool against ETH or USDG to buy a side in, or the quote has no exit.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "amount": {
+    "description": "How much is paid, as a decimal string (for example \"0.05\").",
+    "pattern": "^\\d*\\.?\\d+$",
+    "type": "string"
+   },
+   "copyOf": {
+    "description": "The id of a ladder on the current contract this one copies: its owner is paid 0.1% while it stays open in the same pair.",
+    "pattern": "^\\d+$",
+    "type": "string"
+   },
+   "feePct": {
+    "description": "The swap fee for a pool that has to be opened: 0.1, 0.5, or 1 to 5 (percent). Ignored when the pair already has a pool on the hook.",
+    "maximum": 10,
+    "minimum": 0.1,
+    "type": "number"
+   },
+   "fullRange": {
+    "description": "One position across every price instead of a band; lowPct and highPct are ignored.",
+    "type": "boolean"
+   },
+   "highPct": {
+    "description": "The band's top, percent from the price. Needed unless fullRange.",
+    "maximum": 500,
+    "minimum": -97,
+    "type": "number"
+   },
+   "hook": {
+    "description": "Which hook the pool goes on and with what, when it has to be opened. Left out: the plain ranges pool at feePct; the answer then lists the presets under options. A full-range pool, a launch fee or the volatility fee are opened by the hook's own call in a transaction before the build (plan_build returns both, in order).",
+    "properties": {
+     "blocks": {
+      "description": "ranges only: the creator's blocks, each enforced by the hook in every swap and fixed at opening. A trader always pays the pool's fee and no more: the royalty and the burn come out of it.",
+      "properties": {
+       "antiSnipeMaxQuote": {
+        "description": "Anti-snipe: the most a single buy may spend of the quote (ETH or USDG, in whole units) during the first antiSnipeMinutes.",
+        "exclusiveMinimum": 0,
+        "type": "number"
+       },
+       "antiSnipeMinutes": {
+        "maximum": 1440,
+        "minimum": 1,
+        "type": "integer"
+       },
+       "burnPct": {
+        "description": "Auto burn: this percent of the base fee is burned in the token on every sell. At most 20.",
+        "exclusiveMinimum": 0,
+        "maximum": 20,
+        "type": "number"
+       },
+       "managedFee": {
+        "description": "Managed fee: the creator may later move the base fee between these tiers (same spacing as the fee: 1 to 5 together), an hour apart, with the hook's setFee.",
+        "properties": {
+         "ceilPct": {
+          "type": "number"
+         },
+         "floorPct": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "floorPct",
+         "ceilPct"
+        ],
+        "type": "object"
+       },
+       "offHoursFeePct": {
+        "description": "Market hours: outside NYSE hours (weekdays 13:30 to 20:00 UTC) the base fee is this tier instead.",
+        "type": "number"
+       },
+       "royaltyPct": {
+        "description": "Royalty: this percent of the base fee goes to the pool's creator in the quote, every swap. At most 30.",
+        "exclusiveMinimum": 0,
+        "maximum": 30,
+        "type": "number"
+       }
+      },
+      "type": "object"
+     },
+     "kind": {
+      "description": "ranges: LoomOpenHookV2, any band, the fee in the asset paid in (default). full: LoomFullHook, one full-range position only, every fee in the quote (ETH or USDG), and a swap that closes a gap of 3%+ to the token's Uniswap v3 market pays for the gap instead.",
+      "enum": [
+       "ranges",
+       "full"
+      ],
+      "type": "string"
+     },
+     "launchFeePct": {
+      "description": "The fee the pool opens at, percent, above the swap fee and at most 50; it falls in a straight line to the swap fee over launchMinutes. Needs launchMinutes.",
+      "maximum": 50,
+      "minimum": 0,
+      "type": "number"
+     },
+     "launchMinutes": {
+      "description": "How long the launch fee takes to fall to the swap fee: 1 to 1440 minutes.",
+      "maximum": 1440,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "preset": {
+      "description": "A named set: steady (1%, plain), volatile (3%, volatility fee on), launch (5%, opens at 50% and falls to 5% over an hour, volatility fee on), full (full range, 1% in the quote, opens at 10% for ten minutes). A field given beside it wins.",
+      "enum": [
+       "steady",
+       "volatile",
+       "launch",
+       "full"
+      ],
+      "type": "string"
+     },
+     "volatility": {
+      "description": "ranges only: a fee that rises for a while after the price moves (a move under 3% adds nothing; the add fades within minutes).",
+      "type": "boolean"
+     }
+    },
+    "type": "object"
+   },
+   "lowPct": {
+    "description": "The band's bottom, percent from the price (negative). Needed unless fullRange.",
+    "maximum": 400,
+    "minimum": -98,
+    "type": "number"
+   },
+   "owner": {
+    "description": "The wallet that signs, sends, and owns the ladder.",
+    "pattern": "^0x[0-9a-fA-F]{40}$",
+    "type": "string"
+   },
+   "payIn": {
+    "description": "What the wallet pays with.",
+    "enum": [
+     "ETH",
+     "USDG"
+    ],
+    "type": "string"
+   },
+   "pool": {
+    "description": "A v4 pool id from ladder_pools to build in, on the hook or not; the quote is then that pool's. Left out: the token's pool against the quote, opened if none.",
+    "type": "string"
+   },
+   "quote": {
+    "description": "What the token trades against: ETH, USDG, or the quote token's address.",
+    "maxLength": 64,
+    "minLength": 1,
+    "type": "string"
+   },
+   "referrer": {
+    "description": "The wallet that referred the owner: paid 0.1% of what goes in, out of the opening fee.",
+    "pattern": "^0x[0-9a-fA-F]{40}$",
+    "type": "string"
+   },
+   "rungs": {
+    "description": "How many rungs across the band, 1 to 40; default 20.",
+    "maximum": 40,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "shape": {
+    "description": "Where the band puts the most: spot, curve, bidask, hybrid, or custom with weights. Default bidask.",
+    "enum": [
+     "spot",
+     "curve",
+     "bidask",
+     "hybrid",
+     "custom"
+    ],
+    "type": "string"
+   },
+   "slippagePct": {
+    "description": "Room for the price to move, in percent. Left out: 1.5% on a calm token, more on one that has been moving, at most 10%.",
+    "maximum": 50,
+    "minimum": 0.5,
+    "type": "number"
+   },
+   "token": {
+    "description": "The token's address.",
+    "pattern": "^0x[0-9a-fA-F]{40}$",
+    "type": "string"
+   },
+   "weights": {
+    "description": "shape custom only: a relative height per rung, low price to high, any scale; stretched over the rungs built.",
+    "items": {
+     "maximum": 1000000,
+     "minimum": 0,
+     "type": "number"
+    },
+    "maxItems": 40,
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "required": [
+   "token",
+   "quote",
+   "payIn",
+   "amount",
+   "owner"
+  ],
+  "type": "object"
+ },
+ "name": "plan_build",
+ "title": "Plan a position from ETH or USDG, in one transaction"
+}

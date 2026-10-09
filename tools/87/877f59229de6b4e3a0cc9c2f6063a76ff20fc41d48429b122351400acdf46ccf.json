@@ -1,0 +1,2157 @@
+{
+ "_meta": {
+  "ui": {
+   "resourceUri": "ui://well/widget/242ea5ac"
+  },
+  "ui/resourceUri": "ui://well/widget/242ea5ac"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Get value added tax by period"
+ },
+ "description": "Read a French workspace's VAT position over a window of whole months, straight from its posted ledger (VAT on posted invoices, dated by invoice, which is the debit basis): per month, for the whole window as a CA3 by rate, and as totals with the net VAT payable. It also lists the invoices whose lines or supplier leave the figure unreliable. It reads the book and computes nothing a reader has to trust blind: every amount is a decimal string in major units of `currency`, such as `\"5000.00\"` for five thousand euros, ready to state as returned. State each amount with its `currency` exactly as given. Never convert, scale or recompute one.\n\nUse it for \"what is my VAT this quarter\", \"how much VAT can I deduct\", \"is my VAT return ready\" and \"which invoices are hurting my VAT\". Do not use it to sum invoices (`well_sum_invoices`) or to browse journal entries (`well_query_records`).\n\n**The window is whole months.** `from` is the first day of the first month and `to` is the first day of the month AFTER the last one, both as YYYY-MM-01, so the second quarter of 2026 is `2026-04-01` to `2026-07-01`. Name both or neither: with neither, the call reads the current calendar quarter. A window shorter than one month, longer than 12 months, or with a bound inside a month returns `status: \"invalid_period\"` with the reason in `error`. It is refused, never widened.\n\n**`months`** holds one row per calendar month, oldest first: `collected` (output VAT), `deductible` (input VAT, a positive magnitude), `net` (collected minus deductible, positive is payable), and `reverse_charge` (the self-assessed VAT on reverse-charge purchases, kept out of `collected` and `deductible`). `month_ended: false` marks a month still running, whose figures can still move. `unattributed_collected` and `unattributed_deductible` are VAT on lines that name no tax rate. `unmapped_rate_tax` is the signed net VAT (collected positive) on a rate the return has no slot for, such as 8.50 or 13.00. These three are in none of `collected`, `deductible` and `net`, so state them beside any total that is not zero. The monthly `collected`, `deductible` and `net` add up to the window totals.\n\n**`ca3`** is the return by rate over the WHOLE window, built once from every entry in it, not summed from the monthly rows. `complete: false` means the ledger holds a figure the return cannot place: read `blocking_reasons` (`unattributed_collected_vat`, `unattributed_deductible_vat`, `unmapped_rate_percent`, `directionless_taxable_base`) and say so before quoting any total as final. Box numbers are deliberately absent: Well does not guess a printed CA3 box.\n\n**`totals.net_due`** is the net VAT payable: collected minus deductible over the window, on the rates the return has a slot for (it leaves out `unattributed_*` and `unmapped_rate_tax`), with `position` as `payable`, `credit` or `nil`. A credit means the state owes the workspace, so never present it as a payment.\n\n**The figure is on the debit basis.** It counts VAT when the invoice is posted, in the month of the invoice date. On the receipts basis (TVA sur les encaissements), the default for services, VAT follows payments, so the amount payable can differ from this figure. The read models no VAT regime. State the basis beside the net figure, and say \"the posted ledger shows X net VAT payable\", never \"you owe X\".\n\n**`status: \"no_posted_entries\"`** means the window holds no posted ledger entry that carries VAT, so there is no figure to give. It carries no totals. It is NOT a nil return: never say no VAT is due. Say that nothing is posted for the window and that the books need posting first.\n\nPass **`basis: \"possibilities\"`** when the question is what VAT the current documents and in-progress book could become. The read includes DRAFT, VALIDATED and LOCKED VAT-role entries, plus invoice-header tax only when no live VAT-role entry exists for that invoice. It groups the evidence by calendar quarter, keeps domestic purchases, purchases to check, sales and unsided documents separate, and excludes other-currency and null-currency documents explicitly. Replacement documents are counted but excluded from the money lines, and make the quarter `incomplete`. A quarter's `presentation` is `computed` (both sides evidenced, each by an entry or a document, with at least one ledger entry in the quarter and nothing unread: `net` and `position` are set), `evidence_only` (one side only, or documents alone) or `incomplete` (unsided, other-currency, null-currency or replacement evidence, or entry VAT with no attributed or mapped rate, sits beside the figures); `net` and `position` are null unless `computed`; `entries.unplaced` is the entry VAT that neither side carries: reverse charge is only reported, while unattributed and unmapped-rate VAT make the quarter `incomplete`; purchases to check are reported beside a computed position and never added to it, and a side without evidence (`purchase_evidence` or `sales_evidence` false) is absent, never zero. Ledger entries booked in another or an unstated accounting currency are counted in `excluded` and not summed. A window over twelve months answers `range_too_large` with the window you asked for; nothing is narrowed. Possibilities carry no `months`, `ca3` or `totals`. With no accounting country, purchases remain `to check` and no jurisdiction is inferred. With no configured or country currency, the mode of eligible non-null document currencies is used, ties break alphabetically, and no eligible currency returns `no_vat_found`; existing ledger amounts are never relabelled. `status: \"no_vat_found\"` means neither VAT-role entries nor document evidence were found, or no denomination can be selected; it is not a nil return.\n\n**`anomalies`** lists invoices in the window, purchases and sales, that carry a billed line with no VAT rate (`line_without_vat_rate`). A purchase that names no supplier company also lists as `supplier_unattributed`; a sale never does. `direction` says which side an invoice is on, from the workspace's own company: a `purchase` names a `supplier`, `sales` names a `customer`, and `label` uses that party. `unanchored` means the invoice does not name the own company on exactly one side, so it has no direction and no party. `total` counts every such invoice, `items` holds the first `anomaly_limit` (default 20, at most 50), and `truncated: true` means more exist than `items` shows. Name an invoice by its `label`, never by `invoice_id`. An invoice with no rate is not necessarily missing VAT: the fix is to set the rate or supplier on the invoice, not to adjust the return.\n\n**Only French workspaces are supported for the posted basis.** A workspace whose accounting country is not France, or has none, returns `status: \"unsupported_jurisdiction\"` with its `country_code` (or null) and no figures. A possibilities read with no country is allowed, but it does not infer a jurisdiction and places purchases in `to check`.\n\n**`filing`** is the VAT return Well's obligation table assigns to the workspace's own company, from its accounting country and legal form, or null when the table assigns none (the legal form is not set, or the country is not covered). `cadence` is the table's cadence for that form, which assumes the normal real regime (r\u00e9gime r\u00e9el normal). Well stores no VAT regime and no deadline: `due_rule` is the published rule, with the `source` to name beside any date, and `due_window` is the window that rule gives for THIS read's period, the days of the month after it. It is null unless the read covers exactly one calendar month or one calendar quarter. State a date only after the person has confirmed they file on that cadence, and name the source with it.\n\n**`scope`.** Omit it, or pass `\"this_workspace\"`, to read the workspace the call runs in. Pass `\"my_companies\"` on WhatsApp to read every company workspace of the person's company family in one call, without moving the chat: the family is the membership the chat runs in, or the company's parent membership, and its company workspaces. A workspace counts only when the signed-in person holds a live membership in it, checked again before each read, and Well finds them from the signed-in person: a workspace is never named in the call. The result then carries `workspaces`, one block per company workspace (at most 10, `workspaces_truncated: true` when more exist), each with its `workspace_name`, `company_name` and the same fields as a single read, its own `status` first. Answer each block on its own: never add, net or compare two blocks into one figure. A block with `unsupported_jurisdiction` gets one line saying the read covers France only, then the next block. `workspaces_unreadable` counts the company workspaces a failed lookup left out unnamed: their position is unknown, not nil. An empty `workspaces` with `workspaces_unreadable` at 0 means the person has no company workspace they can read; with it above 0 it means the read failed. On any other host the read refuses the scope with `status: \"failed\"`: read one company per call there.\n\n`status: \"range_too_large\"` means the window holds more posted entries than one call reads (5000). Ask again with a shorter window. It is never answered with a partial sum. `status: \"failed\"` means the read failed and the position is UNKNOWN, not nil.\n\nWhen the token authorizes one workspace, call this directly \u2014 no other tool call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "anomaly_limit": {
+    "description": "How many anomalous invoices to list, at most 50. Defaults to 20; `anomalies.total` counts all of them.",
+    "maximum": 50,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "basis": {
+    "default": "posted",
+    "description": "Evidence basis. Omit or use `posted` for the existing posted-ledger VAT return; use `possibilities` for draft, posted and document-header evidence grouped by quarter.",
+    "enum": [
+     "posted",
+     "possibilities"
+    ],
+    "type": "string"
+   },
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "from": {
+    "description": "Inclusive start of the window: the first day of a month, YYYY-MM-01. Give it with `to`, or omit both for the current quarter.",
+    "pattern": "^(\\d{4})-(0[1-9]|1[0-2])-01$",
+    "type": "string"
+   },
+   "scope": {
+    "description": "Which workspaces the read covers. Omit it for the workspace the call runs in. \"my_companies\" reads every company workspace of the person's family, one block each, and runs on WhatsApp only.",
+    "enum": [
+     "this_workspace",
+     "my_companies"
+    ],
+    "type": "string"
+   },
+   "to": {
+    "description": "EXCLUSIVE end of the window: the first day of the month after the last one you want, YYYY-MM-01. Give it with `from`.",
+    "pattern": "^(\\d{4})-(0[1-9]|1[0-2])-01$",
+    "type": "string"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several: this read reports one workspace's own figures and will not choose which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   },
+   "workspace_scope": {
+    "description": "Restrict this call to the family: the token's primary workspace plus the company workspaces under it that you are a member of. Unrelated authorized workspaces drop out of the read; row reads merge across the family, while a per-workspace figure still reports exactly one workspace.",
+    "enum": [
+     "family"
+    ],
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "well_get_vat_summary",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "anomalies": {
+    "additionalProperties": false,
+    "properties": {
+     "items": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "customer": {
+         "anyOf": [
+          {
+           "additionalProperties": false,
+           "description": "The receiver of a sale. Null on a purchase.",
+           "properties": {
+            "company_id": {
+             "type": "string"
+            },
+            "domain": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "name": {
+             "type": "string"
+            }
+           },
+           "required": [
+            "company_id",
+            "name",
+            "domain"
+           ],
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "direction": {
+         "description": "`purchase` names a supplier, `sales` names a customer, `unanchored` has neither.",
+         "enum": [
+          "purchase",
+          "sales",
+          "unanchored"
+         ],
+         "type": "string"
+        },
+        "invoice_id": {
+         "type": "string"
+        },
+        "invoice_number": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "issue_date": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "label": {
+         "description": "Supplier, invoice number and date. Name the invoice by this.",
+         "type": "string"
+        },
+        "reasons": {
+         "items": {
+          "enum": [
+           "line_without_vat_rate",
+           "supplier_unattributed"
+          ],
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "supplier": {
+         "anyOf": [
+          {
+           "additionalProperties": false,
+           "description": "The issuer of a purchase. Null on a sale.",
+           "properties": {
+            "company_id": {
+             "type": "string"
+            },
+            "domain": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "type": "null"
+              }
+             ]
+            },
+            "name": {
+             "type": "string"
+            }
+           },
+           "required": [
+            "company_id",
+            "name",
+            "domain"
+           ],
+           "type": "object"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "unrated_line_count": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        }
+       },
+       "required": [
+        "invoice_id",
+        "label",
+        "direction",
+        "invoice_number",
+        "issue_date",
+        "supplier",
+        "customer",
+        "reasons",
+        "unrated_line_count"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "limit": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "returned": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "total": {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "total_by_reason": {
+      "additionalProperties": false,
+      "properties": {
+       "line_without_vat_rate": {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
+       },
+       "supplier_unattributed": {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
+       }
+      },
+      "required": [
+       "line_without_vat_rate",
+       "supplier_unattributed"
+      ],
+      "type": "object"
+     },
+     "truncated": {
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "items",
+     "returned",
+     "limit",
+     "total",
+     "truncated",
+     "total_by_reason"
+    ],
+    "type": "object"
+   },
+   "basis": {
+    "description": "The evidence basis used by the read. Omitted means the posted ledger basis.",
+    "enum": [
+     "posted",
+     "possibilities"
+    ],
+    "type": "string"
+   },
+   "ca3": {
+    "additionalProperties": false,
+    "properties": {
+     "blocking_reasons": {
+      "items": {
+       "enum": [
+        "unattributed_collected_vat",
+        "unattributed_deductible_vat",
+        "unmapped_rate_percent",
+        "directionless_taxable_base"
+       ],
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "complete": {
+      "type": "boolean"
+     },
+     "rates": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "collected": {
+         "additionalProperties": false,
+         "properties": {
+          "base": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "tax": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          }
+         },
+         "required": [
+          "base",
+          "tax"
+         ],
+         "type": "object"
+        },
+        "deductible": {
+         "additionalProperties": false,
+         "properties": {
+          "base": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "tax": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          }
+         },
+         "required": [
+          "base",
+          "tax"
+         ],
+         "type": "object"
+        },
+        "directionless_base": {
+         "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+         "pattern": "^-?\\d+\\.\\d{2}$",
+         "type": "string"
+        },
+        "rate_percent": {
+         "type": "string"
+        },
+        "slot": {
+         "enum": [
+          "rate_2_1",
+          "rate_5_5",
+          "rate_10",
+          "rate_20"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "slot",
+        "rate_percent",
+        "collected",
+        "deductible",
+        "directionless_base"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "reverse_charge": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "base": {
+         "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+         "pattern": "^-?\\d+\\.\\d{2}$",
+         "type": "string"
+        },
+        "rate_percent": {
+         "type": "string"
+        },
+        "self_assessed_credit": {
+         "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+         "pattern": "^-?\\d+\\.\\d{2}$",
+         "type": "string"
+        },
+        "self_assessed_debit": {
+         "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+         "pattern": "^-?\\d+\\.\\d{2}$",
+         "type": "string"
+        },
+        "slot": {
+         "enum": [
+          "rate_2_1",
+          "rate_5_5",
+          "rate_10",
+          "rate_20"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "slot",
+        "rate_percent",
+        "base",
+        "self_assessed_debit",
+        "self_assessed_credit"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "unmapped": {
+      "items": {
+       "oneOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "base": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "rate_percent": {
+           "type": "string"
+          },
+          "source": {
+           "const": "rates",
+           "type": "string"
+          },
+          "tax": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          }
+         },
+         "required": [
+          "source",
+          "rate_percent",
+          "base",
+          "tax"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "properties": {
+          "base": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "rate_percent": {
+           "type": "string"
+          },
+          "self_assessed_credit": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "self_assessed_debit": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "source": {
+           "const": "reverse_charge",
+           "type": "string"
+          }
+         },
+         "required": [
+          "source",
+          "rate_percent",
+          "base",
+          "self_assessed_debit",
+          "self_assessed_credit"
+         ],
+         "type": "object"
+        }
+       ]
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "rates",
+     "reverse_charge",
+     "unmapped",
+     "blocking_reasons",
+     "complete"
+    ],
+    "type": "object"
+   },
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "country_code": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "The workspace's accounting country. Set on `ok` and on `unsupported_jurisdiction`; null when none is configured."
+   },
+   "currency": {
+    "description": "ISO-4217 code every amount below is denominated in.",
+    "type": "string"
+   },
+   "error": {
+    "type": "string"
+   },
+   "filing": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "cadence": {
+        "description": "The table's cadence for the legal form, assuming the normal real regime. Not the person's regime.",
+        "enum": [
+         "monthly",
+         "quarterly",
+         "annual"
+        ],
+        "type": "string"
+       },
+       "declaration_id": {
+        "description": "The obligation table's stable id, such as `fr-vat-ca3`.",
+        "type": "string"
+       },
+       "due_rule": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "first_day": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "last_day": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           },
+           "source": {
+            "description": "Where the rule is published. Name it beside any date taken from the rule.",
+            "type": "string"
+           }
+          },
+          "required": [
+           "first_day",
+           "last_day",
+           "source"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "The published rule: filed in the month after the period, on one day the administration sets per company between `first_day` and `last_day`. Null when the table carries no rule."
+       },
+       "due_window": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "from": {
+            "type": "string"
+           },
+           "to": {
+            "type": "string"
+           }
+          },
+          "required": [
+           "from",
+           "to"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "The days `due_rule` gives for this read's window, as YYYY-MM-DD. Null when there is no rule, and when the window is not exactly one month or one calendar quarter, because a date then belongs to no single return."
+       },
+       "label": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "declaration_id",
+       "label",
+       "cadence",
+       "due_rule",
+       "due_window"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "The VAT return the obligation table assigns to the own company, or null when it assigns none. Well stores no regime and no deadline."
+   },
+   "months": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "collected": {
+       "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+       "pattern": "^-?\\d+\\.\\d{2}$",
+       "type": "string"
+      },
+      "deductible": {
+       "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+       "pattern": "^-?\\d+\\.\\d{2}$",
+       "type": "string"
+      },
+      "entry_count": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "fiscal_period": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "fiscal_year": {
+       "maximum": 9007199254740991,
+       "minimum": -9007199254740991,
+       "type": "integer"
+      },
+      "month_ended": {
+       "type": "boolean"
+      },
+      "net": {
+       "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+       "pattern": "^-?\\d+\\.\\d{2}$",
+       "type": "string"
+      },
+      "period": {
+       "description": "The calendar month, YYYY-MM.",
+       "type": "string"
+      },
+      "reverse_charge": {
+       "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+       "pattern": "^-?\\d+\\.\\d{2}$",
+       "type": "string"
+      },
+      "unattributed_collected": {
+       "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+       "pattern": "^-?\\d+\\.\\d{2}$",
+       "type": "string"
+      },
+      "unattributed_deductible": {
+       "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+       "pattern": "^-?\\d+\\.\\d{2}$",
+       "type": "string"
+      },
+      "unmapped_rate_tax": {
+       "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+       "pattern": "^-?\\d+\\.\\d{2}$",
+       "type": "string"
+      }
+     },
+     "required": [
+      "period",
+      "fiscal_year",
+      "fiscal_period",
+      "month_ended",
+      "collected",
+      "deductible",
+      "net",
+      "reverse_charge",
+      "unattributed_collected",
+      "unattributed_deductible",
+      "unmapped_rate_tax",
+      "entry_count"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "newly_connected": {
+    "description": "Tools that connected to this workspace since the last result and that no session was told about yet, oldest first. Present only when at least one tool is new. Start the reply with one line per entry, in the person's language: \"<name> is connected.\". Never fold several entries into one sentence. Each entry comes back once, on one result only: never repeat its line later.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "possibilities": {
+    "additionalProperties": false,
+    "properties": {
+     "counts": {
+      "additionalProperties": false,
+      "properties": {
+       "header_derived": {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
+       },
+       "purchase_domestic": {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
+       },
+       "purchase_to_check": {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
+       },
+       "sales": {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
+       },
+       "unsided": {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
+       }
+      },
+      "required": [
+       "purchase_domestic",
+       "purchase_to_check",
+       "sales",
+       "unsided",
+       "header_derived"
+      ],
+      "type": "object"
+     },
+     "excluded": {
+      "additionalProperties": false,
+      "properties": {
+       "null_currency_count": {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
+       },
+       "null_currency_entry_count": {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
+       },
+       "other_currency_count": {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
+       },
+       "other_currency_entry_count": {
+        "maximum": 9007199254740991,
+        "minimum": -9007199254740991,
+        "type": "integer"
+       }
+      },
+      "required": [
+       "other_currency_count",
+       "null_currency_count",
+       "other_currency_entry_count",
+       "null_currency_entry_count"
+      ],
+      "type": "object"
+     },
+     "quarters": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "basis": {
+         "const": "possibilities",
+         "type": "string"
+        },
+        "collected": {
+         "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+         "pattern": "^-?\\d+\\.\\d{2}$",
+         "type": "string"
+        },
+        "deductible": {
+         "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+         "pattern": "^-?\\d+\\.\\d{2}$",
+         "type": "string"
+        },
+        "documents": {
+         "additionalProperties": false,
+         "properties": {
+          "credit_note_count": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "document_count": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "entry_without_vat_line_count": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "purchase_domestic": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "purchase_to_check": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "replacing_count": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "sales": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "unsided": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          }
+         },
+         "required": [
+          "document_count",
+          "purchase_domestic",
+          "purchase_to_check",
+          "sales",
+          "unsided",
+          "credit_note_count",
+          "replacing_count",
+          "entry_without_vat_line_count"
+         ],
+         "type": "object"
+        },
+        "entries": {
+         "additionalProperties": false,
+         "properties": {
+          "collected": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "deductible": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "draft_count": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "entry_count": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "header_derived_count": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "unplaced": {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          "validated_count": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          }
+         },
+         "required": [
+          "deductible",
+          "collected",
+          "unplaced",
+          "entry_count",
+          "validated_count",
+          "draft_count",
+          "header_derived_count"
+         ],
+         "type": "object"
+        },
+        "months_in_window": {
+         "maximum": 3,
+         "minimum": 1,
+         "type": "integer"
+        },
+        "net": {
+         "anyOf": [
+          {
+           "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+           "pattern": "^-?\\d+\\.\\d{2}$",
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "position": {
+         "anyOf": [
+          {
+           "enum": [
+            "payable",
+            "credit",
+            "nil"
+           ],
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ]
+        },
+        "presentation": {
+         "enum": [
+          "computed",
+          "evidence_only",
+          "incomplete"
+         ],
+         "type": "string"
+        },
+        "purchase_evidence": {
+         "type": "boolean"
+        },
+        "quarter": {
+         "type": "string"
+        },
+        "quarter_ended": {
+         "type": "boolean"
+        },
+        "sales_evidence": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "quarter",
+        "basis",
+        "months_in_window",
+        "quarter_ended",
+        "entries",
+        "documents",
+        "deductible",
+        "collected",
+        "net",
+        "position",
+        "sales_evidence",
+        "purchase_evidence",
+        "presentation"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "quarters",
+     "counts",
+     "excluded"
+    ],
+    "type": "object"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "scope": {
+    "description": "Set on a `my_companies` read, whose figures are in `workspaces` and never at the top level.",
+    "enum": [
+     "this_workspace",
+     "my_companies"
+    ],
+    "type": "string"
+   },
+   "status": {
+    "description": "Where the call ended. `ok` carries figures; `no_posted_entries` and `no_vat_found` are not nil returns.",
+    "enum": [
+     "ok",
+     "no_vat_found",
+     "no_posted_entries",
+     "unsupported_jurisdiction",
+     "invalid_period",
+     "range_too_large",
+     "failed"
+    ],
+    "type": "string"
+   },
+   "success": {
+    "description": "True only when `status` is `ok`.",
+    "type": "boolean"
+   },
+   "supported_country_codes": {
+    "description": "Set on `unsupported_jurisdiction`: the countries this read models.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "totals": {
+    "additionalProperties": false,
+    "properties": {
+     "collected": {
+      "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+      "pattern": "^-?\\d+\\.\\d{2}$",
+      "type": "string"
+     },
+     "deductible": {
+      "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+      "pattern": "^-?\\d+\\.\\d{2}$",
+      "type": "string"
+     },
+     "net_due": {
+      "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+      "pattern": "^-?\\d+\\.\\d{2}$",
+      "type": "string"
+     },
+     "position": {
+      "enum": [
+       "payable",
+       "credit",
+       "nil"
+      ],
+      "type": "string"
+     },
+     "reverse_charge": {
+      "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+      "pattern": "^-?\\d+\\.\\d{2}$",
+      "type": "string"
+     },
+     "unattributed_collected": {
+      "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+      "pattern": "^-?\\d+\\.\\d{2}$",
+      "type": "string"
+     },
+     "unattributed_deductible": {
+      "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+      "pattern": "^-?\\d+\\.\\d{2}$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "collected",
+     "deductible",
+     "net_due",
+     "position",
+     "reverse_charge",
+     "unattributed_collected",
+     "unattributed_deductible"
+    ],
+    "type": "object"
+   },
+   "window": {
+    "additionalProperties": false,
+    "properties": {
+     "from": {
+      "type": "string"
+     },
+     "to": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "from",
+     "to"
+    ],
+    "type": "object"
+   },
+   "workspaces": {
+    "description": "One block per company workspace of the person's family, family root first. Each carries its own status and figures. Never add two blocks together.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "anomalies": {
+       "additionalProperties": false,
+       "properties": {
+        "items": {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "customer": {
+            "anyOf": [
+             {
+              "additionalProperties": false,
+              "description": "The receiver of a sale. Null on a purchase.",
+              "properties": {
+               "company_id": {
+                "type": "string"
+               },
+               "domain": {
+                "anyOf": [
+                 {
+                  "type": "string"
+                 },
+                 {
+                  "type": "null"
+                 }
+                ]
+               },
+               "name": {
+                "type": "string"
+               }
+              },
+              "required": [
+               "company_id",
+               "name",
+               "domain"
+              ],
+              "type": "object"
+             },
+             {
+              "type": "null"
+             }
+            ]
+           },
+           "direction": {
+            "description": "`purchase` names a supplier, `sales` names a customer, `unanchored` has neither.",
+            "enum": [
+             "purchase",
+             "sales",
+             "unanchored"
+            ],
+            "type": "string"
+           },
+           "invoice_id": {
+            "type": "string"
+           },
+           "invoice_number": {
+            "anyOf": [
+             {
+              "type": "string"
+             },
+             {
+              "type": "null"
+             }
+            ]
+           },
+           "issue_date": {
+            "anyOf": [
+             {
+              "type": "string"
+             },
+             {
+              "type": "null"
+             }
+            ]
+           },
+           "label": {
+            "description": "Supplier, invoice number and date. Name the invoice by this.",
+            "type": "string"
+           },
+           "reasons": {
+            "items": {
+             "enum": [
+              "line_without_vat_rate",
+              "supplier_unattributed"
+             ],
+             "type": "string"
+            },
+            "type": "array"
+           },
+           "supplier": {
+            "anyOf": [
+             {
+              "additionalProperties": false,
+              "description": "The issuer of a purchase. Null on a sale.",
+              "properties": {
+               "company_id": {
+                "type": "string"
+               },
+               "domain": {
+                "anyOf": [
+                 {
+                  "type": "string"
+                 },
+                 {
+                  "type": "null"
+                 }
+                ]
+               },
+               "name": {
+                "type": "string"
+               }
+              },
+              "required": [
+               "company_id",
+               "name",
+               "domain"
+              ],
+              "type": "object"
+             },
+             {
+              "type": "null"
+             }
+            ]
+           },
+           "unrated_line_count": {
+            "maximum": 9007199254740991,
+            "minimum": -9007199254740991,
+            "type": "integer"
+           }
+          },
+          "required": [
+           "invoice_id",
+           "label",
+           "direction",
+           "invoice_number",
+           "issue_date",
+           "supplier",
+           "customer",
+           "reasons",
+           "unrated_line_count"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "limit": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "returned": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "total": {
+         "maximum": 9007199254740991,
+         "minimum": -9007199254740991,
+         "type": "integer"
+        },
+        "total_by_reason": {
+         "additionalProperties": false,
+         "properties": {
+          "line_without_vat_rate": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "supplier_unattributed": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          }
+         },
+         "required": [
+          "line_without_vat_rate",
+          "supplier_unattributed"
+         ],
+         "type": "object"
+        },
+        "truncated": {
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "items",
+        "returned",
+        "limit",
+        "total",
+        "truncated",
+        "total_by_reason"
+       ],
+       "type": "object"
+      },
+      "basis": {
+       "description": "The evidence basis used by the read. Omitted means the posted ledger basis.",
+       "enum": [
+        "posted",
+        "possibilities"
+       ],
+       "type": "string"
+      },
+      "ca3": {
+       "additionalProperties": false,
+       "properties": {
+        "blocking_reasons": {
+         "items": {
+          "enum": [
+           "unattributed_collected_vat",
+           "unattributed_deductible_vat",
+           "unmapped_rate_percent",
+           "directionless_taxable_base"
+          ],
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "complete": {
+         "type": "boolean"
+        },
+        "rates": {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "collected": {
+            "additionalProperties": false,
+            "properties": {
+             "base": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             },
+             "tax": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             }
+            },
+            "required": [
+             "base",
+             "tax"
+            ],
+            "type": "object"
+           },
+           "deductible": {
+            "additionalProperties": false,
+            "properties": {
+             "base": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             },
+             "tax": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             }
+            },
+            "required": [
+             "base",
+             "tax"
+            ],
+            "type": "object"
+           },
+           "directionless_base": {
+            "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+            "pattern": "^-?\\d+\\.\\d{2}$",
+            "type": "string"
+           },
+           "rate_percent": {
+            "type": "string"
+           },
+           "slot": {
+            "enum": [
+             "rate_2_1",
+             "rate_5_5",
+             "rate_10",
+             "rate_20"
+            ],
+            "type": "string"
+           }
+          },
+          "required": [
+           "slot",
+           "rate_percent",
+           "collected",
+           "deductible",
+           "directionless_base"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "reverse_charge": {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "base": {
+            "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+            "pattern": "^-?\\d+\\.\\d{2}$",
+            "type": "string"
+           },
+           "rate_percent": {
+            "type": "string"
+           },
+           "self_assessed_credit": {
+            "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+            "pattern": "^-?\\d+\\.\\d{2}$",
+            "type": "string"
+           },
+           "self_assessed_debit": {
+            "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+            "pattern": "^-?\\d+\\.\\d{2}$",
+            "type": "string"
+           },
+           "slot": {
+            "enum": [
+             "rate_2_1",
+             "rate_5_5",
+             "rate_10",
+             "rate_20"
+            ],
+            "type": "string"
+           }
+          },
+          "required": [
+           "slot",
+           "rate_percent",
+           "base",
+           "self_assessed_debit",
+           "self_assessed_credit"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        "unmapped": {
+         "items": {
+          "oneOf": [
+           {
+            "additionalProperties": false,
+            "properties": {
+             "base": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             },
+             "rate_percent": {
+              "type": "string"
+             },
+             "source": {
+              "const": "rates",
+              "type": "string"
+             },
+             "tax": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             }
+            },
+            "required": [
+             "source",
+             "rate_percent",
+             "base",
+             "tax"
+            ],
+            "type": "object"
+           },
+           {
+            "additionalProperties": false,
+            "properties": {
+             "base": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             },
+             "rate_percent": {
+              "type": "string"
+             },
+             "self_assessed_credit": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             },
+             "self_assessed_debit": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             },
+             "source": {
+              "const": "reverse_charge",
+              "type": "string"
+             }
+            },
+            "required": [
+             "source",
+             "rate_percent",
+             "base",
+             "self_assessed_debit",
+             "self_assessed_credit"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "rates",
+        "reverse_charge",
+        "unmapped",
+        "blocking_reasons",
+        "complete"
+       ],
+       "type": "object"
+      },
+      "company_name": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "The workspace's own company, or null when none is set."
+      },
+      "country_code": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "The workspace's accounting country. Set on `ok` and on `unsupported_jurisdiction`; null when none is configured."
+      },
+      "currency": {
+       "description": "ISO-4217 code every amount below is denominated in.",
+       "type": "string"
+      },
+      "error": {
+       "type": "string"
+      },
+      "filing": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "cadence": {
+           "description": "The table's cadence for the legal form, assuming the normal real regime. Not the person's regime.",
+           "enum": [
+            "monthly",
+            "quarterly",
+            "annual"
+           ],
+           "type": "string"
+          },
+          "declaration_id": {
+           "description": "The obligation table's stable id, such as `fr-vat-ca3`.",
+           "type": "string"
+          },
+          "due_rule": {
+           "anyOf": [
+            {
+             "additionalProperties": false,
+             "properties": {
+              "first_day": {
+               "maximum": 9007199254740991,
+               "minimum": -9007199254740991,
+               "type": "integer"
+              },
+              "last_day": {
+               "maximum": 9007199254740991,
+               "minimum": -9007199254740991,
+               "type": "integer"
+              },
+              "source": {
+               "description": "Where the rule is published. Name it beside any date taken from the rule.",
+               "type": "string"
+              }
+             },
+             "required": [
+              "first_day",
+              "last_day",
+              "source"
+             ],
+             "type": "object"
+            },
+            {
+             "type": "null"
+            }
+           ],
+           "description": "The published rule: filed in the month after the period, on one day the administration sets per company between `first_day` and `last_day`. Null when the table carries no rule."
+          },
+          "due_window": {
+           "anyOf": [
+            {
+             "additionalProperties": false,
+             "properties": {
+              "from": {
+               "type": "string"
+              },
+              "to": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "from",
+              "to"
+             ],
+             "type": "object"
+            },
+            {
+             "type": "null"
+            }
+           ],
+           "description": "The days `due_rule` gives for this read's window, as YYYY-MM-DD. Null when there is no rule, and when the window is not exactly one month or one calendar quarter, because a date then belongs to no single return."
+          },
+          "label": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "declaration_id",
+          "label",
+          "cadence",
+          "due_rule",
+          "due_window"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "The VAT return the obligation table assigns to the own company, or null when it assigns none. Well stores no regime and no deadline."
+      },
+      "months": {
+       "items": {
+        "additionalProperties": false,
+        "properties": {
+         "collected": {
+          "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+          "pattern": "^-?\\d+\\.\\d{2}$",
+          "type": "string"
+         },
+         "deductible": {
+          "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+          "pattern": "^-?\\d+\\.\\d{2}$",
+          "type": "string"
+         },
+         "entry_count": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "fiscal_period": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "fiscal_year": {
+          "maximum": 9007199254740991,
+          "minimum": -9007199254740991,
+          "type": "integer"
+         },
+         "month_ended": {
+          "type": "boolean"
+         },
+         "net": {
+          "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+          "pattern": "^-?\\d+\\.\\d{2}$",
+          "type": "string"
+         },
+         "period": {
+          "description": "The calendar month, YYYY-MM.",
+          "type": "string"
+         },
+         "reverse_charge": {
+          "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+          "pattern": "^-?\\d+\\.\\d{2}$",
+          "type": "string"
+         },
+         "unattributed_collected": {
+          "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+          "pattern": "^-?\\d+\\.\\d{2}$",
+          "type": "string"
+         },
+         "unattributed_deductible": {
+          "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+          "pattern": "^-?\\d+\\.\\d{2}$",
+          "type": "string"
+         },
+         "unmapped_rate_tax": {
+          "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+          "pattern": "^-?\\d+\\.\\d{2}$",
+          "type": "string"
+         }
+        },
+        "required": [
+         "period",
+         "fiscal_year",
+         "fiscal_period",
+         "month_ended",
+         "collected",
+         "deductible",
+         "net",
+         "reverse_charge",
+         "unattributed_collected",
+         "unattributed_deductible",
+         "unmapped_rate_tax",
+         "entry_count"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "possibilities": {
+       "additionalProperties": false,
+       "properties": {
+        "counts": {
+         "additionalProperties": false,
+         "properties": {
+          "header_derived": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "purchase_domestic": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "purchase_to_check": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "sales": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "unsided": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          }
+         },
+         "required": [
+          "purchase_domestic",
+          "purchase_to_check",
+          "sales",
+          "unsided",
+          "header_derived"
+         ],
+         "type": "object"
+        },
+        "excluded": {
+         "additionalProperties": false,
+         "properties": {
+          "null_currency_count": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "null_currency_entry_count": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "other_currency_count": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          },
+          "other_currency_entry_count": {
+           "maximum": 9007199254740991,
+           "minimum": -9007199254740991,
+           "type": "integer"
+          }
+         },
+         "required": [
+          "other_currency_count",
+          "null_currency_count",
+          "other_currency_entry_count",
+          "null_currency_entry_count"
+         ],
+         "type": "object"
+        },
+        "quarters": {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "basis": {
+            "const": "possibilities",
+            "type": "string"
+           },
+           "collected": {
+            "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+            "pattern": "^-?\\d+\\.\\d{2}$",
+            "type": "string"
+           },
+           "deductible": {
+            "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+            "pattern": "^-?\\d+\\.\\d{2}$",
+            "type": "string"
+           },
+           "documents": {
+            "additionalProperties": false,
+            "properties": {
+             "credit_note_count": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "document_count": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "entry_without_vat_line_count": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "purchase_domestic": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             },
+             "purchase_to_check": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             },
+             "replacing_count": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "sales": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             },
+             "unsided": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             }
+            },
+            "required": [
+             "document_count",
+             "purchase_domestic",
+             "purchase_to_check",
+             "sales",
+             "unsided",
+             "credit_note_count",
+             "replacing_count",
+             "entry_without_vat_line_count"
+            ],
+            "type": "object"
+           },
+           "entries": {
+            "additionalProperties": false,
+            "properties": {
+             "collected": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             },
+             "deductible": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             },
+             "draft_count": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "entry_count": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "header_derived_count": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             },
+             "unplaced": {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             },
+             "validated_count": {
+              "maximum": 9007199254740991,
+              "minimum": -9007199254740991,
+              "type": "integer"
+             }
+            },
+            "required": [
+             "deductible",
+             "collected",
+             "unplaced",
+             "entry_count",
+             "validated_count",
+             "draft_count",
+             "header_derived_count"
+            ],
+            "type": "object"
+           },
+           "months_in_window": {
+            "maximum": 3,
+            "minimum": 1,
+            "type": "integer"
+           },
+           "net": {
+            "anyOf": [
+             {
+              "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+              "pattern": "^-?\\d+\\.\\d{2}$",
+              "type": "string"
+             },
+             {
+              "type": "null"
+             }
+            ]
+           },
+           "position": {
+            "anyOf": [
+             {
+              "enum": [
+               "payable",
+               "credit",
+               "nil"
+              ],
+              "type": "string"
+             },
+             {
+              "type": "null"
+             }
+            ]
+           },
+           "presentation": {
+            "enum": [
+             "computed",
+             "evidence_only",
+             "incomplete"
+            ],
+            "type": "string"
+           },
+           "purchase_evidence": {
+            "type": "boolean"
+           },
+           "quarter": {
+            "type": "string"
+           },
+           "quarter_ended": {
+            "type": "boolean"
+           },
+           "sales_evidence": {
+            "type": "boolean"
+           }
+          },
+          "required": [
+           "quarter",
+           "basis",
+           "months_in_window",
+           "quarter_ended",
+           "entries",
+           "documents",
+           "deductible",
+           "collected",
+           "net",
+           "position",
+           "sales_evidence",
+           "purchase_evidence",
+           "presentation"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        }
+       },
+       "required": [
+        "quarters",
+        "counts",
+        "excluded"
+       ],
+       "type": "object"
+      },
+      "status": {
+       "description": "Where the call ended. `ok` carries figures; `no_posted_entries` and `no_vat_found` are not nil returns.",
+       "enum": [
+        "ok",
+        "no_vat_found",
+        "no_posted_entries",
+        "unsupported_jurisdiction",
+        "invalid_period",
+        "range_too_large",
+        "failed"
+       ],
+       "type": "string"
+      },
+      "success": {
+       "description": "True only when `status` is `ok`.",
+       "type": "boolean"
+      },
+      "supported_country_codes": {
+       "description": "Set on `unsupported_jurisdiction`: the countries this read models.",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "totals": {
+       "additionalProperties": false,
+       "properties": {
+        "collected": {
+         "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+         "pattern": "^-?\\d+\\.\\d{2}$",
+         "type": "string"
+        },
+        "deductible": {
+         "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+         "pattern": "^-?\\d+\\.\\d{2}$",
+         "type": "string"
+        },
+        "net_due": {
+         "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+         "pattern": "^-?\\d+\\.\\d{2}$",
+         "type": "string"
+        },
+        "position": {
+         "enum": [
+          "payable",
+          "credit",
+          "nil"
+         ],
+         "type": "string"
+        },
+        "reverse_charge": {
+         "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+         "pattern": "^-?\\d+\\.\\d{2}$",
+         "type": "string"
+        },
+        "unattributed_collected": {
+         "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+         "pattern": "^-?\\d+\\.\\d{2}$",
+         "type": "string"
+        },
+        "unattributed_deductible": {
+         "description": "A decimal amount in major units of `currency`, always two decimals, such as `5000.00`. State it as returned.",
+         "pattern": "^-?\\d+\\.\\d{2}$",
+         "type": "string"
+        }
+       },
+       "required": [
+        "collected",
+        "deductible",
+        "net_due",
+        "position",
+        "reverse_charge",
+        "unattributed_collected",
+        "unattributed_deductible"
+       ],
+       "type": "object"
+      },
+      "window": {
+       "additionalProperties": false,
+       "properties": {
+        "from": {
+         "type": "string"
+        },
+        "to": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "from",
+        "to"
+       ],
+       "type": "object"
+      },
+      "workspace_id": {
+       "type": "string"
+      },
+      "workspace_name": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "workspace_id",
+      "workspace_name",
+      "company_name",
+      "status",
+      "success"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "workspaces_truncated": {
+    "description": "True when the family holds more than 10 company workspaces and the rest are not read.",
+    "type": "boolean"
+   },
+   "workspaces_unreadable": {
+    "description": "How many company workspaces of the family could not be checked or read because a lookup failed. They are not named and their position is unknown, not nil. Above zero, never say the person has no company workspace.",
+    "maximum": 9007199254740991,
+    "minimum": -9007199254740991,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "status",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Get value added tax by period"
+}
