@@ -1,0 +1,673 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Audit a stack (code + billing)"
+ },
+ "description": "Use when the user wants their stack checked as a whole: several subscriptions, the paid services in a codebase, or a portfolio of products ('audit what we pay for', 'what can we cut?'). One line per service with vendor, plan, what they pay, seats, the features they use and usage (or evidence strings); add project for a portfolio and account for a shared bill. Per service: status (eligible = a cheaper path checked end to end; needs_info = likely cheaper but a check is open, so ask its questions; keep; no_recipe), the best path, right_size, overlaps, and levers that are not counted as savings. Totals keep prices the user confirmed apart from modeled list prices. If facts are missing, start_audit says which ones matter first. Send vendor names, feature names, numbers and prices only: never source code, secrets or raw invoices. Stackcut stores the arguments of tool calls to improve its recommendations (vendor names, prices, seats, features, usage numbers, billing amounts and project descriptions; account keys only as a one-way hash, billing and validation sources not at all; never IP addresses). Tool results are summarized; exit tools log only result counts, qualification flags and public evidence statuses, not answer contents. Don't send personal data or secrets.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "active_users": {
+    "description": "People or accounts active in the last 30 days (0 = unused: cleanup levers and sanity checks)",
+    "maximum": 1000000000,
+    "minimum": 0,
+    "type": "number"
+   },
+   "decision": {
+    "description": "consolidate: overlaps on every job each tool does",
+    "enum": [
+     "cut_spend",
+     "consolidate",
+     "replace_one",
+     "choose_stack",
+     "check_in"
+    ],
+    "maxLength": 2000,
+    "type": "string"
+   },
+   "limit_paths": {
+    "default": 3,
+    "maximum": 8,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "revenue_usd_per_month": {
+    "description": "The product's revenue per month (context for sanity checks: no revenue, cost per user, fees vs revenue; never a cap)",
+    "maximum": 1000000000,
+    "minimum": 0,
+    "type": "number"
+   },
+   "services": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "account": {
+       "description": "Billing account key (e.g. 'supabase-org-main'): lines with the same vendor and key share one bill; different keys are separate bills. Give the bill once",
+       "maxLength": 100,
+       "minLength": 1,
+       "type": "string"
+      },
+      "active_users": {
+       "description": "People or accounts active in the last 30 days (0 = unused: cleanup levers and sanity checks)",
+       "maximum": 1000000000,
+       "minimum": 0,
+       "type": "number"
+      },
+      "billing": {
+       "additionalProperties": false,
+       "description": "Billing evidence: scope (dedicated, shared or unknown), account_id (a non-secret alias; the account key), allocated_monthly_usd (attribution only, never a saving), avoidable_monthly_usd with avoidability_confirmed (what leaving actually removes from the bill; 0 is valid), commitment_months_remaining (non-refundable months left; 0 only when cancellable now) and source (a reference, no private contents). With billing, a path is eligible only once the avoidable amount, scope, commitment and source are all given",
+       "properties": {
+        "account_id": {
+         "maxLength": 200,
+         "minLength": 1,
+         "type": "string"
+        },
+        "allocated_monthly_usd": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "avoidability_confirmed": {
+         "type": "boolean"
+        },
+        "avoidable_monthly_usd": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "commitment_months_remaining": {
+         "maximum": 120,
+         "minimum": 0,
+         "type": "number"
+        },
+        "scope": {
+         "enum": [
+          "dedicated",
+          "shared",
+          "unknown"
+         ],
+         "maxLength": 2000,
+         "type": "string"
+        },
+        "source": {
+         "maxLength": 1000,
+         "minLength": 1,
+         "type": "string"
+        }
+       },
+       "type": "object"
+      },
+      "category": {
+       "description": "detect.mjs output (ignored)",
+       "maxLength": 100,
+       "type": "string"
+      },
+      "confidence": {
+       "description": "detect.mjs output: 'low' (only a config file) means no paid plan is assumed",
+       "maxLength": 20,
+       "type": "string"
+      },
+      "confirmed": {
+       "description": "true when the user confirmed they pay for this (with plan: its list price counts as confirmed spend). Scanner-only lines are unconfirmed",
+       "type": "boolean"
+      },
+      "evidence": {
+       "description": "Scan evidence labels and usage facts in words ('db 1.5 GB', '40,000 emails/mo', '37 domains')",
+       "items": {
+        "maxLength": 500,
+        "type": "string"
+       },
+       "maxItems": 50,
+       "type": "array"
+      },
+      "feature_counts": {
+       "description": "detect.mjs output (ignored)",
+       "items": {
+        "type": "object"
+       },
+       "maxItems": 100,
+       "type": "array"
+      },
+      "features_used": {
+       "description": "Features the code or the user relies on; sizes and counts ('4,000 contacts') are read as usage",
+       "items": {
+        "maxLength": 200,
+        "type": "string"
+       },
+       "maxItems": 50,
+       "type": "array"
+      },
+      "files_referencing": {
+       "description": "detect.mjs output: marks the line as scan-only (unconfirmed); never read as usage",
+       "maximum": 1000000000000,
+       "minimum": 0,
+       "type": "integer"
+      },
+      "in_catalog": {
+       "description": "detect.mjs output (ignored)",
+       "type": "boolean"
+      },
+      "last_active": {
+       "description": "When this resource (project, app, account) was last used: an ISO date ('2026-03-10'), 'never', or '5 months ago'. 90+ days idle or never used gets a cleanup lever",
+       "maxLength": 100,
+       "type": "string"
+      },
+      "monthly_spend_usd": {
+       "description": "What they pay per month for it, all seats, if known",
+       "maximum": 1000000,
+       "minimum": 0,
+       "type": "number"
+      },
+      "name": {
+       "description": "detect.mjs output (ignored)",
+       "maxLength": 200,
+       "type": "string"
+      },
+      "plan": {
+       "description": "Their plan, e.g. 'Business Standard' (else read from the name or evidence)",
+       "maxLength": 100,
+       "type": "string"
+      },
+      "project": {
+       "description": "Which of their projects or products this line is for (portfolio audits): lines of one vendor across projects are audited as one account. Give each project's own usage on its line and the account's bill once",
+       "maxLength": 100,
+       "minLength": 1,
+       "type": "string"
+      },
+      "replacement_validation": {
+       "additionalProperties": false,
+       "description": "A replacement path the user checked themselves: its current price, capacity, burst limits and paid add-ons against their usage. It answers that path's capacity checks (never its must-haves) and ranks it first",
+       "properties": {
+        "capacity_and_price_confirmed": {
+         "description": "true only after checking the price, capacity, burst limits and required add-ons",
+         "type": "boolean"
+        },
+        "path_id": {
+         "description": "The path id (from find_alternatives or audit_stack)",
+         "maxLength": 200,
+         "minLength": 1,
+         "type": "string"
+        },
+        "source": {
+         "description": "Where the check comes from (usage report, pricing page, quote); no private contents",
+         "maxLength": 1000,
+         "minLength": 1,
+         "type": "string"
+        }
+       },
+       "required": [
+        "path_id",
+        "capacity_and_price_confirmed",
+        "source"
+       ],
+       "type": "object"
+      },
+      "revenue_usd_per_month": {
+       "description": "The product's revenue per month (context for sanity checks: no revenue, cost per user, fees vs revenue; never a cap)",
+       "maximum": 1000000000,
+       "minimum": 0,
+       "type": "number"
+      },
+      "seats": {
+       "description": "Paid seats",
+       "maximum": 100000,
+       "minimum": 1,
+       "type": "integer"
+      },
+      "service_id": {
+       "description": "A distinct bill when the same vendor appears more than once (an account key, like account; lines with the same key are one bill)",
+       "maxLength": 200,
+       "minLength": 1,
+       "type": "string"
+      },
+      "shared_with": {
+       "description": "How many products share this bill (one account, org or team), when only this product is audited: moving one product off it saves only what it adds to the bill, never the whole bill. monthly_spend_usd is then the whole account's bill",
+       "maximum": 100000,
+       "minimum": 1,
+       "type": "integer"
+      },
+      "usage": {
+       "additionalProperties": false,
+       "description": "Their usage, checked against each plan's caps (priced with published overage and add-ons). Units: seats, members, mau, emails_per_month, emails_per_day, contacts, domains, events_per_month, identified_events_per_month, pageviews_per_month, errors_per_month, requests_per_month, requests_per_day, searches_per_month, cpu_ms_per_request, db_gb, storage_gb, bandwidth_gb, projects, sites, videos, video_minutes, responses_per_month, tasks_per_month, keywords_tracked, credits_per_month, history_days, apps, files, boards, event_types, monitors, tokens_per_month, images_per_month, audio_minutes_per_month, characters_per_month, transactions_per_month, sandbox_hours_per_month, concurrent_sessions, session_minutes, call_participants, meeting_minutes, records, inboxes, tokens_in_per_month, tokens_out_per_month, cached_tokens_per_month, video_minutes_stored, video_minutes_delivered_per_month, gmv_usd_per_month, payouts_per_month, active_accounts, verifications_per_month, browser_hours_per_month, proxy_gb_per_month, job_executions_per_month, sso_connections, sso_users, inbound_emails_per_month, stream_hours_per_month, vcpu_hours_per_month, credits_usd_per_month, disputes_per_month, payout_volume_usd_per_month, object_writes_per_month, object_reads_per_month, job_executions_per_day, scim_connections, searches_per_hour, sms_per_month, vectors_stored, vector_queries_per_month, cache_commands_per_month, mtu, gpu_seconds_per_month, revenue_usd_per_month, phone_minutes_per_month, vector_read_units_per_month, vector_write_units_per_month, hosts, tickets_per_month (MAU is accepted for mau). Example: {\"emails_per_month\": 40000, \"domains\": 4, \"db_gb\": 3}. get_usage_questions says which units matter for a vendor and where the user finds each number.",
+       "properties": {
+        "MAU": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "active_accounts": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "apps": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "audio_minutes_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "bandwidth_gb": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "boards": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "browser_hours_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "cache_commands_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "cached_tokens_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "call_participants": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "characters_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "concurrent_sessions": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "contacts": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "cpu_ms_per_request": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "credits_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "credits_usd_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "db_gb": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "disputes_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "domains": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "emails_per_day": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "emails_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "errors_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "event_types": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "events_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "files": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "gmv_usd_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "gpu_seconds_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "history_days": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "hosts": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "identified_events_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "images_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "inbound_emails_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "inboxes": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "job_executions_per_day": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "job_executions_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "keywords_tracked": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "mau": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "meeting_minutes": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "members": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "monitors": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "mtu": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "object_reads_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "object_writes_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "pageviews_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "payout_volume_usd_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "payouts_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "phone_minutes_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "projects": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "proxy_gb_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "records": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "requests_per_day": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "requests_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "responses_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "revenue_usd_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "sandbox_hours_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "scim_connections": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "searches_per_hour": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "searches_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "seats": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "session_minutes": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "sites": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "sms_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "sso_connections": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "sso_users": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "storage_gb": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "stream_hours_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "tasks_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "tickets_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "tokens_in_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "tokens_out_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "tokens_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "transactions_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "vcpu_hours_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "vector_queries_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "vector_read_units_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "vector_write_units_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "vectors_stored": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "verifications_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "video_minutes": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "video_minutes_delivered_per_month": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "video_minutes_stored": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        },
+        "videos": {
+         "maximum": 1000000000000,
+         "minimum": 0,
+         "type": "number"
+        }
+       },
+       "type": "object"
+      },
+      "vendor": {
+       "description": "Vendor id from the scan (e.g. 'sendgrid') or a product name as on the invoice ('Airtable', 'Slack Pro')",
+       "maxLength": 200,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "required": [
+      "vendor"
+     ],
+     "type": "object"
+    },
+    "maxItems": 200,
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "required": [
+   "services"
+  ],
+  "type": "object"
+ },
+ "name": "audit_stack",
+ "title": "Audit a stack (code + billing)"
+}

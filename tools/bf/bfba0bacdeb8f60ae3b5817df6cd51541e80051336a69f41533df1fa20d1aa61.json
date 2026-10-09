@@ -1,0 +1,364 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Sum transactions over a window"
+ },
+ "description": "Sum a workspace's transactions over a date window, grouped how you ask. Arithmetic only \u2014 this tool holds no definition of burn, spend, or runway, and returns no figure the app renders.\n\nUse it when you are computing a figure whose RULES you are stating yourself: a burn over a window you chose, a total that excludes categories the user named, a per-month series behind a trend you are about to describe. The server derives no burn of its own, so a burn figure starts here: state the rules, sum exactly those rows, then put the result on a card with `well_render_burn`.\n\n`from` is inclusive and `to` is EXCLUSIVE, so a window of whole months passes the first instant of the month after the last one you want. Both are required: a window you cannot state is a decision you have not made, and this tool will not pick one for you.\n\n`axes` groups the result (any of `month`, `currency`, `category`, `ledger_account`, `category_label`, `transaction_type`, `flow_group`, `counterparty`, comma-separated) and names what to group in ADDITION to currency. Every axis appears on every row: the ones you did not group by come back `null`, so the row shape never depends on what you asked for.\n\n**On an axis you DID name, a `null` is a group, not a gap.** It is the rows whose column is empty, and it carries its own sums and counts like any other group. A group's rows are `count_negative + count_positive`, so the null group's share of that total is the part that axis cannot label. Both counts cover readable, non-zero rows only: a zero amount is in neither branch, and unreadable ones are in `excluded_malformed`. So the share is a share of the rows this tool could sum, not of every row in the window. What that share means, and which grouping is worth using, is yours to decide: this tool holds no view on it.\n\nWhat each labelling axis IS:\n  - `ledger_account`: the name on the workspace's own chart of accounts. It may have been written by an accounting sync rather than chosen by a person, so do not call it the user's own categorization without checking the `ledger_accounts` root for the connector that wrote it. A blank label reads as `null`. A soft-deleted or inactive account still carries its name, because this axis reports what the row was labelled at the time, not what the current chart of accounts holds. It groups on the NAME, and a chart of accounts is unique on the account number rather than the name, so two accounts sharing one name arrive as a single group carrying both their sums. That is one slice per label, which is what a breakdown by label means, but it is not one slice per account: do not read a group here as an account.\n  - `category`: the typed catalog key, and the ONLY value `exempt_categories` accepts. A key the catalog no longer carries is still populated here, so it groups under a key that names nothing a reader would recognise.\n  - `category_label`: the stored display label, which a connector may have written in its own language. Never pass one to `exempt_categories`; it is not a key.\n  - `transaction_type`: the transaction's own type. Each value is a full sentence rather than a code, and almost every row carries one.\n  - `flow_group`: `operating` holds customer receipts, supplier payments, payroll, tax, bank fees, and standalone bank lines; `transfer` holds same-entity and intercompany transfers. `financing` holds equity and loan money. A `null` here is the group of rows with no stored flow, not the uncategorized count: classification has not reached some rows, while a person, rule, or ledger pick clears the flow on others. This axis does not replace `exclude_internal_transfers`, which counts account legs instead of reading the flow.\n  - `counterparty`: the other party's company name, read from the one leg that is not a card or an owned account of the workspace (a supplier's account identified by its IBAN still counts as the other party): the supplier on an outflow, the customer on an inflow, whatever sign the feed stores. Use it for spend by supplier. A `null` is the group of rows with no such single leg (an unresolved side, or a movement between the workspace's own accounts), a person or a bare name rather than a company, or a parent's row shared through an adoption grant, whose company this workspace does not hold. It groups on the NAME, so two company records sharing one name arrive as one group. It counts every payment to a named company, recurring or not, and keeps a payment to the workspace's own company. For recurring spend, `well_measure_subscriptions` is the authority: it groups on the company record, so its figure for one supplier can differ from this axis.\n\n**At most 500 groups come back, biggest first.** Past that the smallest are dropped and `rows_truncated` is true, which is NOT `partial`: everything here was measured exactly and only the tail is missing. A total over a truncated result is a floor, and an axis's coverage cannot be read off one at all, because the null group may be among the dropped. Group on fewer axes, or over a shorter window, and ask again.\n\n**Currency is always grouped, named or not, so a row never mixes two.** Adding EUR to USD gives a number denominated in nothing, and no field on the result would tell you it happened. Omitting `axes` therefore returns one row PER CURRENCY over the window, not one row. Convert the per-currency subtotals yourself, at a rate you can state, before you add them \u2014 and if there is more than one row and you report a single total without converting, the total is wrong.\n\n**Each row carries BOTH sign branches, and choosing between them is your job.** `sum_negative` is the magnitude of the rows whose amount is negative; `sum_positive` is the magnitude of the rows whose amount is positive; `count_negative` and `count_positive` say how many rows are behind each. Which one is money leaving depends on the FEED, not on the query: most connectors store outflows as negatives, some store them as positive magnitudes. Read the counts to decide, and decide ONCE over the whole window rather than per row or per group: a single category or month can be all-positive on a signed feed, so electing per group flips the convention mid-answer and totals two different things together. A window whose rows are overwhelmingly negative is a signed feed, and outflow is `sum_negative`. Almost no negatives means the feed stores magnitudes and keeps direction in a field this tool does not group on \u2014 so it cannot separate outflow from inflow, and `sum_negative + sum_positive` is gross movement, not spend. Say so rather than reporting it as an outflow.\n\n**A substantial share of BOTH is a third answer, not a close call between the first two.** A workspace connected to a signed feed and a magnitude feed at once pools them here, and no combination of the two subtotals is its outflow: `sum_negative` misses the magnitude feed's spend entirely, and adding `sum_positive` pulls in the signed feed's income. There is no grouping that separates them, because the axes carry no connector. Report that the window mixes conventions and that a single outflow cannot be derived from it, rather than electing whichever branch is nearer. State which convention you elected and what the counts were, so the reader can check it.\n\n**`scope` is required, and it decides which rows are this workspace's.** `own_and_adopted` is the population the burn tile counts: the workspace's own transactions plus any a parent workspace shared with it through an adoption grant, with legs tested against the parent's accounts too. `own` is the workspace's own transactions only, tested against its own accounts \u2014 the rows its balances move with. Use `own` when the sum is reconciled against the workspace's own balances, as a cash-flow bridge is, and `own_and_adopted` for a burn. On most workspaces the two agree; on a child workspace they do not, which is why neither is a default.\n\n`exclude_internal_transfers: true` keeps only the rows with EXACTLY ONE leg on an account the workspace owns. Two legs is a movement between your own accounts and drops, which is the rule's purpose. **Zero legs also drops**, and that is the part worth knowing: a credit card purchase sits against a liability account, so on a credit-card-heavy workspace this removes the card purchases along with the transfers. The card's repayment from an owned bank account has one asset leg and stays, so card spend counts on the day the card is paid off, as one row under the repayment's own category rather than under each purchase's. A debit card charge from a linked bank account has one asset leg and stays. `excluded_zero_leg` and `excluded_multi_leg` count the two populations separately, so read them before describing what the figure covers. Read `excluded_zero_leg` as \"this many rows carried no asset movement\" and nothing narrower: a credit card charge lands there, and so does a row whose payer and payee resolved to no account at all. `excluded_no_owned_leg` is that second part on its own: rows with no leg on ANY owned account, liabilities included, so credit card spend is never in it. Those rows could not be attributed to an account and may have moved a balance the sums cannot see, so a figure reconciled against balances treats a non-zero count as flows that are incomplete. A large `excluded_zero_leg` is a reason to look, never a spend total to quote. Any of the three counts comes back as `null` when it could not be measured, which is NOT `0`: zero says the rule removed nothing, null says nobody counted. On a null, say the exclusion is unmeasured rather than reporting none \u2014 the sums themselves are unaffected, and `partial` is what speaks for those. For reproducing the burn tile that is exactly right \u2014 it is the conservation law the cash-flow bridge rests on. For \"total spend excluding transfers between our own accounts\" it is not what the words promise, so say what fell out or leave the flag off.\n\nThe rule is structural: it counts legs, so no label, category, or type on the row affects it, and a user recategorizing something does not change it.\n\n`exclude_own_company: true` also leaves out the rows whose other leg is the workspace's own company, on an account this workspace does not hold: a transfer to or from the same company's account in another workspace, or at a bank that is not connected. Such a row has one owned leg here, so `exclude_internal_transfers` keeps it and it reads as spend. `excluded_own_company` counts the rows it removed, after the transfer rule, so no row is in it and in a leg count at once. It is `null` when it could not be counted or when the workspace has no confirmed own company, which is NOT `0`: on a null, say transfers to the company's other accounts could not be told apart. A count is a floor, not a complete count: the rule reads only legs on this workspace's own company record, so with `scope: \"own_and_adopted\"` a transfer on an adopted parent's rows stays in the sum. Use it for a spend or cost breakdown. Leave it off for a figure reconciled against this workspace's balances, such as a burn or a cash-flow bridge: that money did leave them.\n\n`exempt_categories` takes category keys that should not count. A transaction with no category at all is never matched by an exemption and always stays in the sum; if you want those excluded too, that is a different question and you must say so.\n\n`excluded_malformed` counts rows in the window whose amount could not be read as a number. They are in none of the sums, so state the count beside any total rather than presenting a figure that silently skipped them. `partial: true` means the aggregate measured nothing: it was cut short, or no asset account is in scope. Either way it arrives with an empty `rows`, so there is no figure, and the empty rows are not a zero. Say so and offer to try again, unless the workspace holds no deposit or other asset account, where a retry changes nothing.\n\nWhen the token authorizes one workspace, call this directly \u2014 no other tool call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "axes": {
+    "description": "Group the sums by these, IN ADDITION to currency. Omit for one row per currency over the whole window.",
+    "items": {
+     "enum": [
+      "month",
+      "currency",
+      "category",
+      "ledger_account",
+      "category_label",
+      "transaction_type",
+      "flow_group",
+      "counterparty"
+     ],
+     "type": "string"
+    },
+    "maxItems": 8,
+    "type": "array"
+   },
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "exclude_internal_transfers": {
+    "description": "Keeps rows with exactly one leg on an owned account; two-leg transfers AND zero-leg rows (credit card purchases) both drop. See the description.",
+    "type": "boolean"
+   },
+   "exclude_own_company": {
+    "description": "Leaves out rows whose other leg is the workspace's own company at an account this workspace does not hold, such as the same company's account in another workspace. See the description.",
+    "type": "boolean"
+   },
+   "exempt_categories": {
+    "description": "Category keys that do not count. An uncategorized row is never matched by one.",
+    "items": {
+     "type": "string"
+    },
+    "maxItems": 100,
+    "type": "array"
+   },
+   "from": {
+    "description": "Inclusive start of the window, ISO-8601 (e.g. 2026-06-01).",
+    "type": "string"
+   },
+   "scope": {
+    "description": "Which rows are this workspace's: `own` for a sum reconciled against its own balances, `own_and_adopted` for a burn. Required; see the description.",
+    "enum": [
+     "own",
+     "own_and_adopted"
+    ],
+    "type": "string"
+   },
+   "to": {
+    "description": "EXCLUSIVE end of the window, ISO-8601 \u2014 the first instant after the last month you want.",
+    "type": "string"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several: this read reports one workspace's own figures and will not choose which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   },
+   "workspace_scope": {
+    "description": "Restrict this call to the family: the token's primary workspace plus the company workspaces under it that you are a member of. Unrelated authorized workspaces drop out of the read; row reads merge across the family, while a per-workspace figure still reports exactly one workspace.",
+    "enum": [
+     "family"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "from",
+   "to",
+   "scope"
+  ],
+  "type": "object"
+ },
+ "name": "well_sum_transactions",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "error": {
+    "type": "string"
+   },
+   "excluded_malformed": {
+    "type": "number"
+   },
+   "excluded_multi_leg": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "excluded_no_owned_leg": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "excluded_own_company": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "excluded_zero_leg": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "newly_connected": {
+    "description": "Tools that connected to this workspace since the last result and that no session was told about yet, oldest first. Present only when at least one tool is new. Start the reply with one line per entry, in the person's language: \"<name> is connected.\". Never fold several entries into one sentence. Each entry comes back once, on one result only: never repeat its line later.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "partial": {
+    "type": "boolean"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "rows": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "category_key": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "category_label": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "count_negative": {
+       "type": "number"
+      },
+      "count_positive": {
+       "type": "number"
+      },
+      "counterparty": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "currency": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "flow_group": {
+       "anyOf": [
+        {
+         "enum": [
+          "operating",
+          "transfer",
+          "financing"
+         ],
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "ledger_account": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "month": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      },
+      "sum_negative": {
+       "type": "number"
+      },
+      "sum_positive": {
+       "type": "number"
+      },
+      "transaction_type": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ]
+      }
+     },
+     "required": [
+      "month",
+      "currency",
+      "category_key",
+      "ledger_account",
+      "category_label",
+      "transaction_type",
+      "flow_group",
+      "counterparty",
+      "sum_negative",
+      "sum_positive",
+      "count_negative",
+      "count_positive"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "rows_truncated": {
+    "type": "boolean"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "window": {
+    "additionalProperties": false,
+    "properties": {
+     "from": {
+      "type": "string"
+     },
+     "to": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "from",
+     "to"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "rows",
+   "window",
+   "excluded_malformed",
+   "excluded_zero_leg",
+   "excluded_multi_leg",
+   "excluded_no_owned_leg",
+   "excluded_own_company",
+   "partial",
+   "rows_truncated",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Sum transactions over a window"
+}
