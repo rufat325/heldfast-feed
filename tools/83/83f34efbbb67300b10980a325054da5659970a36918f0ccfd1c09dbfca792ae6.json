@@ -1,0 +1,33 @@
+{
+ "description": "Replace a workspace's doc body. Takes EITHER TipTap JSON (`content`) OR Markdown (`markdown`): pass markdown when you're producing prose from scratch (CommonMark + GFM is the format every LLM emits natively), pass TipTap JSON when you need structural edits to an existing doc (round-trip from get_doc, mutate, write back). Beyond CommonMark + GFM, the markdown layer recognizes:\n\n- **![alt text](https://\u2026)** \u2192 inline image. Use an HTTPS URL (HTTP fires browser mixed-content warnings; data: URIs are rejected by `allowBase64: false`). For an image on your own machine, call `create_file_upload`, run the curl it returns and use the `url` from its response; never ask for a public host. Renders block-feeling via CSS (max-width 100%, rounded corners, drop shadow) even though the underlying node is inline. The `alt` text is the accessible label and shows in place of the image if the URL fails to load \u2014 always include it.\n- A **lone video-file URL on its own line** (extension `.mp4` / `.m4v` / `.webm` / `.mov` / `.mkv`, signed-params + timestamp fragments tolerated) \u2192 native HTML5 `<video controls preload=\"metadata\">` player. Source URL is referenced directly: no iframe, no transcoding, no quality loss. Any HTTPS URL to the video file works. For a video on your own machine, call `create_video_upload` (one file, up to 100 MB), run the curl it returns and use the `url` from its response. Sample shape: a paragraph containing only that URL. Mid-paragraph URLs stay as plain links \u2014 surrounding prose disqualifies the auto-promotion (matches the oEmbed convention).\n- **```mermaid** fenced code \u2192 diagram (15 sub-types: flowchart, sequence, gantt, ER, state, class, mindmap, timeline, pie, quadrant, sankey, XY-chart, packet, block, journey)\n- **$x$** inline math, **$$x$$** block math (LaTeX, KaTeX-rendered, scripts/href disabled)\n- **> [!NOTE]** / **[!TIP]** / **[!IMPORTANT]** / **[!WARNING]** / **[!CAUTION]** GFM-style callouts\n- **```svg** fenced code \u2192 sanitized SVG embed (the universal escape hatch for custom diagrams; scripts and event handlers stripped at write time)\n- **<details><summary>X</summary>BODY</details>** \u2192 collapsible toggle\n- **[[slug]]** / **[[org/slug]]** / **[[slug#surface-slug]]** / **[[slug#row-id]]** / **[[slug|display]]** \u2192 cross-references to another workspace, surface, or row. Resolved against your accessible workspace set; targets you can't see render as plain text on the reader's side (no info leak). Every cross-ref creates a Backlink row so the target's 'referenced from' sidebar shows this doc.\n- **[@Label](dock:mention/<kind>/<id>)** \u2192 @-mention of a user or agent. `<kind>` is `agent` or `human`; `<id>` is the principal id. Optional query params `?org=<slug>` (agents) or `?email=<addr>` (humans) for renderer hints. Mentioning a human writes a `doc_mention` row to their inbox + sends a deep-link email; mentioning an agent fires the `doc.mention_added` webhook so the agent service can wake up and reply. Re-saving a doc that already mentions someone does NOT re-fire \u2014 only newly-added mentions notify (computed from a diff against the previous body). Use this to ping a person or agent when a doc you wrote needs their eyes.\n- A **lone URL on its own line** from a safelisted provider (YouTube, Vimeo, Loom, Figma, CodePen, GitHub gists) \u2192 sandboxed iframe embed. Other URLs stay as regular links. Surrounding prose disqualifies the auto-embed.\n\nPer-format caps: max 50 Mermaid diagrams (30 KB source each), max 500 math expressions (8 KB source each), max 50 SVG blocks (100 KB source each post-sanitize), max 200 cross-refs per doc, max 500 @-mentions per doc, max 20 embeds per doc, max 20 videos per doc, max 200 images per doc. Last-write-wins; no CRDT merge. Emits doc.updated + doc.heading_added + doc.mention_added events as applicable. Requires editor role. Multi-surface workspaces optionally accept `surface_slug` to write to a specific doc surface; omitted writes the primary doc surface. Append-only updates have a dedicated `append_doc_section` tool that doesn't require fetching the body first.",
+ "inputSchema": {
+  "properties": {
+   "content": {
+    "additionalProperties": true,
+    "description": "TipTap document JSON: `{ type: 'doc', content: [ ... ] }`. Use this when round-tripping from get_doc to preserve formatting. Mutually exclusive with `markdown` (content wins if both are passed).",
+    "type": "object"
+   },
+   "if_unmodified_since": {
+    "description": "Optional precondition. ISO 8601 timestamp (typically the `updatedAt` you read via `get_doc`). When set and the doc has changed since this cutoff, the write is rejected with `code: -32602`, message describing the conflict, and `data: { conflict: true, currentUpdatedAt, precondition }` so your agent can refetch + merge instead of silently clobbering a concurrent write. Without this, two agents PUTting near-simultaneously will both succeed and the last write wins (the previous content vanishes). Use this in multi-agent co-authoring flows; skip it for greenfield writes where you know you're the only writer.",
+    "type": "string"
+   },
+   "markdown": {
+    "description": "Markdown body (CommonMark + GFM). Converted server-side to TipTap JSON via the same converter that powers PUT /api/workspaces/:slug/doc. Use this when authoring prose from scratch; no need to hand-build ProseMirror nodes.",
+    "type": "string"
+   },
+   "slug": {
+    "description": "The workspace slug. Accepts either the bare slug ('my-workspace') or the org-prefixed form ('my-org/my-workspace') as shown in the dashboard URL; both resolve to the same workspace.",
+    "type": "string"
+   },
+   "surface_slug": {
+    "description": "Optional doc surface slug for multi-doc workspaces. Omit to write the primary doc surface. Use list_surfaces to see available slugs.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "slug"
+  ],
+  "type": "object"
+ },
+ "name": "update_doc"
+}
