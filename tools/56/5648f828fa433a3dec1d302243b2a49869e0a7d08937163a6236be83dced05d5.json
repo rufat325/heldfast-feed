@@ -1,0 +1,386 @@
+{
+ "description": "Action Lock ($0.001 USDC): Prevent duplicate side effects across agent retries, crashes, and concurrent workers. If an action has side effects and may be retried or executed concurrently, acquire before execution. Complete after confirmed success; release after confirmed failure. Use before payments, purchases, orders, emails, transactions, writes, and external tool actions. Avoid pure reads or equivalent provider-side idempotency. An expired lease can hide a completed external effect; reconcile first. Agent Action Gate asks whether an action should be performed; Action Lock asks whether it is already running or completed.\n\nAgent entry points: risky external action \u2192 use Agent Action Gate when a combined action-specific safety assessment is needed; unclear capability/provider \u2192 use free /api/discover; constrained comparison between callable alternatives \u2192 use paid route_tool; known single capability \u2192 call the direct tool; multi-step objective \u2192 read the matching workflow recipe and call only relevant steps. Workflows are stateless recipes, not executors; calls are paid separately and are not bundle charged. Agent Action Gate does not approve payment, sign or broadcast transactions, evaluate seller reputation, replace transaction simulation, replace route_tool, or replace human approval.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+   {
+    "additionalProperties": false,
+    "properties": {
+     "action_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9._~:-]+$",
+      "type": "string"
+     },
+     "dedupe_ttl_seconds": {
+      "default": 86400,
+      "maximum": 2592000,
+      "minimum": 60,
+      "type": "integer"
+     },
+     "lease_ttl_seconds": {
+      "default": 60,
+      "maximum": 3600,
+      "minimum": 5,
+      "type": "integer"
+     },
+     "operation": {
+      "const": "acquire",
+      "type": "string"
+     },
+     "payload_hash": {
+      "maxLength": 128,
+      "minLength": 16,
+      "pattern": "^[a-zA-Z0-9._~:-]+$",
+      "type": "string"
+     },
+     "scope": {
+      "default": "default",
+      "maxLength": 80,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9._~:-]+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "operation",
+     "action_id"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "action_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9._~:-]+$",
+      "type": "string"
+     },
+     "lease_token": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+     },
+     "operation": {
+      "const": "complete",
+      "type": "string"
+     },
+     "payload_hash": {
+      "maxLength": 128,
+      "minLength": 16,
+      "pattern": "^[a-zA-Z0-9._~:-]+$",
+      "type": "string"
+     },
+     "scope": {
+      "default": "default",
+      "maxLength": 80,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9._~:-]+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "operation",
+     "action_id",
+     "lease_token"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "action_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9._~:-]+$",
+      "type": "string"
+     },
+     "lease_token": {
+      "pattern": "^[a-f0-9]{64}$",
+      "type": "string"
+     },
+     "operation": {
+      "const": "release",
+      "type": "string"
+     },
+     "payload_hash": {
+      "maxLength": 128,
+      "minLength": 16,
+      "pattern": "^[a-zA-Z0-9._~:-]+$",
+      "type": "string"
+     },
+     "scope": {
+      "default": "default",
+      "maxLength": 80,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9._~:-]+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "operation",
+     "action_id",
+     "lease_token"
+    ],
+    "type": "object"
+   },
+   {
+    "additionalProperties": false,
+    "properties": {
+     "action_id": {
+      "maxLength": 128,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9._~:-]+$",
+      "type": "string"
+     },
+     "operation": {
+      "const": "status",
+      "type": "string"
+     },
+     "payload_hash": {
+      "maxLength": 128,
+      "minLength": 16,
+      "pattern": "^[a-zA-Z0-9._~:-]+$",
+      "type": "string"
+     },
+     "scope": {
+      "default": "default",
+      "maxLength": 80,
+      "minLength": 1,
+      "pattern": "^[a-zA-Z0-9._~:-]+$",
+      "type": "string"
+     }
+    },
+    "required": [
+     "operation",
+     "action_id"
+    ],
+    "type": "object"
+   }
+  ],
+  "type": "object"
+ },
+ "name": "action_lock",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "action_id": {
+    "type": "string"
+   },
+   "agent_ux": {
+    "additionalProperties": false,
+    "properties": {
+     "error": {
+      "anyOf": [
+       {},
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "meta": {
+      "additionalProperties": {},
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "next": {
+      "items": {},
+      "type": "array"
+     },
+     "payment": {
+      "additionalProperties": false,
+      "properties": {
+       "execution_status": {
+        "enum": [
+         "not_started",
+         "succeeded",
+         "failed",
+         "unknown"
+        ],
+        "type": "string"
+       },
+       "status": {
+        "enum": [
+         "not_required",
+         "required",
+         "settled",
+         "failed",
+         "unknown"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "status",
+       "execution_status"
+      ],
+      "type": "object"
+     },
+     "result": {},
+     "status": {
+      "enum": [
+       "succeeded",
+       "failed",
+       "partial",
+       "outcome_unknown"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "result",
+     "error",
+     "meta",
+     "payment",
+     "next"
+    ],
+    "type": "object"
+   },
+   "decision": {
+    "enum": [
+     "EXECUTE",
+     "DO_NOT_EXECUTE",
+     "RETRY_LATER",
+     "CONFLICT"
+    ],
+    "type": "string"
+   },
+   "dedupe_expires_at": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "duplicate": {
+    "type": "boolean"
+   },
+   "error": {
+    "anyOf": [
+     {},
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "lease_expires_at": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "lease_token": {
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "meta": {
+    "additionalProperties": {},
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "next": {
+    "items": {},
+    "type": "array"
+   },
+   "payment": {
+    "additionalProperties": false,
+    "properties": {
+     "execution_status": {
+      "enum": [
+       "not_started",
+       "succeeded",
+       "failed",
+       "unknown"
+      ],
+      "type": "string"
+     },
+     "status": {
+      "enum": [
+       "not_required",
+       "required",
+       "settled",
+       "failed",
+       "unknown"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "status",
+     "execution_status"
+    ],
+    "type": "object"
+   },
+   "reason": {
+    "type": "string"
+   },
+   "result": {},
+   "retry_after_ms": {
+    "anyOf": [
+     {
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ]
+   },
+   "retry_decision": {
+    "enum": [
+     "RETRY_ALLOWED",
+     "RETRY_LATER",
+     "DO_NOT_RETRY",
+     "REVIEW"
+    ],
+    "type": "string"
+   },
+   "state": {
+    "enum": [
+     "acquired",
+     "in_progress",
+     "completed",
+     "released",
+     "expired",
+     "absent",
+     "conflict"
+    ],
+    "type": "string"
+   },
+   "status": {
+    "enum": [
+     "succeeded",
+     "failed",
+     "partial",
+     "outcome_unknown"
+    ],
+    "type": "string"
+   },
+   "success": {
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "success",
+   "decision",
+   "retry_decision",
+   "state",
+   "action_id",
+   "lease_token",
+   "lease_expires_at",
+   "dedupe_expires_at",
+   "duplicate",
+   "retry_after_ms",
+   "reason"
+  ],
+  "type": "object"
+ }
+}
