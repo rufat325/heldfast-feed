@@ -1,0 +1,436 @@
+{
+ "annotations": {
+  "readOnlyHint": true
+ },
+ "description": "Resolve one drug name to its FDA identity, then fan out in parallel across the bounded per-drug openFDA endpoints and merge into one profile: identity, label highlights, adverse-event summary, recall history, Drugs@FDA approval, and shortage status. Replaces chaining openfda_get_drug_label, openfda_search_adverse_events, openfda_search_recalls, openfda_search_drug_approvals, and openfda_search_drug_shortages \u2014 and reconciles the identifier drift between endpoints that makes that chaining error-prone. Each section is best-effort: a miss returns null rather than failing the call. For deep dives into any one area, use the dedicated tool.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "drug": {
+    "description": "Drug name to profile \u2014 brand or generic (e.g. \"metformin\", \"Humira\", \"Glucophage\"). Resolved once to canonical FDA identifiers, which then key every sub-query.",
+    "minLength": 1,
+    "pattern": "\\S",
+    "type": "string"
+   }
+  },
+  "required": [
+   "drug"
+  ],
+  "type": "object"
+ },
+ "name": "openfda_drug_profile",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "meta",
+     "identity",
+     "label",
+     "adverse_events",
+     "recalls",
+     "approval",
+     "shortage",
+     "degraded",
+     "sectionsFound"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "adverse_events": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "seriousCount": {
+        "description": "Reports flagged serious (serious=1). total \u2212 seriousCount covers both non-serious reports and those with no seriousness recorded.",
+        "type": "number"
+       },
+       "topReactions": {
+        "description": "Most-frequent reported reactions, descending.",
+        "items": {
+         "additionalProperties": false,
+         "description": "A reaction term paired with its report count.",
+         "properties": {
+          "count": {
+           "description": "Reports citing this reaction.",
+           "type": "number"
+          },
+          "term": {
+           "description": "MedDRA reaction term.",
+           "type": "string"
+          }
+         },
+         "required": [
+          "term",
+          "count"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "total": {
+        "description": "Adverse-event reports naming this drug \u2014 every matching report, including those with no seriousness recorded; equals openfda_search_adverse_events meta.total for the same medicinalproduct search.",
+        "type": "number"
+       }
+      },
+      "required": [
+       "total",
+       "seriousCount",
+       "topReactions"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Adverse-event summary aggregated over drug/event, or null when unavailable."
+   },
+   "approval": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "applicationNumber": {
+        "description": "NDA/ANDA application number.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "marketingStatus": {
+        "description": "Derived marketing/approval status.",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "sponsor": {
+        "description": "Sponsor/applicant name.",
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      },
+      "required": [
+       "applicationNumber",
+       "sponsor",
+       "marketingStatus"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Drugs@FDA approval summary, or null when no application matched."
+   },
+   "degraded": {
+    "description": "Sub-queries that failed upstream, empty when every section resolved. A section listed here is unknown, not absent \u2014 a null section with no entry here genuinely has no FDA record.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One failed sub-query and why it failed.",
+     "properties": {
+      "message": {
+       "description": "Upstream failure message for this section, truncated.",
+       "type": "string"
+      },
+      "reason": {
+       "description": "Machine-readable failure reason (e.g. rate_limited, upstream_error, query_error).",
+       "type": "string"
+      },
+      "section": {
+       "description": "Profile section whose sub-query failed.",
+       "enum": [
+        "identity",
+        "label",
+        "adverse_events",
+        "recalls",
+        "approval",
+        "shortage"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "section",
+      "reason",
+      "message"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `blank_drug_name`: The drug name carries no searchable character \u2014 only quotes, backslashes, or whitespace. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "blank_drug_name"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "identity": {
+    "additionalProperties": false,
+    "description": "Identity resolved once and reused across every sub-query to avoid identifier drift.",
+    "properties": {
+     "brand_names": {
+      "description": "Brand names for the drug (openfda.brand_name).",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "generic_name": {
+      "description": "Canonical generic name (openfda.generic_name) \u2014 the primary source for meta.fanOutKey.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "product_ndc": {
+      "description": "Representative product NDC, when available.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "rxcui": {
+      "description": "RxNorm concept unique identifier, when available.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "spl_set_id": {
+      "description": "SPL set ID for the drug label, when available.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "brand_names",
+     "generic_name",
+     "product_ndc",
+     "rxcui",
+     "spl_set_id"
+    ],
+    "type": "object"
+   },
+   "label": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "dosage": {
+        "description": "Dosage and administration (truncated).",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "indications": {
+        "description": "Indications and usage (truncated).",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "warnings": {
+        "description": "Warnings (truncated) \u2014 boxed warning or warnings_and_cautions for Rx labels, falling back to the OTC-monograph warnings section.",
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      },
+      "required": [
+       "indications",
+       "warnings",
+       "dosage"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Label highlights from drug/label, or null when no label matched."
+   },
+   "meta": {
+    "additionalProperties": false,
+    "description": "Request metadata.",
+    "properties": {
+     "drug": {
+      "description": "The drug name supplied in the request, echoed back.",
+      "type": "string"
+     },
+     "fanOutKey": {
+      "description": "Canonical key the structured sub-queries (recall/enforcement, Drugs@FDA approval, shortage) ran against \u2014 the resolved generic name, falling back to a brand name, then the input term. The adverse-event sub-queries instead key off the raw input term to match heterogeneous reporter-entered values.",
+      "type": "string"
+     },
+     "resolvedVia": {
+      "description": "Which endpoint resolved the canonical identity: drug/label, drug/ndc, or none.",
+      "enum": [
+       "label",
+       "ndc",
+       "none"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "drug",
+     "resolvedVia",
+     "fanOutKey"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Guidance when the drug could not be resolved or upstream errors degraded the profile. Absent on a fully populated profile.",
+    "type": "string"
+   },
+   "recalls": {
+    "description": "Recent drug/enforcement recall actions (may be empty).",
+    "items": {
+     "additionalProperties": false,
+     "description": "A single recall or enforcement action.",
+     "properties": {
+      "classification": {
+       "description": "Recall hazard class (Class I/II/III).",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "date": {
+       "description": "Recall initiation or report date (YYYYMMDD).",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "reason": {
+       "description": "Reason for recall (truncated).",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "recalling_firm": {
+       "description": "Firm conducting the recall.",
+       "type": [
+        "string",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "classification",
+      "reason",
+      "recalling_firm",
+      "date"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "sectionsFound": {
+    "description": "How many profile sections (label, adverse_events, recalls, approval, shortage) returned data.",
+    "type": "number"
+   },
+   "shortage": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "availability": {
+        "description": "Availability note (truncated).",
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "status": {
+        "description": "Shortage status (Current, To Be Discontinued, or Resolved).",
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      },
+      "required": [
+       "status",
+       "availability"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Current or most-recent drug shortage status, or null when none on record."
+   }
+  },
+  "type": "object"
+ },
+ "title": "Openfda Drug Profile"
+}

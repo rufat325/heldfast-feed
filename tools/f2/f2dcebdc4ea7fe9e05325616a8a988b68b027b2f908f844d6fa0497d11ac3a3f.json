@@ -1,0 +1,247 @@
+{
+ "description": "Kviria finds the place, address or street corner a user means near their current position and returns its verified coordinate with an evidence trail.\n\nWhen to call: on every user turn of a place conversation, from the first time the user mentions a place, a kind of place, an address, a street, a corner or what is around them, until the place is settled. That includes yes or no answers, picks (\"the second one\"), corrections (\"no, the other one\"), follow-ups (\"what's across from it\") and questions about your last answer (\"are you sure?\"). Kviria resolves each of these from the state, so do not answer them yourself.\n\nWhat to send: transcript is the user's whole last turn, word for word. state is the `state` field of the previous kviria response, copied exactly: that field only, never the whole response; send an empty string on the first call. anchor is the user's current position exactly as you were given it: send it on the first call, and after that only when the position changes; never invent or round it.\n\nWhat comes back, and your move: one - the place is settled; say its name and distance exactly as returned. one_unconfirmed - ask \"Is it {name} ({distanceM} m)?\" and send the user's answer as the next call. many - name the candidates with their distances, ask which one, and send the user's answer as the next call. none - Kviria looked and found nothing; say so and ask for a nearby business or landmark. unclear - ask the user to say more about the place. not_a_place_request - the user's words are not about a place; reply to the user yourself.\n\nPhrase your reply from the returned facts only; never invent a place, a distance or any other detail. Distances are meters; convert them for your user.\n\nCoverage: the contiguous United States. Outside it the answer is none with an out_of_coverage entry and the turn is free; tell the user instead of retrying.\n\nErrors: 400 invalid_state means the state was altered; start again with an empty state. 503 parser_unavailable: do not retry the call. Tell the user you cannot look it up right now and to ask again in a moment; never ask the user to rephrase for it.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "anchor": {
+    "additionalProperties": false,
+    "description": "The user's current position - Kviria resolves relative to this point. Required on the first call of a conversation; later calls may leave it out while the user has not moved.",
+    "properties": {
+     "lat": {
+      "description": "WGS 84 latitude",
+      "maximum": 90,
+      "minimum": -90,
+      "type": "number"
+     },
+     "lng": {
+      "description": "WGS 84 longitude",
+      "maximum": 180,
+      "minimum": -180,
+      "type": "number"
+     }
+    },
+    "required": [
+     "lat",
+     "lng"
+    ],
+    "type": "object"
+   },
+   "confirmation": {
+    "default": "on",
+    "description": "\"on\" (default): a place the user named only in part is returned as one_unconfirmed, and its coordinate is released only after the user verifies it. \"off\": it is returned as one immediately, for agents without a human in the loop.",
+    "enum": [
+     "on",
+     "off"
+    ],
+    "type": "string"
+   },
+   "rangeM": {
+    "default": 100,
+    "description": "Search radius around the anchor in meters (clamped to 50-350).",
+    "maximum": 350,
+    "minimum": 50,
+    "type": "integer"
+   },
+   "state": {
+    "description": "The `state` field of the previous kviria response, copied character for character: that field only, never the whole response, and never shortened. Empty string on the first call.",
+    "maxLength": 2263,
+    "type": "string"
+   },
+   "transcript": {
+    "description": "The user's whole last turn, word for word: yes or no, corrections, hesitations and everything around the place included. Never shorten, rephrase, correct or complete it. If one turn arrived in pieces, join them in order.",
+    "maxLength": 1000,
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "transcript"
+  ],
+  "type": "object"
+ },
+ "name": "kviria",
+ "outputSchema": {
+  "definitions": {
+   "target": {
+    "properties": {
+     "acrossStreet": {
+      "description": "Set when the user named a street to be across, or when the place is on a corner and so has two acrosses: one answer per street, each naming the street it is across.",
+      "type": "string"
+     },
+     "address": {
+      "description": "Address facts when the target is a house/unit.",
+      "properties": {
+       "number": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "street": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "street"
+      ],
+      "type": "object"
+     },
+     "baseDistanceM": {
+      "description": "Set when the answer is relative to a place (near, across, next to): metres from that place. distanceM stays the distance from the user.",
+      "type": "number"
+     },
+     "category": {
+      "description": "The place category label.",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "confidence": {
+      "description": "Existence confidence, 0 to 1, or null.",
+      "maximum": 1,
+      "minimum": 0,
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "distanceM": {
+      "description": "Straight-line meters from the anchor.",
+      "minimum": 0,
+      "type": "number"
+     },
+     "gers": {
+      "description": "Stable global entity id, persistent across turns and sessions.",
+      "type": "string"
+     },
+     "intersection": {
+      "description": "Set when the target is a street corner: every street that meets there. Such a target has category and confidence null.",
+      "properties": {
+       "streets": {
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "streets"
+      ],
+      "type": "object"
+     },
+     "location": {
+      "description": "Named lat/lng fields; no coordinate-array ordering ambiguity. Absent on one_unconfirmed: the coordinate comes with the user's yes.",
+      "properties": {
+       "lat": {
+        "type": "number"
+       },
+       "lng": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lng"
+      ],
+      "type": "object"
+     },
+     "name": {
+      "description": "The place name as-is; never paraphrase it.",
+      "type": [
+       "string",
+       "null"
+      ]
+     }
+    },
+    "required": [
+     "gers",
+     "name",
+     "category",
+     "confidence",
+     "distanceM"
+    ],
+    "type": "object"
+   }
+  },
+  "properties": {
+   "candidates": {
+    "description": "The candidates to present on many. Never send them back: send state.",
+    "items": {
+     "$ref": "#/definitions/target"
+    },
+    "type": "array"
+   },
+   "category": {
+    "description": "The category that was asked for and is absent, on a none decision.",
+    "type": "string"
+   },
+   "confirmed": {
+    "description": "True when the user verified the target through the confirm gate.",
+    "type": "boolean"
+   },
+   "decision": {
+    "description": "The decision for this turn: how many answers there are and whether the single answer is certain, or not_a_place_request when the user's words are not about a place. An exact address is \"one\" with the door facts riding target.address; several door clusters for one number come back as \"many\".",
+    "enum": [
+     "one",
+     "one_unconfirmed",
+     "many",
+     "none",
+     "unclear",
+     "not_a_place_request"
+    ],
+    "type": "string"
+   },
+   "evidence": {
+    "description": "Why this answer: the gate trail behind the decision. Present none of this to the user; it exists for trust and auditability.",
+    "items": {
+     "properties": {
+      "detail": {
+       "description": "Optional structured detail.",
+       "type": "object"
+      },
+      "reasonCode": {
+       "description": "Stable enum explaining the outcome (e.g. user_confirmed, single_survivor_pending, partial_name, out_of_coverage). Read the code, never the free text.",
+       "type": "string"
+      },
+      "result": {
+       "description": "How the gate concluded.",
+       "enum": [
+        "pass",
+        "reject",
+        "warn"
+       ],
+       "type": "string"
+      },
+      "test": {
+       "description": "Which gate produced this entry.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "test",
+      "result",
+      "reasonCode"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "state": {
+    "description": "The conversation state. Send it back unchanged as `state` on the next call.",
+    "type": "string"
+   },
+   "target": {
+    "$ref": "#/definitions/target",
+    "description": "The settled target (one), or the target waiting for the user's yes or no (one_unconfirmed, without a location)."
+   }
+  },
+  "required": [
+   "decision",
+   "evidence",
+   "state"
+  ],
+  "type": "object"
+ },
+ "title": "Kviria"
+}

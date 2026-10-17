@@ -1,0 +1,688 @@
+{
+ "_meta": {
+  "openai/outputTemplate": "ui://widget/flights.html",
+  "openai/toolInvocation/invoked": "Flights found",
+  "openai/toolInvocation/invoking": "Searching flights",
+  "securitySchemes": [
+   {
+    "type": "noauth"
+   },
+   {
+    "scopes": [
+     "openid",
+     "email",
+     "profile"
+    ],
+    "type": "oauth2"
+   }
+  ],
+  "ui": {
+   "resourceUri": "ui://widget/flights.html"
+  },
+  "ui/resourceUri": "ui://widget/flights.html"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Search flights"
+ },
+ "description": "Call this tool to find flights once the traveler has told you their dates. It handles one-way trips, round trips, two possible dates each way, and up to three airports on each side at once.\n\nBefore you call it, you need four things from the traveler: where they are flying from, where they are flying to, the date they want to leave, and, for a round trip, the date they want to come back. If the traveler has not told you any of these, ask them for everything that is missing in one question. Do not pick dates for the traveler. Do not guess whether the trip is one way or a round trip.\n\nA question like \"what is the cheapest flight from Newark to Los Angeles\" still needs dates. Ask the traveler when they want to go and whether it is one way or a round trip, then call this tool. If the traveler does not have dates yet, offer to set up a bucket list alert with add_flight_bucket_list, which watches the route for them and alerts them when a good fare appears.\n\nSearch as soon as you have those four things. After the results, offer ways to narrow the choice: cabin, stops, airlines, times of day.\n\nYou can search up to two departure dates and two return dates in one call by joining them with _ (for example 2026-11-20_2026-11-21).\n\nFill in origin, destination, depart_date and, for a round trip, return_date. You can also pass the traveler's own words in query and leave the fields you do not know empty. SlickTrip fills in only what the traveler's words say. It does not guess the rest.\n\nThe answer lists priced itineraries, cheapest first, each with an itinerary_id for track_flight and search_return_flights, and a search_url.\n\nWhen the traveler wants to be alerted about a route over flexible months, or does not have dates yet, use add_flight_bucket_list.",
+ "inputSchema": {
+  "$defs": {
+   "Leg": {
+    "description": "One leg of a multi-city trip.",
+    "properties": {
+     "depart_date": {
+      "description": "YYYY-MM-DD.",
+      "examples": [
+       "2026-11-03"
+      ],
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+      "title": "Depart Date",
+      "type": "string"
+     },
+     "destination": {
+      "description": "A 3-letter airport code (JFK), or a city code that searches every airport in the city (SlickTrip's 4-letter codes: NYCA New York, LOND London, ROME Rome, TYOA Tokyo). Up to 3 places joined with _ search them together (JFK_EWR). A place name works when one place clearly matches; otherwise the result is an unknown_place error listing suggestions. When the traveler names a city rather than an airport, send the city (its name or code), not one of its airports: one airport can miss the cheapest or the only flights. Unsure of the code: call find_places.",
+      "examples": [
+       "JFK",
+       "NYCA",
+       "JFK_EWR"
+      ],
+      "maxLength": 40,
+      "minLength": 3,
+      "title": "Destination",
+      "type": "string"
+     },
+     "origin": {
+      "description": "A 3-letter airport code (JFK), or a city code that searches every airport in the city (SlickTrip's 4-letter codes: NYCA New York, LOND London, ROME Rome, TYOA Tokyo). Up to 3 places joined with _ search them together (JFK_EWR). A place name works when one place clearly matches; otherwise the result is an unknown_place error listing suggestions. When the traveler names a city rather than an airport, send the city (its name or code), not one of its airports: one airport can miss the cheapest or the only flights. Unsure of the code: call find_places.",
+      "examples": [
+       "JFK",
+       "NYCA",
+       "JFK_EWR"
+      ],
+      "maxLength": 40,
+      "minLength": 3,
+      "title": "Origin",
+      "type": "string"
+     }
+    },
+    "required": [
+     "origin",
+     "destination",
+     "depart_date"
+    ],
+    "title": "Leg",
+    "type": "object"
+   }
+  },
+  "properties": {
+   "airlines": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Only these marketing carriers, as IATA codes or names.",
+    "examples": [
+     [
+      "DL",
+      "B6"
+     ],
+     [
+      "JetBlue"
+     ]
+    ],
+    "title": "Airlines"
+   },
+   "arrive_after": {
+    "anyOf": [
+     {
+      "pattern": "^\\d{2}:\\d{2}$",
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "HH:MM, local time at that airport.",
+    "examples": [
+     "06:00",
+     "21:30"
+    ],
+    "title": "Arrive After"
+   },
+   "arrive_before": {
+    "anyOf": [
+     {
+      "pattern": "^\\d{2}:\\d{2}$",
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "HH:MM, local time at that airport.",
+    "examples": [
+     "06:00",
+     "21:30"
+    ],
+    "title": "Arrive Before"
+   },
+   "cabin": {
+    "default": "economy",
+    "description": "Cabin class.",
+    "enum": [
+     "economy",
+     "premium_economy",
+     "business",
+     "first"
+    ],
+    "title": "Cabin",
+    "type": "string"
+   },
+   "carry_on_bags": {
+    "anyOf": [
+     {
+      "maximum": 1,
+      "minimum": 0,
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Carry-on bags per traveler (0 or 1). The prices then include the bag fees, shown as price_with_bags next to the fare.",
+    "title": "Carry On Bags"
+   },
+   "checked_bags": {
+    "anyOf": [
+     {
+      "maximum": 2,
+      "minimum": 0,
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Checked bags per traveler (0 to 2). Bag fees are only priced for flights within the US and Canada; for other flights the answer says the prices do not include them. The prices then include the bag fees, shown as price_with_bags next to the fare.",
+    "title": "Checked Bags"
+   },
+   "connecting_airports": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Only itineraries that change planes at these airports (codes or city codes), nonstops included: for 'US connections only' name the hubs.",
+    "examples": [
+     [
+      "MIA",
+      "ATL",
+      "IAH"
+     ]
+    ],
+    "title": "Connecting Airports"
+   },
+   "depart_after": {
+    "anyOf": [
+     {
+      "pattern": "^\\d{2}:\\d{2}$",
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "HH:MM, local time at that airport.",
+    "examples": [
+     "06:00",
+     "21:30"
+    ],
+    "title": "Depart After"
+   },
+   "depart_before": {
+    "anyOf": [
+     {
+      "pattern": "^\\d{2}:\\d{2}$",
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "HH:MM, local time at that airport.",
+    "examples": [
+     "06:00",
+     "21:30"
+    ],
+    "title": "Depart Before"
+   },
+   "depart_date": {
+    "anyOf": [
+     {
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}(_\\d{4}-\\d{2}-\\d{2})?$",
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "YYYY-MM-DD. A second date joined with _ searches both as flexible dates (2026-11-03_2026-11-04); at most 2 per direction.",
+    "examples": [
+     "2026-11-03",
+     "2026-11-03_2026-11-04"
+    ],
+    "title": "Depart Date"
+   },
+   "destination": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "A 3-letter airport code (JFK) or a city code for all its airports (NYCA, LOND, ROME); up to 3 joined with _ (JFK_EWR). A clear place name works too. When the traveler names a city rather than an airport, send the city (its name or code), not one of its airports: one airport can miss the cheapest or the only flights. Unsure of the code: call find_places.",
+    "examples": [
+     "JFK",
+     "NYCA",
+     "JFK_EWR"
+    ],
+    "title": "Destination"
+   },
+   "display": {
+    "anyOf": [
+     {
+      "enum": [
+       "compact",
+       "full"
+      ],
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "compact: one line per option, more options, far fewer tokens; full: every field (what the cards draw). Empty picks for you: compact when the app shows no cards, full when it does.",
+    "title": "Display"
+   },
+   "exclude_airlines": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Leave out itineraries with any flight sold by these carriers (IATA codes, names or an alliance), by flight number or airline name: for 'not Gol' or 'avoid Air India'.",
+    "examples": [
+     [
+      "G3"
+     ],
+     [
+      "Gulf Air",
+      "Air India"
+     ]
+    ],
+    "title": "Exclude Airlines"
+   },
+   "exclude_connecting_airports": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Leave out itineraries that change planes at these airports (codes or city codes).",
+    "examples": [
+     [
+      "DOH"
+     ],
+     [
+      "LOND"
+     ]
+    ],
+    "title": "Exclude Connecting Airports"
+   },
+   "lap_infants": {
+    "default": 0,
+    "description": "Babies under 2 who will sit on an adult's lap (no seat of their own). Not counted in travelers and not in the quoted fare; the answer says how airlines charge them.",
+    "maximum": 9,
+    "minimum": 0,
+    "title": "Lap Infants",
+    "type": "integer"
+   },
+   "legs": {
+    "anyOf": [
+     {
+      "items": {
+       "$ref": "#/$defs/Leg"
+      },
+      "maxItems": 5,
+      "minItems": 2,
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Multi-city trip: the legs in order, 2 to 5, each one airport or city code per side and one date. When given, origin / destination / depart_date / return_date are ignored.",
+    "title": "Legs"
+   },
+   "lower_emissions": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Only itineraries with lower emissions than is typical for the route.",
+    "title": "Lower Emissions"
+   },
+   "max_duration_hours": {
+    "anyOf": [
+     {
+      "maximum": 96,
+      "minimum": 1,
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Longest itinerary to show, in hours.",
+    "title": "Max Duration Hours"
+   },
+   "max_layover_hours": {
+    "anyOf": [
+     {
+      "maximum": 26,
+      "minimum": 0.5,
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Longest layover allowed at every connection, in hours (half hours allowed): for 'layovers no longer than 5 hours'.",
+    "title": "Max Layover Hours"
+   },
+   "max_price_usd": {
+    "anyOf": [
+     {
+      "maximum": 1000000,
+      "minimum": 1,
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Highest fare to show, USD, as the TOTAL for all travelers together: for a per-person budget, multiply by travelers (2 people at $300 each = 600). Unlike bucket lists, whose price bar is per traveler.",
+    "title": "Max Price Usd"
+   },
+   "max_results": {
+    "default": 8,
+    "description": "How many results to return, 1-50.",
+    "maximum": 50,
+    "minimum": 1,
+    "title": "Max Results",
+    "type": "integer"
+   },
+   "max_stops": {
+    "anyOf": [
+     {
+      "maximum": 9,
+      "minimum": 0,
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Most stops allowed: 0 nonstop, 1, or 2 (2 or more: any number).",
+    "title": "Max Stops"
+   },
+   "min_layover_hours": {
+    "anyOf": [
+     {
+      "maximum": 26,
+      "minimum": 0.5,
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Shortest layover allowed at every connection, in hours (half hours allowed): for 'at least 2 hours to connect'.",
+    "title": "Min Layover Hours"
+   },
+   "no_overnight_layovers": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Leave out itineraries with an overnight layover: for 'no overnight at the transit airport'.",
+    "title": "No Overnight Layovers"
+   },
+   "origin": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "A 3-letter airport code (JFK) or a city code for all its airports (NYCA, LOND, ROME); up to 3 joined with _ (JFK_EWR). A clear place name works too. When the traveler names a city rather than an airport, send the city (its name or code), not one of its airports: one airport can miss the cheapest or the only flights. Unsure of the code: call find_places.",
+    "examples": [
+     "JFK",
+     "NYCA",
+     "JFK_EWR"
+    ],
+    "title": "Origin"
+   },
+   "query": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "The traveler's request in their own words, used to fill any field left empty.",
+    "examples": [
+     "JFK to Lisbon the first week of October, business"
+    ],
+    "title": "Query"
+   },
+   "return_date": {
+    "anyOf": [
+     {
+      "pattern": "^\\d{4}-\\d{2}-\\d{2}(_\\d{4}-\\d{2}-\\d{2})*$",
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "YYYY-MM-DD for a round trip; empty for one way.",
+    "title": "Return Date"
+   },
+   "sort": {
+    "default": "price",
+    "description": "Order of results.",
+    "enum": [
+     "price",
+     "duration",
+     "departure"
+    ],
+    "title": "Sort",
+    "type": "string"
+   },
+   "travelers": {
+    "default": 1,
+    "description": "Travelers who need a seat (adults and children). Fares are quoted for all of them together; one booking holds up to 9 (a larger group gets a suggested split). A baby under 2 on a lap is not a seat and is not counted here.",
+    "maximum": 30,
+    "minimum": 1,
+    "title": "Travelers",
+    "type": "integer"
+   },
+   "user_request": {
+    "anyOf": [
+     {
+      "maxLength": 500,
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Optional, and it works in the traveler's favor. Quote the traveler's latest message about this trip exactly as they wrote it, in their wording, language and spelling, not a summary. SlickTrip runs its own travel parser on these words: when a search fails or comes back empty, it compares what the traveler said with the arguments sent and returns a corrected search, so you can fix it without asking them again. It has caught Cancun sent as MEX instead of CUN, and travelers dropped from the party. A summary loses exactly the details it checks. If the message only answers a question (\"yes, the 20th\"), quote the message where they asked for the trip. Send the same quote on every call for this request. Leave out anything not about the trip, and never include names, contact details, or payment or ID information. The words also help SlickTrip improve its search.",
+    "examples": [
+     "we're 6 friends from madrid, want somewhere cheap and fun in europe dec 20-24, morning flights pls",
+     "necesito llevar a mi mam\u00e1 de Calgary a Kolkata a fines de octubre, no puede hacer escala en Estados Unidos"
+    ],
+    "title": "User Request"
+   }
+  },
+  "title": "search_flightsArguments",
+  "type": "object"
+ },
+ "name": "search_flights",
+ "outputSchema": {
+  "additionalProperties": true,
+  "properties": {
+   "code": {
+    "description": "On an error: a machine-readable kind, e.g. unknown_place",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "counts": {
+    "description": "priced, matching_filters, returned integers",
+    "type": [
+     "object",
+     "null"
+    ]
+   },
+   "field": {
+    "description": "On unknown_place: which argument (origin, destination, ...)",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "filters": {
+    "description": "Filters as the caller gave them (max_stops, airlines, max_price_usd, ...)",
+    "type": [
+     "object",
+     "null"
+    ]
+   },
+   "highlights": {
+    "description": "The spread over every matching fare: cheapest, cheapest_nonstop, fastest, earliest, latest; each with itinerary_id, price, airlines, stops, duration_minutes, departs_at",
+    "type": [
+     "object",
+     "null"
+    ]
+   },
+   "itineraries": {
+    "description": "Items: itinerary_id, price {total_usd, per_traveler_usd}, outbound leg, needs_leg, track_url, optional depart_date + search_key",
+    "type": [
+     "array",
+     "null"
+    ]
+   },
+   "message": {
+    "description": "Error or sign-in message from the server wrapper",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "note": {
+    "description": "Guidance on trip type or why empty",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "places_assumed": {
+    "description": "Place names this call resolved on its own, e.g. 'Portland = Portland, OR (PDX)'; tell the traveler",
+    "type": [
+     "array",
+     "null"
+    ]
+   },
+   "search": {
+    "description": "Route dict: origin, destination, names, destination_image, cabin, travelers, dates, trip_type, legs (multi-city), search_key, served_from, retrieved_at",
+    "type": [
+     "object",
+     "null"
+    ]
+   },
+   "search_url": {
+    "description": "slicktrip.com search page link with attribution",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "searched_as": {
+    "description": "What the search assumed: trip type, travelers, cabin",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "status": {
+    "description": "ok | no_data | error | sign_in_required",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "suggestions": {
+    "description": "On unknown_place: places to offer the traveler, each with code, name, kind (airport, all airports in the city, nearby airport), city, country",
+    "type": [
+     "array",
+     "null"
+    ]
+   }
+  },
+  "type": "object"
+ },
+ "securitySchemes": [
+  {
+   "type": "noauth"
+  },
+  {
+   "scopes": [
+    "openid",
+    "email",
+    "profile"
+   ],
+   "type": "oauth2"
+  }
+ ],
+ "title": "Search flights"
+}

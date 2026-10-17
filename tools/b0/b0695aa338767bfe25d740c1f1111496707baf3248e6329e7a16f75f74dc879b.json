@@ -1,0 +1,177 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Open a stripe-hosted card page"
+ },
+ "description": "Open a Stripe-hosted page for one of three card moments: `add_card` (a new card), `recollect_card` (a card group-3 of `well_list_payment_cards` saved by another person, which must be re-entered on this workspace's own Stripe customer before it can charge here), or `complete_authentication` (a bank's 3-D Secure check).\n\nReturns `url`, a link on checkout.stripe.com, billing.stripe.com, hooks.stripe.com or invoice.stripe.com; `expires_at`, when the page stops working; and `then`, the tool to call once the user is back (`well_list_payment_cards`). Hand the url to the widget or open it; never type it into the conversation, never ask for or relay what the page itself collects (a card number, an expiry, a security code), and never read it back from a tool result \u2014 this tool returns no card data by design, so there is none to relay.\n\n`complete_authentication` is refused with `authentication_unavailable` for now: Well holds no billing offer whose charge the page could finish. Give the bank-check link the payment receipt carries instead, or send the owner to the billing page.\n\nOnly a workspace owner or admin opens a hosted payment link. `error_reason`: `missing_key` (`recollect_card` without `card_ref`, or `complete_authentication` without `offer_id`), `no_membership` (the caller has no active membership in the workspace, or no workspace is in context), `not_admin` (the caller is a member but not an owner or an admin), `authentication_unavailable` (see above), `billing_off` (billing is not active on this Well instance), `no_customer` (the workspace has no Stripe customer yet; send the owner to the billing page first), `failed` (Stripe did not return a session).\n\nWhen the token authorizes one workspace, call this directly \u2014 no workspace call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "card_ref": {
+    "description": "Required for recollect_card: the opaque cardRef `well_list_payment_cards` gave for the card being re-entered.",
+    "maxLength": 500,
+    "minLength": 1,
+    "type": "string"
+   },
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "idempotency_key": {
+    "description": "Optional client-supplied key. A retried write with the same key returns the original result instead of re-applying the operation.",
+    "maxLength": 255,
+    "minLength": 1,
+    "type": "string"
+   },
+   "offer_id": {
+    "description": "Required for complete_authentication: the offer_id of the billing offer that needs the bank check.",
+    "maxLength": 500,
+    "minLength": 1,
+    "type": "string"
+   },
+   "purpose": {
+    "description": "add_card: the workspace adds a new card. recollect_card: a card group-3 of `well_list_payment_cards` saved by another person must be re-entered on this workspace's own Stripe customer. complete_authentication: a bank's 3-D Secure check must finish before a charge or a saved card is usable.",
+    "enum": [
+     "add_card",
+     "recollect_card",
+     "complete_authentication"
+    ],
+    "type": "string"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several \u2014 a write lands in exactly one workspace and this call would not say which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   },
+   "workspace_scope": {
+    "description": "Restrict this call to the family: the token's primary workspace plus the company workspaces under it that you are a member of. Unrelated authorized workspaces drop out of the read; row reads merge across the family, while a per-workspace figure still reports exactly one workspace.",
+    "enum": [
+     "family"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "purpose"
+  ],
+  "type": "object"
+ },
+ "name": "well_create_hosted_payment_link",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "error": {
+    "type": "string"
+   },
+   "error_reason": {
+    "enum": [
+     "missing_key",
+     "no_membership",
+     "not_admin",
+     "authentication_unavailable",
+     "billing_off",
+     "no_customer",
+     "failed"
+    ],
+    "type": "string"
+   },
+   "expires_at": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "When the page stops working, as an ISO timestamp; null when Stripe gave no expiry."
+   },
+   "newly_connected": {
+    "description": "Tools that connected to this workspace since the last result and that no session was told about yet, oldest first. Present only when at least one tool is new. The connected-line rule says when to tell an entry; when it does, one line per entry, in the person's language: \"<name> is connected.\". Never fold several entries into one sentence. Each entry comes back once, on one result only: never repeat its line later.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "then": {
+    "description": "The tool to call once the user says they are back from the page.",
+    "type": "string"
+   },
+   "url": {
+    "description": "A Stripe-hosted page. Open it as given; never read, repeat, log or store anything the page itself holds.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "Open a stripe-hosted card page"
+}

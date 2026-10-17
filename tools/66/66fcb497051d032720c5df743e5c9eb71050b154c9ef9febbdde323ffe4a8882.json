@@ -1,0 +1,582 @@
+{
+ "_meta": {
+  "openai/fileParams": [
+   "design_file"
+  ],
+  "openai/outputTemplate": "ui://widget/quote-compare-v41.html",
+  "openai/toolInvocation/invoked": "Fetched fabrication offers",
+  "openai/toolInvocation/invoking": "Checking fabrication vendors\u2026",
+  "openai/widgetAccessible": true,
+  "ui": {
+   "resourceUri": "ui://widget/quote-compare-v41.html"
+  }
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false
+ },
+ "description": "Get ranked, purchasable offers (price, ETA, preview image) for fabricating a physical item from a design file. process=fdm_print for 3D printing a model (STL/OBJ/PLY/3MF/AMF/STEP/IGES), process=cnc or process=sheetmetal for machined/bent metal parts (STEP, IGES, DXF), process=decal for stickers/decals from artwork (any common image or design file \u2014 PNG/JPG/HEIC/TIFF/GIF/BMP/WEBP/AVIF/SVG/PDF/AI/EPS/PSD/CDR, auto-converted). A .ufp file (UFP part container: the design plus saved spec/constraints in one) is accepted anywhere a design file is \u2014 its saved intent applies automatically and anything the user states now wins. If the user just drops a file and asks for a price, omit process \u2014 UFP routes it. Provide the design either as design_file (an image/file the user attached or you generated \u2014 preferred) or file_url (a public URL). REORDERS: if the user has a UFP part number (from a receipt email or a previous session, looks like UFP-\u2026 or part_\u2026), pass it as part_number INSTEAD of any file \u2014 the stored design and spec are reused and re-shopped across all current vendors. Locked parts additionally require share_key (from the owner's share link). Returns offers across vendors like Google Flights returns flights.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "attachment_urls": {
+    "description": "Additional files for the SAME part \u2014 the PDF drawing next to the STEP, spec sheets, BOMs. Pass everything the user gave you; UFP works out which file is the part and which are supporting documents.",
+    "items": {
+     "format": "uri",
+     "type": "string"
+    },
+    "maxItems": 10,
+    "type": "array"
+   },
+   "bend_count": {
+    "description": "Number of bends in the design (bend lines must be in the file). Prices CNC bending; omit for flat parts",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "bends": {
+    "description": "Sheet-metal bend lines, each as TWO POINTS in the part's own mm frame (flat DXF parts use z=0: a bend from (0,12.7) to (76.2,12.7) is p1 [0,12.7,0], p2 [76.2,12.7,0]). angle_deg is the target bend angle (90 = a right-angle flange), direction \"up\"/\"down\" is the fold direction relative to the flat pattern, radius_mm the requested inside radius (omit it \u2014 the shop resolves to its tooling and reports what it used). Pass these when the user articulates WHERE the bends go; a bare \"it has 2 bends\" is bend_count, not this.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "angle_deg": {
+       "exclusiveMaximum": 180,
+       "exclusiveMinimum": 0,
+       "type": "number"
+      },
+      "direction": {
+       "enum": [
+        "up",
+        "down"
+       ],
+       "type": "string"
+      },
+      "face_id": {
+       "type": "integer"
+      },
+      "id": {
+       "maxLength": 32,
+       "minLength": 1,
+       "type": "string"
+      },
+      "line": {
+       "additionalProperties": false,
+       "properties": {
+        "p1": {
+         "items": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "number"
+          },
+          {
+           "type": "number"
+          }
+         ],
+         "maxItems": 3,
+         "minItems": 3,
+         "type": "array"
+        },
+        "p2": {
+         "items": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "number"
+          },
+          {
+           "type": "number"
+          }
+         ],
+         "maxItems": 3,
+         "minItems": 3,
+         "type": "array"
+        }
+       },
+       "required": [
+        "p1",
+        "p2"
+       ],
+       "type": "object"
+      },
+      "radius_mm": {
+       "exclusiveMinimum": 0,
+       "type": "number"
+      },
+      "source": {
+       "enum": [
+        "detected",
+        "user"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "line",
+      "angle_deg",
+      "direction"
+     ],
+     "type": "object"
+    },
+    "maxItems": 50,
+    "type": "array"
+   },
+   "callouts": {
+    "description": "Dimensions you read off the user's drawing that matter (\"hole_diameter 6.5mm \u00b10.1\"). The tightest tolerance prunes vendors that cannot hold it.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "critical": {
+       "type": "boolean"
+      },
+      "name": {
+       "type": "string"
+      },
+      "tolerance_mm": {
+       "exclusiveMinimum": 0,
+       "type": "number"
+      },
+      "unit": {
+       "enum": [
+        "mm",
+        "in"
+       ],
+       "type": "string"
+      },
+      "value": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "name",
+      "value",
+      "unit"
+     ],
+     "type": "object"
+    },
+    "maxItems": 50,
+    "type": "array"
+   },
+   "color": {
+    "description": "ONLY a color the user actually asked for \u2014 NEVER pick one for them. fdm_print: Filament color for fdm_print (e.g. black, red); resin_print: Resin color for resin_print (e.g. gray, white, black); powder_print: Powder part color: raw gray/white, or a dye (\"black\", \"dark blue\") \u2014 vendor-resolved; elastomer_print: Elastomer part color \u2014 VCJ parts ship raw; asks resolve with an honest substitution note; cnc: Colour for cnc: with finish anodized it is the anodize colour, otherwise the stock's own colour (black Delrin, clear acrylic). Colour WORDS only; each maker resolves the shade and says what it landed on; laser_cut: Colour of the flat stock for laser_cut (black, clear, natural\u2026). Colour WORDS only; each maker quotes the materials it stocks in that colour and drops the ones that cannot be it; print: Print color ask (\"full color\", \"black and white\"). Vendors that only price full color note the substitution; apparel: Garment color for apparel (\"black\", \"heather gray\") \u2014 vendor-resolved",
+    "type": "string"
+   },
+   "cut": {
+    "description": "Decal cut style \u2014 pass the user's words verbatim (\"triangle\", \"die cut\", \"circle\"). Known: contour|square|oval|kiss_cut; anything else gets closest-match offers with a substitution note. Omit to compare the main options",
+    "type": "string"
+   },
+   "deadline": {
+    "description": "Latest acceptable delivery date, ISO YYYY-MM-DD",
+    "type": "string"
+   },
+   "design_file": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "download_url": {
+        "type": "string"
+       },
+       "file_id": {
+        "type": "string"
+       },
+       "file_name": {
+        "type": "string"
+       },
+       "mime_type": {
+        "type": "string"
+       }
+      },
+      "required": [
+       "file_id",
+       "download_url"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "string"
+     }
+    ],
+    "description": "The design file itself (user-attached or generated image/STL). ChatGPT supplies the file reference automatically when the user attached a file \u2014 just bind the attachment here. Other clients may pass a data: URL (base64) or a public https URL string. Preferred over file_url."
+   },
+   "elastomer_finish": {
+    "description": "Elastomer post-processing: as_printed (VCJ parts ship raw \u2014 the whole lane today)",
+    "type": "string"
+   },
+   "elastomer_technology": {
+    "description": "Elastomer process: vapor_cure_jetting (VCJ). Omit to let the vendor pick its default lane for the material",
+    "type": "string"
+   },
+   "file_url": {
+    "description": "Public URL of the design file \u2014 only when the design lives at a URL",
+    "format": "uri",
+    "type": "string"
+   },
+   "finish": {
+    "description": "cnc: CNC surface finish: standard|anodized|polished|bead_blasted (default standard); sheetmetal: as_cut (default) | deburred | anodized | powder_coat \u2014 anodized is aluminum-only; powder coat protects mild steel for outdoor use",
+    "type": "string"
+   },
+   "food_safe": {
+    "description": "Must be vendor-certified food safe",
+    "type": "boolean"
+   },
+   "height_in": {
+    "description": "Decal height in inches (default 3)",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "high_temp": {
+    "description": "Must tolerate sustained heat (vendor heat-resistance claim)",
+    "type": "boolean"
+   },
+   "inserts": {
+    "description": "PEM-style hardware inserts pressed into holes of a sheet-metal part \u2014 one record per hole. `insert` is the species (nut | flush_nut | standoff | blind_standoff | stud) and `thread` its size (\"M4\", \"1/4-20\"); both are required. When known, add length_mm (standoff/stud post length), the hole's center (located_at_mm, part's own mm frame), its axis, the drilled diameter, and `points` \u2014 the signed unit vector the insert's functional side faces (flip = negate). Pass these when the user asks for press-in nuts/standoffs/studs; vendors with a hardware service price them.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "axis": {
+       "items": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "number"
+        },
+        {
+         "type": "number"
+        }
+       ],
+       "maxItems": 3,
+       "minItems": 3,
+       "type": "array"
+      },
+      "depth_mm": {
+       "exclusiveMinimum": 0,
+       "type": "number"
+      },
+      "drilled_diameter_mm": {
+       "exclusiveMinimum": 0,
+       "type": "number"
+      },
+      "face_id": {
+       "type": "integer"
+      },
+      "hole": {
+       "minimum": 1,
+       "type": "integer"
+      },
+      "insert": {
+       "enum": [
+        "nut",
+        "flush_nut",
+        "standoff",
+        "blind_standoff",
+        "stud"
+       ],
+       "type": "string"
+      },
+      "length_mm": {
+       "exclusiveMinimum": 0,
+       "type": "number"
+      },
+      "located_at_mm": {
+       "additionalProperties": false,
+       "properties": {
+        "x": {
+         "type": "number"
+        },
+        "y": {
+         "type": "number"
+        },
+        "z": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "x",
+        "y",
+        "z"
+       ],
+       "type": "object"
+      },
+      "points": {
+       "items": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "number"
+        },
+        {
+         "type": "number"
+        }
+       ],
+       "maxItems": 3,
+       "minItems": 3,
+       "type": "array"
+      },
+      "thread": {
+       "maxLength": 32,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "required": [
+      "insert",
+      "thread"
+     ],
+     "type": "object"
+    },
+    "maxItems": 200,
+    "type": "array"
+   },
+   "material": {
+    "description": "ONLY a material the user actually asked for \u2014 NEVER guess or default one (a silent \"pla\" on a bare file drop prunes every maker that does not stock it; OMIT instead and each process quotes across its stocked materials so every maker can bid). fdm_print: pla|petg|asa (free-form \u2014 \"abs\", \"polycarbonate\" asks resolve to the closest stocked filament with a substitution note); resin_print: standard|tough|high_temp|high_detail resin (free-form asks resolve to the closest supported resin); powder_print: Powder-bed nylon: nylon_12|nylon_12_smooth|nylon_11|nylon_12_gf|nylon_12_esd|nylon_12_white|nylon_pa2200|nylon_12_sls|tpu (free-form \u2014 \"PA12\", \"glass filled\" resolve to the closest stocked powder); elastomer_print: Jetted elastomer: tepu_30a|tepu_50a (free-form \u2014 \"TPU\", \"soft rubber\" resolve to the closest stocked durometer); cnc: aluminum_6061|aluminum_7075|stainless_304|titanium|brass|acetal|delrin|abs|nylon_pa6|peek|acrylic (free-form asks resolve to the closest supported stock); sheetmetal: mild_steel|aluminum_5052|stainless_304 (free-form \u2014 \"steel\", \"5052\", \"stainless\" resolve; unknown asks get closest-match offers). Omit to compare the defaults; laser_cut: acrylic|plywood|mdf|delrin|uhmw|hdpe|g10|carbon_fiber|mild_steel|aluminum_5052|stainless_304 (free-form \u2014 \"plexiglass\", \"birch\" resolve; unknown asks get closest-match offers); decal: vinyl|holographic|transparent|glitter (free-form \u2014 \"chrome\" etc. gets closest matches)",
+    "type": "string"
+   },
+   "max_budget_usd": {
+    "description": "Hard budget cap in USD, all-in",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "metal_alloy": {
+    "description": "Metal AM alloy: stainless_316l|stainless_17_4ph|titanium_ti64|aluminum_alsi10mg|inconel_718|cobalt_chrome|tool_steel_h13|copper (free-form asks like \"Ti-6Al-4V\" resolve to the closest stocked powder)",
+    "type": "string"
+   },
+   "metal_finish": {
+    "description": "Metal AM post-processing: as_printed|bead_blast|machined_critical|polished|heat_treated (as_printed keeps support witness marks)",
+    "type": "string"
+   },
+   "metal_technology": {
+    "description": "Metal AM process: laser_powder_bed (SLM/DMLS/LPBF)|binder_jet|ebm. Omit to let the vendor pick its default for the alloy",
+    "type": "string"
+   },
+   "min_vendor_reviews": {
+    "description": "Only vendors with at least this many verified-purchase reviews",
+    "exclusiveMinimum": 0,
+    "type": "integer"
+   },
+   "min_vendor_stars": {
+    "description": "Only vendors whose displayed review rating is at least this many stars (1-5). Vendors with no reviews yet are excluded \u2014 the filter demands demonstrated quality",
+    "maximum": 5,
+    "minimum": 1,
+    "type": "number"
+   },
+   "outdoor_rated": {
+    "description": "Must survive outdoor exposure",
+    "type": "boolean"
+   },
+   "paper": {
+    "description": "Paper stock \u2014 free-form (\"matte\", \"glossy\", \"recycled\", \"14pt\"). Resolved to the closest stock the vendor runs",
+    "type": "string"
+   },
+   "part_number": {
+    "description": "UFP part number from a previous paid order (UFP-\u2026 or part_\u2026). Reorders: replaces design_file/file_url entirely; any other fields provided override the stored spec",
+    "type": "string"
+   },
+   "placement": {
+    "description": "Print placement for apparel: front (default) | back | front_back",
+    "type": "string"
+   },
+   "powder_finish": {
+    "description": "Powder post-processing: as_printed (raw powder surface) | vapor_polished | polished",
+    "type": "string"
+   },
+   "powder_technology": {
+    "description": "Powder process: mjf (HP Multi Jet Fusion) | sls (laser sintering). Omit to let the vendor pick its default lane for the material",
+    "type": "string"
+   },
+   "process": {
+    "description": "What to fabricate. If the user just drops a file and asks for a price, OMIT this \u2014 UFP detects the file type (artwork, mesh \u2014 STL/OBJ/PLY/3MF/AMF, BREP \u2014 STEP/IGES, DXF) and routes it to every process that can make it; the response's routing.also_possible lists processes UFP can't quote yet",
+    "enum": [
+     "fdm_print",
+     "resin_print",
+     "powder_print",
+     "metal_print",
+     "elastomer_print",
+     "cnc",
+     "sheetmetal",
+     "laser_cut",
+     "decal",
+     "print",
+     "apparel"
+    ],
+    "type": "string"
+   },
+   "processes": {
+    "description": "Only quote these fabrication processes \u2014 a constraint that narrows the auto-routing fan. Friendly terms accepted (\"sheet metal\", \"3d printing\", \"cnc\", \"laser\"); unmappable terms are reported, never an error. Usually OMIT: auto-routing quotes every process that can make the file. Pass it only when the user explicitly limits the process",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 8,
+    "type": "array"
+   },
+   "product": {
+    "description": "print: Print product kind: business_cards|flyers|posters. Omit to quote every kind the artwork fits; apparel: apparel: t_shirt|hoodie|long_sleeve|tank_top (free-form \u2014 \"tee\", \"crewneck\" resolve to the closest product)",
+    "type": "string"
+   },
+   "proven_spec_orders": {
+    "description": "Only vendors with at least N completed orders for this exact process+material \u2014 \"a vendor that prints PC reliably\"",
+    "exclusiveMinimum": 0,
+    "type": "integer"
+   },
+   "quantities": {
+    "description": "Quantities the user actually wants \u2014 pass [1] or [2] if that's the ask. Vendors with a higher minimum quote AT their minimum and the offer notes it (requested_quantity). Default: 25 for decals, 1 for prints; a part_number reorder defaults to the quantity last purchased",
+    "items": {
+     "exclusiveMinimum": 0,
+     "type": "integer"
+    },
+    "maxItems": 5,
+    "type": "array"
+   },
+   "requirements": {
+    "description": "Verbatim context terms from the user \u2014 materials, finishes, certifications, tolerances (\"UV resistant\", \"anodized: red\", \"iso 13485\", \"tolerance: 0.1mm\"). UFP applies what it can and reports what it could not; unresolvable terms are logged for vendor sourcing. Do not interrogate the user to fill this \u2014 pass what they said.",
+    "items": {
+     "maxLength": 120,
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 20,
+    "type": "array"
+   },
+   "share_key": {
+    "description": "Share key for a LOCKED part \u2014 the k=\u2026 value from the owner's share link (\u2026/part/UFP-\u2026?k=KEY). Required with part_number when the part is locked; omit otherwise",
+    "type": "string"
+   },
+   "ship_to_zip": {
+    "description": "Destination US ZIP code, exactly as the user stated it. OMIT if the user has not given one \u2014 NEVER guess or invent a ZIP. Without it, prices come back all-in with shipping to an assumed central-US destination, flagged on routing.ship_to",
+    "pattern": "^\\d{5}(-\\d{4})?$",
+    "type": "string"
+   },
+   "ships_from": {
+    "description": "Only vendors that ship from these countries/regions (\"only US vendors\", \"keep it domestic\") \u2014 an INCLUDE list. Friendly terms accepted (\"US\", \"Europe\", \"Germany\", \"China\", \"UK\"); unmappable terms are reported, never an error. Vendors whose origin is unknown or whose network is worldwide (origin not guaranteed) are excluded, each with a note saying why. Usually OMIT: pass it only when the user explicitly limits where vendors ship from",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 8,
+    "type": "array"
+   },
+   "shore_a": {
+    "description": "Numeric Shore A durometer ask (10-95, e.g. 40). Resolved to the NEAREST stocked durometer with a substitution note \u2014 never a silent swap",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "sides": {
+    "description": "single|double sided printing (defaults: cards double, flyers/posters single)",
+    "type": "string"
+   },
+   "size": {
+    "description": "Print size \u2014 pass the user's words verbatim (\"letter\", \"24x36\", \"half letter\"). Cards are 3.5x2; flyers 8.5x5.5|8.5x11|11x17; posters 12x18 through 36x48. Unknown sizes get closest-match offers",
+    "type": "string"
+   },
+   "submersible": {
+    "description": "Must survive submersion in water",
+    "type": "boolean"
+   },
+   "tapping": {
+    "description": "Tapped (threaded) holes for a sheet-metal part \u2014 one record per hole the user wants threads cut into. `thread` is the callout in the user's words (\"M6\", \"M4 x 0.7\", \"1/4-20\") and is all that's required; when known, add the hole's center in the part's own mm frame (located_at_mm), its unit axis, the pre-tap drilled diameter, and depth_mm so the shop taps the right hole. Pass these when the user asks for threaded/tapped holes; vendors with a tapping service price them.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "axis": {
+       "items": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "number"
+        },
+        {
+         "type": "number"
+        }
+       ],
+       "maxItems": 3,
+       "minItems": 3,
+       "type": "array"
+      },
+      "depth_mm": {
+       "exclusiveMinimum": 0,
+       "type": "number"
+      },
+      "drilled_diameter_mm": {
+       "exclusiveMinimum": 0,
+       "type": "number"
+      },
+      "face_id": {
+       "type": "integer"
+      },
+      "hole": {
+       "minimum": 1,
+       "type": "integer"
+      },
+      "located_at_mm": {
+       "additionalProperties": false,
+       "properties": {
+        "x": {
+         "type": "number"
+        },
+        "y": {
+         "type": "number"
+        },
+        "z": {
+         "type": "number"
+        }
+       },
+       "required": [
+        "x",
+        "y",
+        "z"
+       ],
+       "type": "object"
+      },
+      "thread": {
+       "maxLength": 32,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "required": [
+      "thread"
+     ],
+     "type": "object"
+    },
+    "maxItems": 200,
+    "type": "array"
+   },
+   "thickness_in": {
+    "description": "sheetmetal: Sheet thickness in inches (e.g. 0.063 = 14 ga aluminum). Quoted at the nearest stocked thickness; omit for ~16 ga default; laser_cut: Nominal thickness in inches; quoted at the vendor's nearest stocked thickness. Omit for the material's common stock",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "units": {
+    "description": "sheetmetal: DXF drawing units: \"mm\" (default) or \"in\". STEP files carry their own units; laser_cut: DXF drawing units: \"mm\" (default) or \"in\"",
+    "type": "string"
+   },
+   "vendors": {
+    "description": "Only these specific vendors/makers (\"just quote Slant 3D\") \u2014 an INCLUDE list of vendor names as they appear on offers. Friendly names accepted (\"A3D\", \"slant 3d\"); unmatched names are reported, never an error. Usually OMIT: pass it only when the user explicitly names the vendors they want",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 16,
+    "type": "array"
+   },
+   "width_in": {
+    "description": "Decal width in inches (default 3)",
+    "exclusiveMinimum": 0,
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "name": "get_fabrication_quote",
+ "title": "Get fabrication quote"
+}

@@ -1,0 +1,374 @@
+{
+ "annotations": {
+  "readOnlyHint": true
+ },
+ "description": "Query CDC WONDER for national US mortality statistics \u2014 deaths, population, and crude/age-adjusted death rates \u2014 across its five mortality databases, selected with the database input: final underlying-cause data for 1999\u20132020 (the default) or 2018\u20132024, provisional data running from 2018 through the current year, and two multiple-cause databases covering the same two eras. Break results out by year, age group, sex, and/or race, and filter by ICD-10 cause of death, sex, age group, or year range; on a multiple-cause database, mcd_icd10 additionally matches a cause listed anywhere on the death certificate rather than only the one certified as underlying. Each database holds a different span of years (1999\u20132026 across all of them) and a request whose year_range falls outside the selected one's span is rejected with that span named. WONDER is a separate CDC system from the Socrata datasets the other cdc_* tools query. Data is national only \u2014 sub-national (state/county) breakdowns are not available through the API (CDC vital-statistics policy). Cause of death is a filter, not a grouping. Some measure cells come back as a CDC status token rather than a number \u2014 \"Suppressed\" (withheld for confidentiality), \"Unreliable\" (a rate from fewer than 20 deaths), or \"Not Applicable\" (no population denominator); those cells read null in rows and each one is listed in cellNotes with its token. CDC also drops whole rows before sending the table \u2014 strata with zero deaths, and strata whose death count is suppressed \u2014 so a stratum can be missing from rows entirely; messages carries CDC's statement whenever that happened. Each response is bounded by a 200,000-character budget counted over the whole result, so a broad grouping \u2014 one can run past two thousand rows \u2014 comes back a page at a time: the response reports the table's totalCount and a nextOffset to continue from, and limit takes smaller pages. Paging shapes the response only \u2014 WONDER is asked once either way, and the figures, caveats and hidden-row notices are the same on every page. CDC rejects requests made less than 15 seconds apart across all five databases, so calls are spaced automatically: calls made while another is running wait their turn and run one after another, each queued call adding about 16 seconds plus its own query time before it returns.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "age_groups": {
+    "description": "Restrict to deaths in any of the listed age groups \u2014 e.g. [\"25-34\",\"35-44\"] covers both; a repeated group counts once. \"1\" is the under-1-year group. \"NS\" is the group CDC puts a death in when the age was not recorded; it is not covered by any of the ten-year groups, so a filter listing all eleven of those still leaves those deaths out and returns fewer deaths than the same query unfiltered. CDC refuses \"NS\" beside only some of the other groups: list it on its own to count those deaths, or list all twelve values \u2014 the same as omitting age_groups \u2014 to include them. Omit for all ages, which includes them.",
+    "items": {
+     "enum": [
+      "1",
+      "1-4",
+      "5-14",
+      "15-24",
+      "25-34",
+      "35-44",
+      "45-54",
+      "55-64",
+      "65-74",
+      "75-84",
+      "85+",
+      "NS"
+     ],
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "cause_icd10": {
+    "anyOf": [
+     {
+      "const": "",
+      "type": "string"
+     },
+     {
+      "const": "999--999",
+      "type": "string"
+     },
+     {
+      "description": "ICD-10 underlying-cause code or range. WONDER takes a node of its ICD-10 tree \u2014 a chapter such as \"A00-B99\" (infectious) or \"V01-Y89\" (external causes), a block such as \"X40-X49\" (accidental poisoning) or \"C00-C97\" (malignant neoplasms), or a single code such as \"I21\" \u2014 and rejects any other span, e.g. \"X40-X44\", naming it in the error. List the codes (or blocks) to cover a span that is not a tree node.",
+      "pattern": "^[A-Z][0-9]{2}(\\.[0-9]+)?(-[A-Z][0-9]{2}(\\.[0-9]+)?)?$",
+      "type": "string"
+     },
+     {
+      "description": "A list of up to 50 entries, each in the single-value form, matched as a union: a death counts once when it matches any of them, so a code set such as X40\u2013X44 plus X60\u2013X64 is one series with one set of rates. Repeated entries are ignored. An empty list reads as omitted.",
+      "items": {
+       "anyOf": [
+        {
+         "const": "999--999",
+         "type": "string"
+        },
+        {
+         "description": "ICD-10 underlying-cause code or range. WONDER takes a node of its ICD-10 tree \u2014 a chapter such as \"A00-B99\" (infectious) or \"V01-Y89\" (external causes), a block such as \"X40-X49\" (accidental poisoning) or \"C00-C97\" (malignant neoplasms), or a single code such as \"I21\" \u2014 and rejects any other span, e.g. \"X40-X44\", naming it in the error. List the codes (or blocks) to cover a span that is not a tree node.",
+         "pattern": "^[A-Z][0-9]{2}(\\.[0-9]+)?(-[A-Z][0-9]{2}(\\.[0-9]+)?)?$",
+         "type": "string"
+        }
+       ],
+       "description": "One list entry: an ICD-10 code or range, or the withheld-cause marker."
+      },
+      "maxItems": 50,
+      "type": "array"
+     }
+    ],
+    "description": "Filter to ICD-10 underlying causes of death \u2014 the single condition CDC certified as having started the chain of events leading to death. Takes one code or range, or a list of them for a cause defined as a code set, e.g. drug overdose as [\"X40\",\"X41\",\"X42\",\"X43\",\"X44\",\"X60\",\"X61\",\"X62\",\"X63\",\"X64\",\"X85\",\"Y10\",\"Y11\",\"Y12\",\"Y13\",\"Y14\"]. Omit for all causes. Accepted by every database. \"999--999\" is not an ICD-10 code but CDC's own marker for deaths whose cause it is still withholding under the provisional database's six-month reporting lag; it counts that backlog, and only the \"provisional\" database offers it."
+   },
+   "database": {
+    "default": "underlying_1999_2020",
+    "description": "Which WONDER mortality database to query. \"underlying_1999_2020\" (D76) is final data for 1999\u20132020 and the default. \"provisional\" (D176) runs 2018 through the current year, updated weekly, and returns the most recent years labelled e.g. \"2025 (provisional)\". \"underlying_2018_2024\" (D158) is settled \u2014 not provisional \u2014 data for 2018\u20132024. \"multiple_1999_2020\" (D77) and \"multiple_2018_2024\" (D157) record every cause listed on the death certificate; without an mcd_icd10 filter they return the same figures as the underlying-cause database for the same era, so pick one only to use that filter. The two 1999\u20132020 databases report race in CDC's four bridged groups; the other three use the six single-race groups \u2014 figures broken out by race are not comparable between the two families.",
+    "enum": [
+     "underlying_1999_2020",
+     "provisional",
+     "underlying_2018_2024",
+     "multiple_1999_2020",
+     "multiple_2018_2024"
+    ],
+    "type": "string"
+   },
+   "group_by": {
+    "default": [
+     "year"
+    ],
+    "description": "Dimensions to break results out by (1\u20134, each at most once), in output-column order \u2014 e.g. [\"year\"], [\"year\",\"sex\"], [\"age_group\",\"race\"]. Results are always national. Cause of death is a filter (cause_icd10), not a grouping. \"race\" resolves to whichever race vocabulary the selected database uses \u2014 four bridged groups (Asian and Pacific Islander combined) on the 1999\u20132020 databases, six single-race categories on the others, one of them \"More than one race\" \u2014 so a race series from one family cannot be spliced onto one from the other.",
+    "items": {
+     "enum": [
+      "year",
+      "age_group",
+      "sex",
+      "race"
+     ],
+     "type": "string"
+    },
+    "maxItems": 4,
+    "minItems": 1,
+    "type": "array"
+   },
+   "limit": {
+    "description": "Rows to return from the table CDC sent \u2014 any positive integer. Omit to take as many as fit. Either way fewer come back when the page would carry the response past its 200,000-character budget, counted over the whole result \u2014 the rows, their cell notes, and the caveats and messages, as JSON and as the rendered table together; the response says so and gives a nextOffset to resume from. WONDER's request carries no limit of its own, so this pages a table already fetched in full rather than narrowing the query: the deaths, rates, caveats and hidden-row notices are the same whichever page is read.",
+    "maximum": 9007199254740991,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "mcd_icd10": {
+    "anyOf": [
+     {
+      "const": "",
+      "type": "string"
+     },
+     {
+      "const": "999--999",
+      "type": "string"
+     },
+     {
+      "description": "ICD-10 code or range, same form as cause_icd10 \u2014 a chapter such as \"S00-T98\" (injury and poisoning, a chapter the underlying-cause finder does not list), a block such as \"J09-J18\" (influenza and pneumonia), or a single code such as \"T40.1\" (heroin).",
+      "pattern": "^[A-Z][0-9]{2}(\\.[0-9]+)?(-[A-Z][0-9]{2}(\\.[0-9]+)?)?$",
+      "type": "string"
+     },
+     {
+      "description": "A list of up to 50 entries, each in the single-value form, matched as a union: a death counts once when it matches any of them, so a code set such as X40\u2013X44 plus X60\u2013X64 is one series with one set of rates. Repeated entries are ignored. An empty list reads as omitted.",
+      "items": {
+       "anyOf": [
+        {
+         "const": "999--999",
+         "type": "string"
+        },
+        {
+         "description": "ICD-10 code or range, same form as cause_icd10 \u2014 a chapter such as \"S00-T98\" (injury and poisoning, a chapter the underlying-cause finder does not list), a block such as \"J09-J18\" (influenza and pneumonia), or a single code such as \"T40.1\" (heroin).",
+         "pattern": "^[A-Z][0-9]{2}(\\.[0-9]+)?(-[A-Z][0-9]{2}(\\.[0-9]+)?)?$",
+         "type": "string"
+        }
+       ],
+       "description": "One list entry: an ICD-10 code or range, or the withheld-cause marker."
+      },
+      "maxItems": 50,
+      "type": "array"
+     }
+    ],
+    "description": "Filter to deaths with any of these ICD-10 codes recorded anywhere on the death certificate, whether or not it was the underlying cause \u2014 e.g. \"died with a respiratory condition listed\", a population no underlying-cause query can produce. Takes one code or range, or a list of them, e.g. opioid involvement as [\"T40.0\",\"T40.1\",\"T40.2\",\"T40.3\",\"T40.4\",\"T40.6\"]. Valid only when database is \"multiple_1999_2020\", \"multiple_2018_2024\", or \"provisional\"; the other databases record only the underlying cause and reject it. \"999--999\", the withheld-cause marker described under cause_icd10, is offered here too but only by \"provisional\". Combines with cause_icd10, which keeps meaning the underlying cause: a death must match both filters. Omit for all causes."
+   },
+   "offset": {
+    "default": 0,
+    "description": "Index of the first row to return, for continuing past a previous call (default 0, max 10,000). Rows keep the order CDC returned them in, which is stable for a given query, so offset plus limit walks the table without gaps or repeats. An offset at or past the row total returns an empty page rather than an error.",
+    "maximum": 10000,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "sex": {
+    "default": "all",
+    "description": "Filter by sex.",
+    "enum": [
+     "all",
+     "male",
+     "female"
+    ],
+    "type": "string"
+   },
+   "year_range": {
+    "description": "Inclusive year range; from must not be later than to. These bounds span every database (1999\u20132026); the years the selected one actually holds are narrower, and a range outside them is rejected with that database's span named. Omit for all years the database holds.",
+    "properties": {
+     "from": {
+      "description": "First year (1999\u20132026 across all databases; the selected one holds a narrower span).",
+      "maximum": 2026,
+      "minimum": 1999,
+      "type": "integer"
+     },
+     "to": {
+      "description": "Last year (1999\u20132026 across all databases; the selected one holds a narrower span).",
+      "maximum": 2026,
+      "minimum": 1999,
+      "type": "integer"
+     }
+    },
+    "required": [
+     "from",
+     "to"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "object"
+ },
+ "name": "cdc_query_wonder",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "rows",
+     "rowCount",
+     "database",
+     "databaseTitle",
+     "caveats",
+     "cellNotes",
+     "messages",
+     "suppressedCount",
+     "effectiveQuery",
+     "totalCount"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cap": {
+    "description": "Rows this call asked for \u2014 limit when set, otherwise every row from offset to the end of the table. A shown below it means the response budget cut the page short.",
+    "type": "number"
+   },
+   "caveats": {
+    "description": "CDC-provided caveats and footnotes: data revisions, population-estimate sources, suppression and rate-reliability rules. CDC's links to its methodology pages are kept as Markdown links, e.g. \"[More information.](https://wonder.cdc.gov/wonder/help/ucd-expanded.html#Confidence-Intervals)\". They describe the whole table CDC assembled, so they come back complete on every page rather than scoped to the rows returned.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "cellNotes": {
+    "description": "One entry per measure cell CDC returned as a status token rather than a number, covering the rows in this response only. Those cells read null in rows, so this is what tells a withheld value apart from an unreliable one or a genuinely absent one.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One flagged measure cell: where it is and what CDC put there.",
+     "properties": {
+      "column": {
+       "description": "Measure column whose numeric value the token replaced.",
+       "type": "string"
+      },
+      "row": {
+       "description": "Zero-based index into rows \u2014 the rows in this response, so it is relative to the page rather than to the whole table.",
+       "type": "number"
+      },
+      "token": {
+       "description": "Token CDC returned in place of a number: \"Suppressed\" (withheld for confidentiality, fewer than 10 persons), \"Unreliable\" (rate from fewer than 20 deaths \u2014 published, not withheld), or \"Not Applicable\" (no population denominator).",
+       "type": "string"
+      }
+     },
+     "required": [
+      "row",
+      "column",
+      "token"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "database": {
+    "description": "WONDER dataset code the rows came from \u2014 e.g. \"D76\", \"D176\", \"D157\".",
+    "type": "string"
+   },
+   "databaseTitle": {
+    "description": "CDC's own title for that database, e.g. \"Underlying Cause of Death, 1999-2020\". Names the era and record type the rows describe, so a result read on its own is self-describing.",
+    "type": "string"
+   },
+   "effectiveQuery": {
+    "description": "Human-readable summary of the grouping and filters sent to WONDER.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_query`: The request contradicts itself \u2014 a year_range whose from is later than its to, or a group_by dimension listed twice \u2014 or asks for a combination CDC refuses \u2014 age_groups holding \"NS\" beside only some of the known age groups \u2014 or does not fit the selected database \u2014 a year_range outside the years it holds, mcd_icd10 against a database that records only the underlying cause, or the withheld-cause marker against one that keeps no withheld backlog \u2014 or WONDER itself rejected it, e.g. an ICD-10 code or range its tree does not hold, or a filter/grouping combination it does not allow. `rate_limited`: A request reached WONDER less than 15 seconds after the previous response to the same source IP finished, and WONDER returned 429. This server queues its own calls, so the earlier request usually came from another client sharing that IP. `upstream_error`: WONDER returned an unexpected response or was unreachable. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_query",
+         "rate_limited",
+         "upstream_error"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "messages": {
+    "description": "Notices CDC attached to this table, verbatim apart from links, which are kept as Markdown links. The ones that matter say rows were withheld before the table was sent \u2014 \"Rows with zero Deaths are hidden.\" and \"Rows with suppressed Deaths are hidden.\" A withheld row is absent from rows entirely, with nothing in the table marking the gap, so while this array is non-empty a stratum missing from rows may have been dropped rather than unobserved, and any count, ranking, or completeness claim drawn from rows is partial. These describe the whole table, so they come back complete on every page. Empty when CDC withheld no rows.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "nextOffset": {
+    "description": "Offset to pass on the next call to resume immediately after the last row returned. Present only when further rows remain.",
+    "type": "number"
+   },
+   "notice": {
+    "description": "Guidance when no rows matched, when the returned rows are a page of a larger table \u2014 naming whether limit or the response budget ended it \u2014 or the offset ran past it, and a note when CDC returned a status token in place of a measure value.",
+    "type": "string"
+   },
+   "rowCount": {
+    "description": "Number of rows returned in this response \u2014 the page size whenever it falls short of totalCount.",
+    "type": "number"
+   },
+   "rows": {
+    "description": "Result rows. Each carries the requested group-by dimensions plus deaths, population, crude_rate, and age_adjusted_rate (per 100,000) when age standardization is possible \u2014 it is omitted when age_group is a grouping dimension or age_groups selects a single group. Dimension values are CDC's own labels with only surrounding whitespace removed, so the same year keys identically across databases; nothing inside a label is changed, and on the provisional database a year reads \"2025 (provisional)\" or \"2026 (provisional and partial)\" rather than a bare year. A measure cell CDC returned as a status token instead of a number is null here; cellNotes names the cell and the token. These are one page of the table CDC sent, in its order, bounded by limit and by the response budget; totalCount says how many rows the whole table holds.",
+    "items": {
+     "additionalProperties": {
+      "type": [
+       "string",
+       "number",
+       "null"
+      ]
+     },
+     "propertyNames": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "shown": {
+    "description": "Number of rows returned in this response.",
+    "type": "number"
+   },
+   "suppressedCount": {
+    "description": "How many cellNotes carry the \"Suppressed\" token \u2014 cells CDC withheld for confidentiality. Counted over the rows in this response, so it tracks the page rather than the whole table.",
+    "type": "number"
+   },
+   "totalCount": {
+    "description": "Rows in the whole table CDC returned, before any page was taken. Exact rather than estimated \u2014 the table is parsed in full before a page is taken from it.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when rows remain past the ones returned. Absent means this response runs to the end of the table, which is also the case for an offset past it.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Cdc Query Wonder"
+}

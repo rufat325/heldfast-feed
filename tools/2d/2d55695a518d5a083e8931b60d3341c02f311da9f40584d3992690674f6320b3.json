@@ -1,0 +1,1413 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "Underwrite a US residential property from its street address for a rental, flip or hold strategy. Pulls the property record (owner, last sale, taxes, HOA), the automated value estimate with sale comps and the long-term rent estimate with rental comps from RentCast, then computes NOI, cap rate, cash-on-cash, DSCR, GRM and break-even occupancy from stated assumptions with deterministic math (plus 70%-rule, profit and ROI for a flip; a multi-year exit projection for a hold), lists red flags with a pass/review/fail screen, and adds a one-paragraph analyst memo. Returns {data, sources, as_of, confidence, notice}. Not financial advice: verify before acting. Paid: $0.75 per call; without credit you get a PAYMENT_REQUIRED result. Set sample=true for a free example response.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "address": {
+    "description": "Full US street address: number, street, city, state, zip (e.g. 1547 Example Ave, Cleveland, OH 44109). Required unless sample=true.",
+    "maxLength": 200,
+    "minLength": 1,
+    "type": "string"
+   },
+   "assumptions": {
+    "description": "Underwriting assumptions. Every field is optional; omitted fields use the documented defaults.",
+    "properties": {
+     "appreciation_pct": {
+      "description": "Annual value growth (hold). Default 0.03.",
+      "maximum": 0.3,
+      "minimum": -0.2,
+      "type": "number"
+     },
+     "arv": {
+      "description": "After-repair value in USD (flip). Default: the RentCast value estimate.",
+      "exclusiveMinimum": 0,
+      "type": "number"
+     },
+     "capex_pct": {
+      "description": "Capital reserves as a fraction of gross rent. Default 0.05.",
+      "maximum": 0.3,
+      "minimum": 0,
+      "type": "number"
+     },
+     "closing_costs_pct": {
+      "description": "Buyer closing costs as a fraction of price. Default 0.03.",
+      "maximum": 0.15,
+      "minimum": 0,
+      "type": "number"
+     },
+     "down_payment_pct": {
+      "description": "Down payment as a fraction of price. Default 0.25. 1 = all cash.",
+      "maximum": 1,
+      "minimum": 0,
+      "type": "number"
+     },
+     "hoa_monthly": {
+      "description": "Monthly HOA dues in USD. Default: RentCast HOA fee, else 0.",
+      "minimum": 0,
+      "type": "number"
+     },
+     "hold_years": {
+      "description": "Years held before sale (hold). Default 5.",
+      "maximum": 30,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "holding_months": {
+      "description": "Months from purchase to resale (flip). Default 6.",
+      "maximum": 36,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "insurance_annual": {
+      "description": "Annual landlord insurance in USD. Default 0.5% of price.",
+      "minimum": 0,
+      "type": "number"
+     },
+     "interest_rate": {
+      "description": "Annual note rate as a fraction, e.g. 0.07. Default 0.07.",
+      "maximum": 0.3,
+      "minimum": 0,
+      "type": "number"
+     },
+     "loan_term_years": {
+      "description": "Default 30.",
+      "maximum": 40,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "maintenance_pct": {
+      "description": "Repairs as a fraction of gross rent. Default 0.05.",
+      "maximum": 0.3,
+      "minimum": 0,
+      "type": "number"
+     },
+     "management_pct": {
+      "description": "Property management as a fraction of gross rent. Default 0.08.",
+      "maximum": 0.3,
+      "minimum": 0,
+      "type": "number"
+     },
+     "monthly_rent": {
+      "description": "Expected monthly rent in USD. Default: the RentCast long-term rent estimate.",
+      "exclusiveMinimum": 0,
+      "type": "number"
+     },
+     "property_tax_annual": {
+      "description": "Annual property tax in USD. Default: latest RentCast tax record, else 1.1% of price.",
+      "minimum": 0,
+      "type": "number"
+     },
+     "purchase_price": {
+      "description": "Offer or purchase price in USD. Default: the RentCast value estimate (AVM).",
+      "exclusiveMinimum": 0,
+      "type": "number"
+     },
+     "rehab_budget": {
+      "description": "Renovation budget in USD, paid in cash at purchase. Default 0.",
+      "minimum": 0,
+      "type": "number"
+     },
+     "rent_growth_pct": {
+      "description": "Annual rent growth (hold). Default 0.02.",
+      "maximum": 0.3,
+      "minimum": -0.2,
+      "type": "number"
+     },
+     "selling_costs_pct": {
+      "description": "Commissions and closing at sale as a fraction of sale price. Default 0.06.",
+      "maximum": 0.15,
+      "minimum": 0,
+      "type": "number"
+     },
+     "vacancy_pct": {
+      "description": "Vacancy and credit loss as a fraction of gross rent. Default 0.05.",
+      "maximum": 0.5,
+      "minimum": 0,
+      "type": "number"
+     }
+    },
+    "type": "object"
+   },
+   "memo": {
+    "default": true,
+    "description": "Include the one-paragraph memo (cheap model, cached). Default true.",
+    "type": "boolean"
+   },
+   "sample": {
+    "default": false,
+    "description": "Set true to return an example response at no charge (sample mode). Default false.",
+    "type": "boolean"
+   },
+   "strategy": {
+    "default": "rental",
+    "description": "rental: buy and rent out (NOI, cap rate, cash-on-cash, DSCR). flip: buy, rehab, resell (70% rule, profit, ROI). hold: rental metrics plus a multi-year exit projection (appreciation, principal paydown, equity multiple).",
+    "enum": [
+     "rental",
+     "flip",
+     "hold"
+    ],
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "realestate_deal_memo",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "as_of": {
+    "description": "ISO time of the oldest upstream data point in this response",
+    "type": "string"
+   },
+   "confidence": {
+    "additionalProperties": false,
+    "properties": {
+     "factors": {
+      "description": "what lowered the score",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "level": {
+      "enum": [
+       "high",
+       "medium",
+       "low"
+      ],
+      "type": "string"
+     },
+     "score": {
+      "description": "0..1",
+      "type": "number"
+     }
+    },
+    "required": [
+     "level",
+     "score",
+     "factors"
+    ],
+    "type": "object"
+   },
+   "data": {
+    "additionalProperties": false,
+    "properties": {
+     "address": {
+      "type": "string"
+     },
+     "avm": {
+      "additionalProperties": false,
+      "properties": {
+       "range": {
+        "additionalProperties": false,
+        "properties": {
+         "high": {
+          "type": "number"
+         },
+         "low": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "low",
+         "high"
+        ],
+        "type": "object"
+       },
+       "value": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "value",
+       "range"
+      ],
+      "type": "object"
+     },
+     "cap_rate": {
+      "type": "number"
+     },
+     "cash_on_cash": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "comps": {
+      "description": "sale comps behind the value estimate, best match first",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "address": {
+         "type": "string"
+        },
+        "bathrooms": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "bedrooms": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "correlation": {
+         "description": "RentCast similarity 0..1",
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "days_old": {
+         "description": "days since the comp was last seen on market",
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "distance_miles": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "listing_type": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "price": {
+         "description": "sale price for value comps; monthly rent for rent comps",
+         "type": "number"
+        },
+        "property_type": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "square_footage": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "status": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "year_built": {
+         "type": [
+          "number",
+          "null"
+         ]
+        }
+       },
+       "required": [
+        "address",
+        "price",
+        "bedrooms",
+        "bathrooms",
+        "square_footage",
+        "year_built",
+        "property_type",
+        "distance_miles",
+        "days_old",
+        "correlation",
+        "listing_type",
+        "status"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "dscr": {
+      "type": [
+       "number",
+       "null"
+      ]
+     },
+     "memo": {
+      "description": "one-paragraph analyst memo",
+      "type": [
+       "string",
+       "null"
+      ]
+     },
+     "memo_status": {
+      "additionalProperties": false,
+      "properties": {
+       "cost_usd": {
+        "type": "number"
+       },
+       "model": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "reason": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "status": {
+        "description": "generated: fresh LLM paragraph; cached: identical request served from the LLM cache; template: deterministic paragraph (sample mode, LLM disabled or LLM error); skipped: memo=false",
+        "enum": [
+         "generated",
+         "cached",
+         "template",
+         "skipped"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "status",
+       "model",
+       "cost_usd",
+       "reason"
+      ],
+      "type": "object"
+     },
+     "owner": {
+      "anyOf": [
+       {
+        "additionalProperties": false,
+        "properties": {
+         "mailing_address": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "names": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "occupied": {
+          "type": [
+           "boolean",
+           "null"
+          ]
+         },
+         "type": {
+          "description": "Individual or Organization",
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "names",
+         "type",
+         "occupied",
+         "mailing_address"
+        ],
+        "type": "object"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "property": {
+      "additionalProperties": false,
+      "properties": {
+       "address": {
+        "additionalProperties": false,
+        "properties": {
+         "city": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "county": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "formatted": {
+          "type": "string"
+         },
+         "line1": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "state": {
+          "type": [
+           "string",
+           "null"
+          ]
+         },
+         "zip": {
+          "type": [
+           "string",
+           "null"
+          ]
+         }
+        },
+        "required": [
+         "formatted",
+         "line1",
+         "city",
+         "state",
+         "zip",
+         "county"
+        ],
+        "type": "object"
+       },
+       "assessment": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "improvements": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "land": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "value": {
+            "type": "number"
+           },
+           "year": {
+            "type": "number"
+           }
+          },
+          "required": [
+           "year",
+           "value",
+           "land",
+           "improvements"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "bathrooms": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "bedrooms": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "history": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "date": {
+           "type": "string"
+          },
+          "event": {
+           "type": "string"
+          },
+          "price": {
+           "type": [
+            "number",
+            "null"
+           ]
+          }
+         },
+         "required": [
+          "date",
+          "event",
+          "price"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "hoa_monthly": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "last_sale": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "date": {
+            "type": "string"
+           },
+           "price": {
+            "type": [
+             "number",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "date",
+           "price"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "location": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "latitude": {
+            "type": "number"
+           },
+           "longitude": {
+            "type": "number"
+           }
+          },
+          "required": [
+           "latitude",
+           "longitude"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "lot_size_sqft": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "owner": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "mailing_address": {
+            "type": [
+             "string",
+             "null"
+            ]
+           },
+           "names": {
+            "items": {
+             "type": "string"
+            },
+            "type": "array"
+           },
+           "occupied": {
+            "type": [
+             "boolean",
+             "null"
+            ]
+           },
+           "type": {
+            "description": "Individual or Organization",
+            "type": [
+             "string",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "names",
+           "type",
+           "occupied",
+           "mailing_address"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "property_type": {
+        "type": [
+         "string",
+         "null"
+        ]
+       },
+       "rentcast_id": {
+        "type": "string"
+       },
+       "square_footage": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "tax": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "annual_total": {
+            "type": "number"
+           },
+           "year": {
+            "type": "number"
+           }
+          },
+          "required": [
+           "year",
+           "annual_total"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "year_built": {
+        "type": [
+         "number",
+         "null"
+        ]
+       },
+       "zoning": {
+        "type": [
+         "string",
+         "null"
+        ]
+       }
+      },
+      "required": [
+       "rentcast_id",
+       "address",
+       "location",
+       "property_type",
+       "bedrooms",
+       "bathrooms",
+       "square_footage",
+       "lot_size_sqft",
+       "year_built",
+       "zoning",
+       "hoa_monthly",
+       "last_sale",
+       "tax",
+       "assessment",
+       "owner",
+       "history"
+      ],
+      "type": "object"
+     },
+     "red_flags": {
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "code": {
+         "type": "string"
+        },
+        "detail": {
+         "type": "string"
+        },
+        "severity": {
+         "enum": [
+          "high",
+          "medium",
+          "low"
+         ],
+         "type": "string"
+        }
+       },
+       "required": [
+        "code",
+        "severity",
+        "detail"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "rent_comps": {
+      "description": "rental comps behind the rent estimate",
+      "items": {
+       "additionalProperties": false,
+       "properties": {
+        "address": {
+         "type": "string"
+        },
+        "bathrooms": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "bedrooms": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "correlation": {
+         "description": "RentCast similarity 0..1",
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "days_old": {
+         "description": "days since the comp was last seen on market",
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "distance_miles": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "listing_type": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "price": {
+         "description": "sale price for value comps; monthly rent for rent comps",
+         "type": "number"
+        },
+        "property_type": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "square_footage": {
+         "type": [
+          "number",
+          "null"
+         ]
+        },
+        "status": {
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "year_built": {
+         "type": [
+          "number",
+          "null"
+         ]
+        }
+       },
+       "required": [
+        "address",
+        "price",
+        "bedrooms",
+        "bathrooms",
+        "square_footage",
+        "year_built",
+        "property_type",
+        "distance_miles",
+        "days_old",
+        "correlation",
+        "listing_type",
+        "status"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "rent_estimate": {
+      "additionalProperties": false,
+      "properties": {
+       "monthly_rent": {
+        "type": "number"
+       },
+       "range": {
+        "additionalProperties": false,
+        "properties": {
+         "high": {
+          "type": "number"
+         },
+         "low": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "low",
+         "high"
+        ],
+        "type": "object"
+       }
+      },
+      "required": [
+       "monthly_rent",
+       "range"
+      ],
+      "type": "object"
+     },
+     "strategy": {
+      "description": "rental: buy and rent out (NOI, cap rate, cash-on-cash, DSCR). flip: buy, rehab, resell (70% rule, profit, ROI). hold: rental metrics plus a multi-year exit projection (appreciation, principal paydown, equity multiple).",
+      "enum": [
+       "rental",
+       "flip",
+       "hold"
+      ],
+      "type": "string"
+     },
+     "underwriting": {
+      "additionalProperties": false,
+      "properties": {
+       "cash_invested": {
+        "additionalProperties": false,
+        "properties": {
+         "closing_costs": {
+          "type": "number"
+         },
+         "down_payment": {
+          "type": "number"
+         },
+         "rehab": {
+          "type": "number"
+         },
+         "total": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "down_payment",
+         "closing_costs",
+         "rehab",
+         "total"
+        ],
+        "type": "object"
+       },
+       "expenses": {
+        "additionalProperties": false,
+        "properties": {
+         "capex": {
+          "type": "number"
+         },
+         "hoa": {
+          "type": "number"
+         },
+         "insurance": {
+          "type": "number"
+         },
+         "maintenance": {
+          "type": "number"
+         },
+         "management": {
+          "type": "number"
+         },
+         "property_tax": {
+          "type": "number"
+         },
+         "total_operating": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "property_tax",
+         "insurance",
+         "hoa",
+         "management",
+         "maintenance",
+         "capex",
+         "total_operating"
+        ],
+        "type": "object"
+       },
+       "financing": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "annual_debt_service": {
+            "type": "number"
+           },
+           "loan_amount": {
+            "type": "number"
+           },
+           "ltv": {
+            "type": "number"
+           },
+           "monthly_payment": {
+            "type": "number"
+           }
+          },
+          "required": [
+           "loan_amount",
+           "ltv",
+           "monthly_payment",
+           "annual_debt_service"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ],
+        "description": "null when all cash"
+       },
+       "flip": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "annualized_roi": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "arv": {
+            "type": "number"
+           },
+           "cash_in_deal": {
+            "type": "number"
+           },
+           "holding_costs": {
+            "type": "number"
+           },
+           "max_offer_70_rule": {
+            "type": "number"
+           },
+           "passes_70_rule": {
+            "type": "boolean"
+           },
+           "profit": {
+            "type": "number"
+           },
+           "roi_on_cash": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "selling_costs": {
+            "type": "number"
+           },
+           "total_cost": {
+            "type": "number"
+           }
+          },
+          "required": [
+           "arv",
+           "max_offer_70_rule",
+           "passes_70_rule",
+           "holding_costs",
+           "selling_costs",
+           "total_cost",
+           "profit",
+           "cash_in_deal",
+           "roi_on_cash",
+           "annualized_roi"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "hold": {
+        "anyOf": [
+         {
+          "additionalProperties": false,
+          "properties": {
+           "annualized_return": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "cumulative_cash_flow": {
+            "type": "number"
+           },
+           "equity_at_exit": {
+            "type": "number"
+           },
+           "equity_multiple": {
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "projected_value": {
+            "type": "number"
+           },
+           "remaining_loan_balance": {
+            "type": "number"
+           },
+           "total_profit": {
+            "type": "number"
+           },
+           "years": {
+            "type": "number"
+           }
+          },
+          "required": [
+           "years",
+           "projected_value",
+           "remaining_loan_balance",
+           "equity_at_exit",
+           "cumulative_cash_flow",
+           "total_profit",
+           "equity_multiple",
+           "annualized_return"
+          ],
+          "type": "object"
+         },
+         {
+          "type": "null"
+         }
+        ]
+       },
+       "income": {
+        "additionalProperties": false,
+        "properties": {
+         "effective_gross_income": {
+          "type": "number"
+         },
+         "gross_scheduled_rent": {
+          "type": "number"
+         },
+         "vacancy_loss": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "gross_scheduled_rent",
+         "vacancy_loss",
+         "effective_gross_income"
+        ],
+        "type": "object"
+       },
+       "inputs": {
+        "additionalProperties": false,
+        "properties": {
+         "appreciation_pct": {
+          "type": "number"
+         },
+         "arv": {
+          "type": "number"
+         },
+         "capex_pct": {
+          "type": "number"
+         },
+         "closing_costs_pct": {
+          "type": "number"
+         },
+         "defaults_used": {
+          "items": {
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "down_payment_pct": {
+          "type": "number"
+         },
+         "hoa_monthly": {
+          "type": "number"
+         },
+         "hold_years": {
+          "type": "number"
+         },
+         "holding_months": {
+          "type": "number"
+         },
+         "insurance_annual": {
+          "type": "number"
+         },
+         "interest_rate": {
+          "type": "number"
+         },
+         "loan_term_years": {
+          "type": "number"
+         },
+         "maintenance_pct": {
+          "type": "number"
+         },
+         "management_pct": {
+          "type": "number"
+         },
+         "monthly_rent": {
+          "type": "number"
+         },
+         "property_tax_annual": {
+          "type": "number"
+         },
+         "purchase_price": {
+          "type": "number"
+         },
+         "rehab_budget": {
+          "type": "number"
+         },
+         "rent_growth_pct": {
+          "type": "number"
+         },
+         "selling_costs_pct": {
+          "type": "number"
+         },
+         "vacancy_pct": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "purchase_price",
+         "monthly_rent",
+         "down_payment_pct",
+         "interest_rate",
+         "loan_term_years",
+         "closing_costs_pct",
+         "vacancy_pct",
+         "management_pct",
+         "maintenance_pct",
+         "capex_pct",
+         "insurance_annual",
+         "property_tax_annual",
+         "hoa_monthly",
+         "rehab_budget",
+         "arv",
+         "holding_months",
+         "selling_costs_pct",
+         "appreciation_pct",
+         "rent_growth_pct",
+         "hold_years",
+         "defaults_used"
+        ],
+        "type": "object"
+       },
+       "metrics": {
+        "additionalProperties": false,
+        "properties": {
+         "annual_cash_flow": {
+          "type": "number"
+         },
+         "break_even_occupancy": {
+          "type": "number"
+         },
+         "cap_rate": {
+          "type": "number"
+         },
+         "cash_on_cash": {
+          "description": "null when no cash is invested",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "dscr": {
+          "description": "null when all cash",
+          "type": [
+           "number",
+           "null"
+          ]
+         },
+         "grm": {
+          "type": "number"
+         },
+         "monthly_cash_flow": {
+          "type": "number"
+         },
+         "rent_to_price": {
+          "type": "number"
+         }
+        },
+        "required": [
+         "cap_rate",
+         "cash_on_cash",
+         "dscr",
+         "grm",
+         "rent_to_price",
+         "break_even_occupancy",
+         "annual_cash_flow",
+         "monthly_cash_flow"
+        ],
+        "type": "object"
+       },
+       "noi": {
+        "type": "number"
+       },
+       "red_flags": {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "code": {
+           "type": "string"
+          },
+          "detail": {
+           "type": "string"
+          },
+          "severity": {
+           "enum": [
+            "high",
+            "medium",
+            "low"
+           ],
+           "type": "string"
+          }
+         },
+         "required": [
+          "code",
+          "severity",
+          "detail"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "screen": {
+        "additionalProperties": false,
+        "properties": {
+         "result": {
+          "enum": [
+           "pass",
+           "review",
+           "fail"
+          ],
+          "type": "string"
+         },
+         "rule": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "result",
+         "rule"
+        ],
+        "type": "object"
+       },
+       "strategy": {
+        "description": "rental: buy and rent out (NOI, cap rate, cash-on-cash, DSCR). flip: buy, rehab, resell (70% rule, profit, ROI). hold: rental metrics plus a multi-year exit projection (appreciation, principal paydown, equity multiple).",
+        "enum": [
+         "rental",
+         "flip",
+         "hold"
+        ],
+        "type": "string"
+       }
+      },
+      "required": [
+       "strategy",
+       "inputs",
+       "income",
+       "expenses",
+       "noi",
+       "financing",
+       "cash_invested",
+       "metrics",
+       "flip",
+       "hold",
+       "red_flags",
+       "screen"
+      ],
+      "type": "object"
+     }
+    },
+    "required": [
+     "address",
+     "strategy",
+     "property",
+     "owner",
+     "avm",
+     "rent_estimate",
+     "comps",
+     "rent_comps",
+     "cap_rate",
+     "cash_on_cash",
+     "dscr",
+     "red_flags",
+     "underwriting",
+     "memo",
+     "memo_status"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "liability disclaimer; always present",
+    "type": "string"
+   },
+   "sample": {
+    "description": "true when this is the free example, not a live lookup",
+    "type": "boolean"
+   },
+   "sources": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "cached": {
+       "type": "boolean"
+      },
+      "endpoint": {
+       "type": "string"
+      },
+      "fetched_at": {
+       "type": "string"
+      },
+      "name": {
+       "const": "RentCast",
+       "type": "string"
+      },
+      "url": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "endpoint",
+      "url",
+      "fetched_at",
+      "cached"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "data",
+   "sources",
+   "as_of",
+   "confidence",
+   "notice",
+   "sample"
+  ],
+  "type": "object"
+ },
+ "title": "Deal memo"
+}

@@ -1,0 +1,442 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false,
+  "title": "Edit an animation"
+ },
+ "description": "Change an animation's code: ONE revision, checked and probed in a sandbox. Each direct save returns a contact sheet (preview: false skips; preview: true or {entry, timestamps, filmstrip, ...} looks closer; preview_warnings).\n\nThe server holds the files; keep no local copy. Create with each file's full text once, then edit the saved revision:\n  files: [{path, content}]  new file or rewrite\n  files: [{path, edits: [{old, new, replace_all?}]}]  a change\n  edits: [{op: delete|move, path, to?}]\nOn disk: patch (git diff) \u00b7 {path, patch} \u00b7 {path, upload_id} \u00b7 upload_ids from upload_file.\nA non-matching edit, or code that fails to parse or build, saves nothing (saved: false; retry from the same base_rev). files_changed has sha256s.\n\nBefore writing animation code, read get_design_guide({topic: \"animation\"}); before writing any helper, search the stdlib with get_design_guide({topic: \"stdlib\", query}).\nHard rules: code never reads voiceover words; one cue per story moment, set from word timings, small things timed from it; render is deterministic (no state between frames, randomness only from the seed).\n\nCREATE IN PLACE: animation:'new' (scope, name, slug) + project_id + place: {clip_index} places it on the first passing save and returns element_id; then edit by element_id + project_id (saves update the editor live). More entries: place: {clip_index, entry}, no changes needed.\nWHILE DRAFTING, PASS project_id: passing saves move its uses; without it uses_behind names projects that \"will see an update available\" and the animation.update_uses call. checkpoint: '<note>' keeps a version.\n\nReply: rev, saved, probe, checks, errors, files_changed, element_id, uses_moved, uses_behind, note; detail: 'full' adds hunks and thumbnails. Imports stay pinned (dependency_updates: animation.bump('<animation>', '<alias>')); project-scope importers re-pin (dependents_updated).\n\nRefusals: stale_base, target_required ('shared'|'fork'), check_failed. Settings, actions, cues: update_elements({updates:[{element_id, cues:[{op:'set', key, t}]}]}).",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "properties": {
+   "animation": {
+    "description": "The animation to edit when there is no element: @org/<slug> or an id. 'new' creates one (then pass scope, name and slug).",
+    "minLength": 1,
+    "type": "string"
+   },
+   "base_rev": {
+    "description": "The revision you read and expect to edit from. If it has moved, the save is refused with stale_base, the current revision and the files changed since.",
+    "maximum": 9007199254740991,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "checkpoint": {
+    "description": "A one-line note that saves this revision, when it passes, as a version in the element's history in the editor (the user can preview and restore it there). Set it when you reach a state worth returning to, not on every draft.",
+    "maxLength": 200,
+    "minLength": 1,
+    "type": "string"
+   },
+   "detail": {
+    "description": "summary (default) returns the outcome and what changed; full adds the diff hunks and every probe thumbnail.",
+    "enum": [
+     "summary",
+     "full"
+    ],
+    "type": "string"
+   },
+   "dry_run": {
+    "description": "Build and check the edits without saving. Returns a `preview` token; render it with get_clip(render: {preview}).",
+    "type": "boolean"
+   },
+   "edits": {
+    "description": "Operations, applied in order before `files`: delete and move (replace and write also work; files is the shorter way).",
+    "items": {
+     "properties": {
+      "all": {
+       "description": "replace: replace every occurrence instead of requiring one.",
+       "type": "boolean"
+      },
+      "content": {
+       "description": "write: the whole file.",
+       "type": "string"
+      },
+      "new": {
+       "description": "replace: the text to put in its place.",
+       "type": "string"
+      },
+      "old": {
+       "description": "replace: the exact text to find, copied from read_animation.",
+       "type": "string"
+      },
+      "op": {
+       "description": "replace: exact-match `old` \u2192 `new` in `path` (fails unless `old` occurs exactly once, or pass all: true). write: create or overwrite `path` with `content`. delete: remove `path`. move: rename `path` to `to`.",
+       "enum": [
+        "replace",
+        "write",
+        "delete",
+        "move"
+       ],
+       "type": "string"
+      },
+      "path": {
+       "description": "File path inside the animation, e.g. 'entries/maya.js'.",
+       "minLength": 1,
+       "type": "string"
+      },
+      "to": {
+       "description": "move: the new path.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "op",
+      "path"
+     ],
+     "type": "object"
+    },
+    "maxItems": 100,
+    "minItems": 1,
+    "type": "array"
+   },
+   "element_id": {
+    "description": "The animation element this edit is about. The edit starts from the revision that element shows, and every use in this project moves to the new revision when it passes.",
+    "type": "string"
+   },
+   "files": {
+    "description": "Per-file changes, each with exactly one of edits, content, patch or upload_id. Applied in order after `edits` and `patch`, all saved as ONE revision.",
+    "items": {
+     "properties": {
+      "content": {
+       "description": "The whole file: a new file, or a full rewrite.",
+       "type": "string"
+      },
+      "edits": {
+       "description": "Search-and-replace edits for an existing file, applied in order (each sees the text the one before left). Prefer these over content for changes to existing files.",
+       "items": {
+        "properties": {
+         "new": {
+          "description": "The text to put in its place.",
+          "type": "string"
+         },
+         "old": {
+          "description": "The exact text to find, copied from read_animation without the 'N| ' line numbers. Must occur exactly once unless replace_all.",
+          "minLength": 1,
+          "type": "string"
+         },
+         "replace_all": {
+          "description": "Replace every occurrence instead of requiring exactly one.",
+          "type": "boolean"
+         }
+        },
+        "required": [
+         "old",
+         "new"
+        ],
+        "type": "object"
+       },
+       "maxItems": 100,
+       "minItems": 1,
+       "type": "array"
+      },
+      "patch": {
+       "description": "A unified diff of this one file ('@@ -a,b +c,d @@' hunks). Context and removed lines must match exactly; a hunk may sit at other line numbers.",
+       "type": "string"
+      },
+      "path": {
+       "description": "File path inside the animation, e.g. 'entries/maya.js'.",
+       "minLength": 1,
+       "type": "string"
+      },
+      "upload_id": {
+       "description": "The mcp_upload_id (mup_\u2026) of a text file sent with upload_file (file_name + its curl), used as the whole content, so a big file never goes inline. UTF-8 text, at most 256 KB.",
+       "pattern": "^mup_",
+       "type": "string"
+      }
+     },
+     "required": [
+      "path"
+     ],
+     "type": "object"
+    },
+    "maxItems": 100,
+    "minItems": 1,
+    "type": "array"
+   },
+   "folder": {
+    "description": "Only with animation 'new' and scope 'library' (a save the user asked to keep for the workspace): the library folder, by path, e.g. 'Characters' or 'Characters/Presenters'. Missing folders are created (at most three levels).",
+    "type": "string"
+   },
+   "name": {
+    "description": "Only with animation 'new': the display name.",
+    "type": "string"
+   },
+   "patch": {
+    "description": "For a client working from files on disk: a unified diff of any number of files against the saved revision (`git diff`, `diff -u` or `diff -ruN`), run from the folder holding manifest.json. The server holds the base. New files (--- /dev/null), deletes and renames apply too. A hunk whose context no longer matches is refused with the saved lines around it; nothing is saved.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "place": {
+    "additionalProperties": false,
+    "description": "Put the animation on the canvas on the first passing save, as an animation element on this clip (the add_elements placement), and return its element_id: pass that on every later edit so each passing save updates the editor live. Needs project_id. Placing is per entry and clip: an entry already on that clip is not placed again (its element_id comes back); any other entry, or the same entry on another clip, is, and existing elements keep their own entries. Works for an existing animation too (animation: '@org/<slug>', or element_id + place.entry for another entry of the element's animation), and with no file changes at all it only places the latest revision. A failing save places nothing.",
+    "properties": {
+     "clip_index": {
+      "description": "Zero-based clip the animation belongs to. With continue_from: the clip it continues into (default the next).",
+      "maximum": 9007199254740991,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "continue_from": {
+      "description": "An animation element on an earlier clip that this one carries on from across the cut: placed in its box. The same animation, or a fork of it, picks up at the second it reached (timing 'trim'); any other starts at its own 0 with its own settings.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "end_time": {
+      "description": "Seconds from the clip's start (default: the clip's end).",
+      "exclusiveMinimum": 0,
+      "type": "number"
+     },
+     "entry": {
+      "description": "Which entry to place (default: the only one, else 'main', else the first). Any entry not yet on that clip is placed, also of an animation already on the canvas.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "height": {
+      "description": "Box height, canvas pixels (default: the full canvas).",
+      "exclusiveMinimum": 0,
+      "type": "number"
+     },
+     "name": {
+      "description": "The element's label.",
+      "minLength": 1,
+      "type": "string"
+     },
+     "start_time": {
+      "description": "Seconds from the clip's start (default 0).",
+      "minimum": 0,
+      "type": "number"
+     },
+     "width": {
+      "description": "Box width, canvas pixels (default: the full canvas).",
+      "exclusiveMinimum": 0,
+      "type": "number"
+     },
+     "x": {
+      "description": "Left edge, canvas pixels (default: centred).",
+      "type": "number"
+     },
+     "y": {
+      "description": "Top edge, canvas pixels (default: centred).",
+      "type": "number"
+     }
+    },
+    "type": "object"
+   },
+   "preview": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "additionalProperties": false,
+      "properties": {
+       "actions": {
+        "description": "Action clips to try, [{name, start, duration?, args?}], element-local seconds; duration defaults to the action's default_duration. Replaces the element's clips for this render.",
+        "items": {
+         "properties": {
+          "args": {
+           "additionalProperties": {},
+           "propertyNames": {
+            "type": "string"
+           },
+           "type": "object"
+          },
+          "duration": {
+           "type": "number"
+          },
+          "name": {
+           "minLength": 1,
+           "type": "string"
+          },
+          "start": {
+           "type": "number"
+          }
+         },
+         "required": [
+          "name",
+          "start"
+         ],
+         "type": "object"
+        },
+        "type": "array"
+       },
+       "cues": {
+        "additionalProperties": {
+         "type": "number"
+        },
+        "description": "Cue times to try, key: seconds (element-local).",
+        "propertyNames": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       "duration": {
+        "description": "How long the entry plays in the preview, in seconds.",
+        "exclusiveMinimum": 0,
+        "type": "number"
+       },
+       "entry": {
+        "description": "Which entry to show (default: the element's, or the animation's first).",
+        "minLength": 1,
+        "type": "string"
+       },
+       "filmstrip": {
+        "anyOf": [
+         {
+          "const": true,
+          "type": "boolean"
+         },
+         {
+          "additionalProperties": false,
+          "properties": {
+           "around": {
+            "description": "Center the window on a cue ('cue:land') or an action clip ('action:hop', by name or id) instead of from/to. On a whole clip, a cue several animations share is 'cue:land@<element name>'.",
+            "pattern": "^(cue|action):.+",
+            "type": "string"
+           },
+           "fps": {
+            "description": "Frames per second instead of a count, e.g. 8 over 2 s is 17, capped at 16.",
+            "exclusiveMinimum": 0,
+            "maximum": 60,
+            "type": "number"
+           },
+           "frames": {
+            "description": "How many frames across the window, first and last included (default 12, max 16).",
+            "maximum": 16,
+            "minimum": 2,
+            "type": "integer"
+           },
+           "from": {
+            "description": "Window start, element-local seconds, or clip seconds for a whole clip (default 0).",
+            "minimum": 0,
+            "type": "number"
+           },
+           "seam": {
+            "const": true,
+            "description": "get_clip of a whole clip only: the cut from this clip into the next, as the player shows it: this clip's last second, its transition, and the next clip's first second, in this clip's seconds; takes frames, no window. Every cut of the film at once: get_project({render: {seams: true}}).",
+            "type": "boolean"
+           },
+           "span": {
+            "description": "With around: the window's length in seconds (default 2 around a cue; the clip plus 0.5 around an action).",
+            "exclusiveMinimum": 0,
+            "type": "number"
+           },
+           "to": {
+            "description": "Window end, element-local seconds, or clip seconds for a whole clip (default the end).",
+            "exclusiveMinimum": 0,
+            "type": "number"
+           }
+          },
+          "type": "object"
+         }
+        ],
+        "description": "See motion in ONE image instead of four moments: frames spaced evenly across a window (default 12 over the whole animation), in reading order, each labelled with its element-local time, with a thin timeline under each row marking the frames, cues (lines) and action clips (bars). Read pacing, easing and whether a beat lands on its cue from it. true for the defaults, or {from, to} / {around: 'cue:<key>' | 'action:<name>', span}, with frames or fps. Replaces timestamps. On get_clip without element_id, animation or preview it shows the whole clip, every element drawn, in clip seconds, and the timeline also ticks each element's start and end."
+       },
+       "param_tracks": {
+        "additionalProperties": {
+         "items": {
+          "properties": {
+           "interpolation": {
+            "type": "string"
+           },
+           "t": {
+            "type": "number"
+           },
+           "value": {}
+          },
+          "required": [
+           "t",
+           "value"
+          ],
+          "type": "object"
+         },
+         "minItems": 1,
+         "type": "array"
+        },
+        "description": "Keyframed settings to try, key: [{t, value, interpolation?}], t in element-local seconds. Replaces that key's track for this render.",
+        "propertyNames": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       "parameter_values": {
+        "additionalProperties": {},
+        "description": "Settings to render with, merged over the element's own (key: value).",
+        "propertyNames": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       "timestamps": {
+        "anyOf": [
+         {
+          "minimum": 0,
+          "type": "number"
+         },
+         {
+          "items": {
+           "minimum": 0,
+           "type": "number"
+          },
+          "maxItems": 12,
+          "minItems": 1,
+          "type": "array"
+         }
+        ],
+        "description": "Moments to show, element-local seconds (default four across its length)."
+       },
+       "video": {
+        "description": "For people: also a short low-resolution MP4 of the same window (the filmstrip's, or the animation's first 10 s), returned as video_url, a link valid for an hour. You can't watch it: judge motion from the filmstrip.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     }
+    ],
+    "description": "Every direct save already returns a small contact sheet (four moments). false skips it; true or an object asks for a larger one with your choice of entry, moments, a filmstrip and test settings (parameter_values, where an image setting may be an upload id or a URL; param_tracks, actions, cues). With a project it shows a placed use of the entry with that element's own settings; with dry_run the unsaved code; without project_id a plain background. Nothing about the preview is saved."
+   },
+   "project_id": {
+    "description": "Project the element is in. Needed with element_id.",
+    "type": "string"
+   },
+   "scope": {
+    "description": "Only with animation 'new': one element, this project (the default with project_id; every scene of the video can import it), or the workspace library, only when the user asks to reuse it in other videos.",
+    "enum": [
+     "element",
+     "project",
+     "library"
+    ],
+    "type": "string"
+   },
+   "slug": {
+    "description": "Only with animation 'new': lowercase letters, digits and dashes; becomes @org/<slug>. Slugs are workspace-wide: one an animation of another project (or the library) holds is saved as the next free <slug>-N (the reply's animation and note say which, nothing to resend); one this project already holds is refused, naming it and a free slug.",
+    "type": "string"
+   },
+   "target": {
+    "description": "Required when the animation is used outside this project: 'shared' changes it for everyone who updates, 'fork' copies it for this project first. Official and community animations always fork.",
+    "enum": [
+     "shared",
+     "fork"
+    ],
+    "type": "string"
+   },
+   "update_dependents": {
+    "description": "After a passing save, re-pin every animation that imports this one (a kit's scenes) to the new revision in the same call and move this project's uses of them; dependents_updated {report, project_uses_moved, note} says what moved. Left out: on for a project-scoped animation saved with project_id, off otherwise (a library animation's importers span the workspace: pass true).",
+    "type": "boolean"
+   },
+   "upload_ids": {
+    "description": "Whole files sent with upload_file(file_names: [...]) and its one curl: each upload's file name is its path in the animation (e.g. 'entries/city.js'), and its text replaces or adds that file. Applied after files.",
+    "items": {
+     "pattern": "^mup_",
+     "type": "string"
+    },
+    "maxItems": 100,
+    "minItems": 1,
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "name": "edit_animation",
+ "title": "Edit an animation"
+}

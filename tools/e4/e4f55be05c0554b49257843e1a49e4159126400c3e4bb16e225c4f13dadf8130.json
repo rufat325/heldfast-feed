@@ -1,0 +1,193 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Fetch property claims for a Wikidata entity with qualifier and reference detail. Item QIDs and quantity units \u2014 in values, qualifiers, and references \u2014 are resolved to human-readable labels by default. Use the properties parameter to fetch only specific P-IDs \u2014 omitting it returns every statement, and a well-connected item (a country, a major city) carries hundreds of properties: more than fits inline. A set over 24,000 bytes before labels comes back as kind: \"outline\" \u2014 every available P-ID with its byte size, largest first \u2014 instead of the statements; re-call with the same id plus properties:[...] naming P-IDs whose sizes sum to 24,000 or less (the retrieval_notice names one such set). Labels are added after that check, so a returned set can run past 24,000 bytes by their size, and a property requested alone is always returned whole \u2014 on a major item one property can run to hundreds of kilobytes. Designed for fact verification: \"what does Wikidata say about this entity's {property}?\". Preferred-rank statements are the most current values.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "id": {
+    "description": "Q-ID (e.g., \"Q76\") or P-ID of the entity to fetch statements for.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "language": {
+    "default": "en",
+    "description": "Wikidata language code for label resolution of QID values (e.g., \"en\", \"de\"). Case-insensitive; \"_\" is read as \"-\"; blank means \"en\".",
+    "pattern": "^\\s*(?:[A-Za-z]{2,8}(?:[-_][A-Za-z0-9]{1,9})*\\s*)?$",
+    "type": "string"
+   },
+   "properties": {
+    "description": "P-IDs to fetch (e.g., [\"P31\", \"P569\", \"P27\"]). Omit to return all properties (may be large for major items).",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "resolve_labels": {
+    "default": true,
+    "description": "Resolve item QIDs (label) and quantity unit QIDs (unitLabel) to human-readable labels via one batched label call, covering main values, qualifiers, and reference parts. Set to false to skip label resolution and return raw QIDs only (faster, smaller payload).",
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "id"
+  ],
+  "type": "object"
+ },
+ "name": "wikidata_get_statements",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "id",
+     "kind",
+     "propertyCount",
+     "statementCount",
+     "labelsResolved"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `entity_not_found`: No entity exists at this ID \u2014 either unassigned or out of range. `invalid_id`: ID is not a valid Q-ID or P-ID format. `invalid_property`: A properties entry is not a valid P-ID format. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "entity_not_found",
+         "invalid_id",
+         "invalid_property"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "id": {
+    "description": "The entity ID whose statements were fetched.",
+    "type": "string"
+   },
+   "kind": {
+    "description": "full \u2014 statements carries the claims. outline \u2014 the statement set overflowed the inline byte budget, so sections lists the P-IDs available instead; re-call with properties:[...] to retrieve specific ones. The counts below are reported either way.",
+    "enum": [
+     "full",
+     "outline"
+    ],
+    "type": "string"
+   },
+   "labelsResolved": {
+    "description": "True when the returned statements had labels resolved: resolve_labels was true and kind is full, so every item QID and quantity unit that resolved carries its label. False when resolve_labels was false, and on an outline, which carries no statements and makes no label lookup.",
+    "type": "boolean"
+   },
+   "propertyCount": {
+    "description": "Number of distinct properties \u2014 those returned in full mode, those offered as sections in outline mode.",
+    "type": "number"
+   },
+   "retrieval_notice": {
+    "description": "Present when kind = outline: how to re-call for specific properties.",
+    "type": "string"
+   },
+   "sections": {
+    "description": "Present when kind = outline: the P-IDs this entity carries statements for, largest first, each sized as the UTF-8 bytes it adds to a response before labels. Sizes add up: copy names whose sizes sum to 24,000 or less into the properties input to retrieve them.",
+    "items": {
+     "additionalProperties": false,
+     "description": "An available property \u2014 its P-ID and the serialized byte size of its statements.",
+     "properties": {
+      "bytes": {
+       "description": "Serialized byte size of the section",
+       "maximum": 9007199254740991,
+       "minimum": 0,
+       "type": "integer"
+      },
+      "name": {
+       "description": "Section identifier \u2014 pass in `sections` to retrieve it",
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "bytes"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "statementCount": {
+    "description": "Total number of statement objects across all properties. Counted before any overflow, so it reports the entity's full statement volume in both modes.",
+    "type": "number"
+   },
+   "statements": {
+    "additionalProperties": {
+     "items": {
+      "additionalProperties": {},
+      "properties": {},
+      "type": "object"
+     },
+     "type": "array"
+    },
+    "description": "Map of property ID to array of normalized statements. Each statement has id, rank, property, value (with type-specific fields), optional qualifiers ([{ property, value }]), and optional references \u2014 one entry per source in upstream order, each { parts: [{ property, value }] }. Present in full mode; omitted in outline mode.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Get Wikidata Statements"
+}

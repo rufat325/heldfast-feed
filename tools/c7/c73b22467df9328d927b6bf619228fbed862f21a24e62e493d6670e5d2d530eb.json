@@ -1,0 +1,491 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Search the Livonian dictionary"
+ },
+ "description": "Look a word up in the real Livonian\u2013Estonian\u2013Latvian dictionary and return only\nattested content, so translations are grounded, not invented.\n\nSearch a meaning (in English/Latvian/Estonian) to find the Livonian headword, or a\nLivonian word to confirm it exists and read its sense, part of speech and examples.\nSee the `query` and `search_language` parameter docs for how to phrase a query. By\ndefault each match's full inflection table is returned inline, so one call usually\nsuffices; on a broad query only the first N tables expand (the rest are listed as\nhandles to fetch with livonian_get_inflections). Returns Markdown plus the same result as\nstructuredContent matching the declared outputSchema.\n\nResults are cached server-side, so repeating a query is instant and free; a\nfirst-time query reaches the live dictionary and calls are rate limited \u2014 on a\nrate-limit error, wait a few seconds and retry instead of re-issuing immediately.\nDictionary content is from livonian.tech (CC BY-SA 4.0 \u2014 attribute if republished).\n",
+ "inputSchema": {
+  "$defs": {
+   "SearchLanguage": {
+    "description": "Which language the query word is matched against. Headwords come back in\nLivonian and glosses in English either way; this only selects the language the\nquery term is in. Codes are the site's own.",
+    "enum": [
+     "liv",
+     "lat",
+     "est",
+     "eng"
+    ],
+    "title": "SearchLanguage",
+    "type": "string"
+   }
+  },
+  "properties": {
+   "include_forms": {
+    "default": true,
+    "description": "When true (default), each match's full inflection table is returned INLINE \u2014 usable cases/tenses in ONE call, no follow-up livonian_get_inflections. Set false to get just the headword handles + glosses: a cheap way to SCREEN several candidate words or synonyms (which exist? which sense?) before spending forms on the one you pick. Bounded by a per-search cap \u2014 use max_forms to raise or lower it for this call.",
+    "title": "Include Forms",
+    "type": "boolean"
+   },
+   "max_forms": {
+    "anyOf": [
+     {
+      "maximum": 12,
+      "minimum": 0,
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Optional override for how many inflection tables to expand this call (0\u201312). Raise it to pull more tables in ONE call on a broad query, or set a small value to keep a broad query cheap. On an uncached query each table is fetched sequentially with polite pacing toward the upstream, so a high value on a cold broad query is slow \u2014 the bound limits upstream fan-out, not just response size. Omit to use the server's default cap.",
+    "title": "Max Forms"
+   },
+   "query": {
+    "description": "A SINGLE content word, not a phrase. Exactly one word per call \u2014 even with several candidates or synonyms in mind, search them one at a time ('see', then 'look'), never combined into one query like 'see look'. Drop function words and infinitive markers \u2014 search 'to water' as 'water', 'the sea' as 'sea'. The dictionary matches one attested headword, so a multi-word query often returns nothing even when the word exists; search the main word first, then refine. May be Livonian, Latvian, Estonian, or English (e.g. 'jar\u0101', 'away', 'sea'). Matching is bidirectional. An inflected Livonian form (search_language='liv') is resolved to its dictionary lemma automatically when the form is known \u2014 the result says so when that happened.",
+    "maxLength": 120,
+    "minLength": 1,
+    "title": "Query",
+    "type": "string"
+   },
+   "search_language": {
+    "$ref": "#/$defs/SearchLanguage",
+    "default": "eng",
+    "description": "Language your query word is in \u2014 selects which language the search matches against: 'eng' (default), 'liv', 'lat', or 'est'. For English\u2192Livonian translation, keep 'eng'. Glosses are in English."
+   }
+  },
+  "required": [
+   "query"
+  ],
+  "title": "livonian_searchArguments",
+  "type": "object"
+ },
+ "name": "livonian_search",
+ "outputSchema": {
+  "$defs": {
+   "Entry": {
+    "description": "One dictionary entry (one upstream result card): the headword with its\npronunciation, part of speech, paradigm anchors, and senses.\n\n``entry_id`` + ``word_class`` are the same anchors carried by an\n:class:`InflectionHandle` \u2014 feed them to ``livonian_get_inflections`` for the full paradigm.\nEvery field except ``headword``/``gloss`` defaults, so a card missing a\npronunciation, type code, or senses still validates.",
+    "properties": {
+     "entry_id": {
+      "default": "",
+      "description": "Numeric word id for the forms endpoint.",
+      "title": "Entry Id",
+      "type": "string"
+     },
+     "headword": {
+      "title": "Headword",
+      "type": "string"
+     },
+     "part_of_speech": {
+      "default": "",
+      "description": "e.g. 'noun', 'verb', 'adjective'.",
+      "title": "Part Of Speech",
+      "type": "string"
+     },
+     "pronunciation": {
+      "default": "",
+      "description": "Phonetic form in braces, e.g. {\u00e4m}.",
+      "title": "Pronunciation",
+      "type": "string"
+     },
+     "senses": {
+      "items": {
+       "$ref": "#/$defs/Sense"
+      },
+      "title": "Senses",
+      "type": "array"
+     },
+     "type_code": {
+      "default": "",
+      "description": "Paradigm type code, e.g. '99', '53a'.",
+      "title": "Type Code",
+      "type": "string"
+     },
+     "word_class": {
+      "default": "",
+      "description": "Word-class code, e.g. 's', 'vt', 'adj'.",
+      "title": "Word Class",
+      "type": "string"
+     }
+    },
+    "required": [
+     "headword"
+    ],
+    "title": "Entry",
+    "type": "object"
+   },
+   "Example": {
+    "description": "One usage example for a sense: the Livonian sentence and its English translation.\n``english`` is empty when the upstream entry gives the Livonian without a gloss.",
+    "properties": {
+     "english": {
+      "default": "",
+      "title": "English",
+      "type": "string"
+     },
+     "livonian": {
+      "title": "Livonian",
+      "type": "string"
+     }
+    },
+    "required": [
+     "livonian"
+    ],
+    "title": "Example",
+    "type": "object"
+   },
+   "InflectionHandle": {
+    "description": "A reliable, structured anchor for fetching a full paradigm. Feed\n``entry_id`` + ``word_class`` to ``livonian_get_inflections`` \u2014 or ask ``search`` to\ninclude the table inline (``forms``).",
+    "properties": {
+     "context": {
+      "default": "",
+      "description": "Nearby headword / entry text.",
+      "title": "Context",
+      "type": "string"
+     },
+     "entry_id": {
+      "description": "Numeric word id used by the forms endpoint.",
+      "title": "Entry Id",
+      "type": "string"
+     },
+     "forms": {
+      "anyOf": [
+       {
+        "discriminator": {
+         "mapping": {
+          "nominal": "#/$defs/NominalParadigm",
+          "not_found": "#/$defs/ParadigmNotFound",
+          "verbal": "#/$defs/VerbalParadigm"
+         },
+         "propertyName": "category"
+        },
+        "oneOf": [
+         {
+          "$ref": "#/$defs/NominalParadigm"
+         },
+         {
+          "$ref": "#/$defs/VerbalParadigm"
+         },
+         {
+          "$ref": "#/$defs/ParadigmNotFound"
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "The full inflection paradigm, populated when a search is asked to include forms. None when not requested or beyond the cap; category 'none' when the word has no paradigm.",
+      "title": "Forms"
+     },
+     "pos_hint": {
+      "default": "",
+      "description": "Part-of-speech hint near the link.",
+      "title": "Pos Hint",
+      "type": "string"
+     },
+     "word_class": {
+      "description": "Word-class code, e.g. 's', 'vi', 'vt', 'adj'.",
+      "title": "Word Class",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entry_id",
+     "word_class"
+    ],
+    "title": "InflectionHandle",
+    "type": "object"
+   },
+   "NominalParadigm": {
+    "description": "Declension of a noun/adjective/numeral/pronoun: case \u2192 {singular, plural}.\n\n``category`` discriminates this from the verbal and not-found shapes \u2014 switch on it\nbefore reading the body.",
+    "properties": {
+     "cases": {
+      "additionalProperties": {
+       "$ref": "#/$defs/NumberForms"
+      },
+      "description": "Case name (English, lower-case) \u2192 its singular/plural forms, in paradigm order, e.g. 'nominative', 'genitive', 'partitive'.",
+      "title": "Cases",
+      "type": "object"
+     },
+     "category": {
+      "const": "nominal",
+      "default": "nominal",
+      "title": "Category",
+      "type": "string"
+     },
+     "entry_id": {
+      "title": "Entry Id",
+      "type": "string"
+     },
+     "found": {
+      "const": true,
+      "default": true,
+      "title": "Found",
+      "type": "boolean"
+     },
+     "source": {
+      "default": "Ern\u0161treits, Valts (ed. in chief), Viitso, Tiit-Rein, Kurpniece, Milda & V\u0101vere, Signis. 2024. Livonian morphology database. Riga: University of Latvia Livonian Institute. https://livonian.tech/ (CC BY-SA 4.0: https://creativecommons.org/licenses/by-sa/4.0/) Adapted: reformatted and condensed from the original.",
+      "title": "Source",
+      "type": "string"
+     },
+     "word_class": {
+      "title": "Word Class",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entry_id",
+     "word_class",
+     "cases"
+    ],
+    "title": "NominalParadigm",
+    "type": "object"
+   },
+   "NumberForms": {
+    "description": "A nominal cell: the two number forms of one case. Livonian forms are verbatim.",
+    "properties": {
+     "plural": {
+      "title": "Plural",
+      "type": "string"
+     },
+     "singular": {
+      "title": "Singular",
+      "type": "string"
+     }
+    },
+    "required": [
+     "singular",
+     "plural"
+    ],
+    "title": "NumberForms",
+    "type": "object"
+   },
+   "ParadigmNotFound": {
+    "description": "No paradigm for this entry_id/word_class (the morphology DB has none, or the\nhandle was wrong). ``found`` is False and there is no table body.",
+    "properties": {
+     "category": {
+      "const": "not_found",
+      "default": "not_found",
+      "title": "Category",
+      "type": "string"
+     },
+     "entry_id": {
+      "title": "Entry Id",
+      "type": "string"
+     },
+     "found": {
+      "const": false,
+      "default": false,
+      "title": "Found",
+      "type": "boolean"
+     },
+     "source": {
+      "default": "Ern\u0161treits, Valts (ed. in chief), Viitso, Tiit-Rein, Kurpniece, Milda & V\u0101vere, Signis. 2024. Livonian morphology database. Riga: University of Latvia Livonian Institute. https://livonian.tech/ (CC BY-SA 4.0: https://creativecommons.org/licenses/by-sa/4.0/) Adapted: reformatted and condensed from the original.",
+      "title": "Source",
+      "type": "string"
+     },
+     "word_class": {
+      "title": "Word Class",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entry_id",
+     "word_class"
+    ],
+    "title": "ParadigmNotFound",
+    "type": "object"
+   },
+   "Polarity": {
+    "description": "A verbal cell: the two polarities of one person in one mood/tense. ``negative``\nis the ready-to-use form \u2014 the negation auxiliary (\u00e4b/\u00e4d/iz/alg\u00f5\u2026) is already folded\nin (e.g. ``\u00e4b toup``), not orphaned in a separate column. Livonian forms are verbatim.",
+    "properties": {
+     "affirmative": {
+      "title": "Affirmative",
+      "type": "string"
+     },
+     "negative": {
+      "title": "Negative",
+      "type": "string"
+     }
+    },
+    "required": [
+     "affirmative",
+     "negative"
+    ],
+    "title": "Polarity",
+    "type": "object"
+   },
+   "SearchLanguage": {
+    "description": "Which language the query word is matched against. Headwords come back in\nLivonian and glosses in English either way; this only selects the language the\nquery term is in. Codes are the site's own.",
+    "enum": [
+     "liv",
+     "lat",
+     "est",
+     "eng"
+    ],
+    "title": "SearchLanguage",
+    "type": "string"
+   },
+   "Sense": {
+    "description": "One sense of a headword: its gloss and any usage examples. ``label`` is the\nupstream sense marker (``a)``, ``b)``) and is empty for a single, unlabelled sense.",
+    "properties": {
+     "examples": {
+      "items": {
+       "$ref": "#/$defs/Example"
+      },
+      "title": "Examples",
+      "type": "array"
+     },
+     "gloss": {
+      "title": "Gloss",
+      "type": "string"
+     },
+     "label": {
+      "default": "",
+      "title": "Label",
+      "type": "string"
+     }
+    },
+    "required": [
+     "gloss"
+    ],
+    "title": "Sense",
+    "type": "object"
+   },
+   "VerbalParadigm": {
+    "description": "Conjugation of a verb, grouped the way the grammar is: finite moods/tenses by\nperson and polarity, plus the non-finite forms.\n\n``category`` discriminates this from the nominal and not-found shapes.",
+    "properties": {
+     "category": {
+      "const": "verbal",
+      "default": "verbal",
+      "title": "Category",
+      "type": "string"
+     },
+     "entry_id": {
+      "title": "Entry Id",
+      "type": "string"
+     },
+     "finite": {
+      "additionalProperties": {
+       "additionalProperties": {
+        "$ref": "#/$defs/Polarity"
+       },
+       "type": "object"
+      },
+      "description": "Mood/tense (English, lower-case: 'present', 'past', 'conditional', \u2026) \u2192 pronoun (Livonian, verbatim: ma/sa/ta/m\u0113g/t\u0113g/ne) \u2192 {affirmative, negative}. The negative already includes its auxiliary.",
+      "title": "Finite",
+      "type": "object"
+     },
+     "found": {
+      "const": true,
+      "default": true,
+      "title": "Found",
+      "type": "boolean"
+     },
+     "nonfinite": {
+      "additionalProperties": {
+       "additionalProperties": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "description": "Non-finite section (English, lower-case: 'principal parts', 'participles') \u2192 form label (English) \u2192 the Livonian form.",
+      "title": "Nonfinite",
+      "type": "object"
+     },
+     "source": {
+      "default": "Ern\u0161treits, Valts (ed. in chief), Viitso, Tiit-Rein, Kurpniece, Milda & V\u0101vere, Signis. 2024. Livonian morphology database. Riga: University of Latvia Livonian Institute. https://livonian.tech/ (CC BY-SA 4.0: https://creativecommons.org/licenses/by-sa/4.0/) Adapted: reformatted and condensed from the original.",
+      "title": "Source",
+      "type": "string"
+     },
+     "word_class": {
+      "title": "Word Class",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entry_id",
+     "word_class",
+     "finite",
+     "nonfinite"
+    ],
+    "title": "VerbalParadigm",
+    "type": "object"
+   }
+  },
+  "description": "The result of a dictionary search.",
+  "properties": {
+   "entries": {
+    "description": "Structured dictionary entries: headword, pronunciation, part of speech, paradigm anchors, and senses with example sentences.",
+    "items": {
+     "$ref": "#/$defs/Entry"
+    },
+    "title": "Entries",
+    "type": "array"
+   },
+   "forms_truncated": {
+    "default": 0,
+    "description": "How many handles did NOT get an inline table because the per-search cap was reached. Refine the query or call livonian_get_inflections.",
+    "title": "Forms Truncated",
+    "type": "integer"
+   },
+   "found": {
+    "description": "False when nothing matched.",
+    "title": "Found",
+    "type": "boolean"
+   },
+   "handles": {
+    "items": {
+     "$ref": "#/$defs/InflectionHandle"
+    },
+    "title": "Handles",
+    "type": "array"
+   },
+   "language": {
+    "$ref": "#/$defs/SearchLanguage"
+   },
+   "query": {
+    "title": "Query",
+    "type": "string"
+   },
+   "resolved_from": {
+    "default": "",
+    "description": "The original inflected query when search_method='lemma_index'; empty on a direct match.",
+    "title": "Resolved From",
+    "type": "string"
+   },
+   "resolved_lemma": {
+    "default": "",
+    "description": "The dictionary lemma actually searched when search_method='lemma_index'; empty on a direct match.",
+    "title": "Resolved Lemma",
+    "type": "string"
+   },
+   "search_method": {
+    "default": "direct",
+    "description": "How the match was found: 'direct' = the query itself matched; 'lemma_index' = the query was an inflected Livonian form, resolved to its dictionary lemma via the cached paradigm index and re-searched.",
+    "enum": [
+     "direct",
+     "lemma_index"
+    ],
+    "title": "Search Method",
+    "type": "string"
+   },
+   "source": {
+    "default": "Ern\u0161treits, Valts (ed. in chief), Viitso, Tiit-Rein, V\u0101vere, Signis, Damberg, P\u0113t\u00f5r, Kurpniece, Milda, Balodis, Uldis, Tuisk, Tuuli, K\u016bla, Gita, Tomingas, Marili, Soosaar Sven-Erik, Sedl\u00e1\u010dkov\u00e1, Anna & Jurgenovskis, Toms. 2024. Livonian lexicographic database. Riga: University of Latvia Livonian Institute. https://livonian.tech/ (CC BY-SA 4.0: https://creativecommons.org/licenses/by-sa/4.0/) Adapted: reformatted and condensed from the original.",
+    "title": "Source",
+    "type": "string"
+   }
+  },
+  "required": [
+   "query",
+   "language",
+   "found"
+  ],
+  "title": "SearchResult",
+  "type": "object"
+ },
+ "title": "Search the Livonian dictionary"
+}

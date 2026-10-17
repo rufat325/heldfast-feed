@@ -1,0 +1,958 @@
+{
+ "_meta": {
+  "fastmcp": {
+   "tags": []
+  },
+  "openai/outputTemplate": "ui://widget/bus-search-v24.html",
+  "openai/toolInvocation/invoked": "Found buses on Paytm.",
+  "openai/toolInvocation/invoking": "Searching Paytm for buses\u2026",
+  "openai/widgetAccessible": true,
+  "ui": {
+   "prefersBorder": false,
+   "resourceUri": "ui://widget/bus-search-v24.html"
+  }
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Search buses"
+ },
+ "description": "Searches live Paytm bus routes and shows an interactive results card (operator, bus type, timings, rating, seats left, price). One-way, domestic, search only -- no seat selection or booking happens in chat. REQUIRED ARGS (same posture as search_flights): source, destination, and date are ALL mandatory. source/destination are free-text city names (e.g. 'Bengaluru', 'Hyderabad'); date is YYYY-MM-DD. There is no default date. The search runs for a date the traveller gave; a relative date they actually said ('tomorrow', 'next Friday') resolves to YYYY-MM-DD. When the date, source or destination is missing, the request is incomplete and the missing value comes from the traveller: a guessed today, tomorrow or weekend searches a day they did not ask for. With all three present, the traveller sees results only once the search runs. CITY DISAMBIGUATION: many Indian city names are ambiguous (e.g. 'Aurangabad' matches cities in Maharashtra, Bihar, Uttar Pradesh and West Bengal). An ambiguous name returns needsDisambiguation=true with sourceCityOptions / destinationCityOptions instead of a guess; the traveller picks one, and the search runs again with the chosen source_city_id / destination_city_id plus the original free-text source/destination. Filters: bus_type is 'AC' or 'Non-AC' when the traveller only named climate ('ac buses', 'non ac'), and a full type ('AC Sleeper', 'AC Semi-Sleeper', 'AC Seater', 'Non-AC Sleeper', 'Non-AC Semi-Sleeper', 'Non-AC Seater') only when they named a berth; a berth they did not name narrows the search wrongly. time_slot (early_morning 00:00-06:00, morning 06:00-12:00, afternoon 12:00-18:00, evening 18:00-24:00; no night slot), depart_after/depart_before (an hour or \"HH:MM\"; depart_before is exclusive, so 4-7 AM is 04:00 to 07:00, not 08:00). A window that crosses midnight is not one call. operators (list of operator names), max_price, min_rating, paytm_assured, boarding_point (matches by area name across all boarding points). Sort: recommended (default) | cheapest | fastest | earliest | rating. Invalid filter values are rejected with an error rather than silently ignored. Ratings below 15 reviews are not shown -- a missing rating means 'not enough reviews yet', not a bad bus. Named filters are sent to the Paytm wrapper (e.g. AC \u2192 is_ac) and the matching buses are shown. When those filters match nothing, the result says so; dropping the filters is the traveller's call, since an unfiltered search opens a second results card for the same query. Refining the search (only AC, cheaper, leaving after 9pm, better rated, etc.) is a new search with the changed filters and the same route and date, answered with new results rather than a pointer to the widget's chips. This tool lists a per-trip Paytm Checkin seat-layout URL as the dweb booking link (bookingUrl) and a matching seat deeplink for mweb/app (bookingDeeplink) -- there is no in-chat seat selection or payment; the traveller completes booking on Paytm Checkin. Questions about amenities, boarding/dropping points, or cancellation for a specific bus (or a tap on a card) are answered by get_bus_details with that card's tripRef, without a new search.\n\nAI CARD SUMMARIES: the bus-search widget loads its one-line AI summaries itself (skeleton footers, then text or remove), so the results card is complete without another tool. Amenities and ratings come only from Paytm's data.",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "boarding_point": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Restrict to buses with a matching boarding-point area."
+   },
+   "bus_type": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "\"AC\" or \"Non-AC\" when the traveller only named climate,\nor a full type (\"AC Sleeper\", \"AC Semi-Sleeper\", \"AC Seater\",\n\"Non-AC Sleeper\", \"Non-AC Semi-Sleeper\", \"Non-AC Seater\")."
+   },
+   "date": {
+    "description": "Travel date as YYYY-MM-DD. Mandatory \u2014 do not invent a date\nif the traveller omitted it; ask them first.",
+    "type": "string"
+   },
+   "depart_after": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Earliest departure, e.g. 18 or \"18:00\" (inclusive).\n7, \"7\", and \"07:00\" are the same instant."
+   },
+   "depart_before": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Exclusive end, e.g. 7 or \"07:30\". \"4\u20137 AM\" is\ndepart_after=\"04:00\", depart_before=\"07:00\". \"00:00\" means the\nend of this day. A window whose end is earlier than its start\n(22:00 to 04:00) is rejected; this search does not cross midnight."
+   },
+   "destination": {
+    "description": "Arrival city name, e.g. \"Hyderabad\".",
+    "type": "string"
+   },
+   "destination_city_id": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Same, for destination."
+   },
+   "max_price": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Budget cap in INR (per traveller, starting fare)."
+   },
+   "min_rating": {
+    "anyOf": [
+     {
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Minimum star rating (buses with under 15 ratings are\nexcluded from this filter -- their rating isn't shown either)."
+   },
+   "operators": {
+    "anyOf": [
+     {
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Restrict to these operator names."
+   },
+   "paytm_assured": {
+    "default": false,
+    "description": "Only Paytm Assured buses.",
+    "type": "boolean"
+   },
+   "sort_by": {
+    "default": "recommended",
+    "description": "recommended | cheapest | fastest | earliest | rating.",
+    "type": "string"
+   },
+   "source": {
+    "description": "Departure city name, e.g. \"Bengaluru\".",
+    "type": "string"
+   },
+   "source_city_id": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Resolved Paytm city id for source -- only pass this\nafter a prior call returned needsDisambiguation with\nsourceCityOptions, using the id the traveller picked."
+   },
+   "time_slot": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "early_morning [00:00, 06:00) | morning [06:00, 12:00) |\nafternoon [12:00, 18:00) | evening [18:00, 24:00). \"early morning\"\nis accepted. \"night\" is rejected. There is no overnight slot."
+   }
+  },
+  "required": [
+   "source",
+   "destination",
+   "date"
+  ],
+  "type": "object"
+ },
+ "name": "search_buses",
+ "outputSchema": {
+  "additionalProperties": true,
+  "properties": {
+   "buses": {
+    "items": {
+     "additionalProperties": true,
+     "properties": {
+      "arriveDayOffset": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Arrivedayoffset"
+      },
+      "arriveTime": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Arrivetime"
+      },
+      "boardingPoint": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Boardingpoint"
+      },
+      "boardingPoints": {
+       "items": {
+        "type": "string"
+       },
+       "title": "Boardingpoints",
+       "type": "array"
+      },
+      "bookingDeeplink": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Bookingdeeplink"
+      },
+      "bookingUrl": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Bookingurl"
+      },
+      "busType": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Bustype"
+      },
+      "currency": {
+       "default": "INR",
+       "title": "Currency",
+       "type": "string"
+      },
+      "departTime": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Departtime"
+      },
+      "discountPct": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Discountpct"
+      },
+      "droppingPoint": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Droppingpoint"
+      },
+      "droppingPoints": {
+       "items": {
+        "type": "string"
+       },
+       "title": "Droppingpoints",
+       "type": "array"
+      },
+      "duration": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Duration"
+      },
+      "durationMinutes": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Durationminutes"
+      },
+      "operator": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Operator"
+      },
+      "originalPrice": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Originalprice"
+      },
+      "paytmAssured": {
+       "default": false,
+       "title": "Paytmassured",
+       "type": "boolean"
+      },
+      "price": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Price"
+      },
+      "rating": {
+       "anyOf": [
+        {
+         "type": "number"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Rating"
+      },
+      "ratingCount": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Ratingcount"
+      },
+      "seatsLeft": {
+       "anyOf": [
+        {
+         "type": "integer"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "default": null,
+       "title": "Seatsleft"
+      },
+      "tags": {
+       "items": {
+        "type": "string"
+       },
+       "title": "Tags",
+       "type": "array"
+      },
+      "tripRef": {
+       "title": "Tripref",
+       "type": "string"
+      },
+      "womenBooking": {
+       "default": false,
+       "title": "Womenbooking",
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "tripRef"
+     ],
+     "title": "BusCard",
+     "type": "object"
+    },
+    "title": "Buses",
+    "type": "array"
+   },
+   "currency": {
+    "default": "INR",
+    "title": "Currency",
+    "type": "string"
+   },
+   "destinationCityOptions": {
+    "anyOf": [
+     {
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "district": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "District"
+        },
+        "id": {
+         "title": "Id",
+         "type": "integer"
+        },
+        "label": {
+         "title": "Label",
+         "type": "string"
+        },
+        "state": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "State"
+        }
+       },
+       "required": [
+        "id",
+        "label"
+       ],
+       "title": "CityOption",
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Destinationcityoptions"
+   },
+   "disclaimer": {
+    "anyOf": [
+     {
+      "type": "string"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Disclaimer"
+   },
+   "followups": {
+    "items": {
+     "additionalProperties": true,
+     "type": "object"
+    },
+    "title": "Followups",
+    "type": "array"
+   },
+   "moreBuses": {
+    "anyOf": [
+     {
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "arriveDayOffset": {
+         "anyOf": [
+          {
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Arrivedayoffset"
+        },
+        "arriveTime": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Arrivetime"
+        },
+        "boardingPoint": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Boardingpoint"
+        },
+        "boardingPoints": {
+         "items": {
+          "type": "string"
+         },
+         "title": "Boardingpoints",
+         "type": "array"
+        },
+        "bookingDeeplink": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Bookingdeeplink"
+        },
+        "bookingUrl": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Bookingurl"
+        },
+        "busType": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Bustype"
+        },
+        "currency": {
+         "default": "INR",
+         "title": "Currency",
+         "type": "string"
+        },
+        "departTime": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Departtime"
+        },
+        "discountPct": {
+         "anyOf": [
+          {
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Discountpct"
+        },
+        "droppingPoint": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Droppingpoint"
+        },
+        "droppingPoints": {
+         "items": {
+          "type": "string"
+         },
+         "title": "Droppingpoints",
+         "type": "array"
+        },
+        "duration": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Duration"
+        },
+        "durationMinutes": {
+         "anyOf": [
+          {
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Durationminutes"
+        },
+        "operator": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Operator"
+        },
+        "originalPrice": {
+         "anyOf": [
+          {
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Originalprice"
+        },
+        "paytmAssured": {
+         "default": false,
+         "title": "Paytmassured",
+         "type": "boolean"
+        },
+        "price": {
+         "anyOf": [
+          {
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Price"
+        },
+        "rating": {
+         "anyOf": [
+          {
+           "type": "number"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Rating"
+        },
+        "ratingCount": {
+         "anyOf": [
+          {
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Ratingcount"
+        },
+        "seatsLeft": {
+         "anyOf": [
+          {
+           "type": "integer"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Seatsleft"
+        },
+        "tags": {
+         "items": {
+          "type": "string"
+         },
+         "title": "Tags",
+         "type": "array"
+        },
+        "tripRef": {
+         "title": "Tripref",
+         "type": "string"
+        },
+        "womenBooking": {
+         "default": false,
+         "title": "Womenbooking",
+         "type": "boolean"
+        }
+       },
+       "required": [
+        "tripRef"
+       ],
+       "title": "BusCard",
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Morebuses"
+   },
+   "needsDisambiguation": {
+    "default": false,
+    "title": "Needsdisambiguation",
+    "type": "boolean"
+   },
+   "search": {
+    "additionalProperties": true,
+    "title": "Search",
+    "type": "object"
+   },
+   "serverProcessingMs": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Serverprocessingms"
+   },
+   "sortRanks": {
+    "anyOf": [
+     {
+      "additionalProperties": {
+       "items": {
+        "type": "integer"
+       },
+       "type": "array"
+      },
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Sortranks"
+   },
+   "sourceCityOptions": {
+    "anyOf": [
+     {
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "district": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "District"
+        },
+        "id": {
+         "title": "Id",
+         "type": "integer"
+        },
+        "label": {
+         "title": "Label",
+         "type": "string"
+        },
+        "state": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "State"
+        }
+       },
+       "required": [
+        "id",
+        "label"
+       ],
+       "title": "CityOption",
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Sourcecityoptions"
+   },
+   "summaries": {
+    "anyOf": [
+     {
+      "items": {
+       "additionalProperties": true,
+       "properties": {
+        "summary": {
+         "anyOf": [
+          {
+           "type": "string"
+          },
+          {
+           "type": "null"
+          }
+         ],
+         "default": null,
+         "title": "Summary"
+        },
+        "tripRef": {
+         "title": "Tripref",
+         "type": "string"
+        }
+       },
+       "required": [
+        "tripRef"
+       ],
+       "title": "BusAiSummaryEntry",
+       "type": "object"
+      },
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Summaries"
+   },
+   "summariesPending": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Summariespending"
+   },
+   "totalBeforeFilter": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "title": "Totalbeforefilter"
+   }
+  },
+  "required": [
+   "search"
+  ],
+  "title": "SearchBusesOutput",
+  "type": "object"
+ },
+ "title": "Search buses"
+}

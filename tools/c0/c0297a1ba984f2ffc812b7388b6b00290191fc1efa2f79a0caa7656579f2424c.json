@@ -1,0 +1,156 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Execute a SPARQL SELECT query against the Wikidata Query Service. Full graph power: multi-hop traversals, aggregations, subqueries, OPTIONAL, FILTER, UNION, BIND. Standard Wikidata prefixes (wd:, wdt:, p:, ps:, pq:, wikibase:, bd:, rdfs:, schema:) are auto-injected. The wikibase:label SERVICE is also auto-injected when the query references a ?<var>Label, ?<var>Description, or ?<var>AltLabel variable and declares no label SERVICE of its own \u2014 so you can use ?itemLabel without writing the boilerplate. Hard server timeout is 60s; use LIMIT to keep queries fast. Bindings use the SPARQL 1.1 JSON format: each value is { type, value, \"xml:lang\"?, datatype? }. Each response is held to 64,000 bytes, cut between whole rows: a larger result returns its leading rows with returnedCount and totalCount and a notice \u2014 page with ORDER BY plus LIMIT/OFFSET, or aggregate in the query. Use wikidata_get_labels to humanize QID results from this tool.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "language": {
+    "default": "en",
+    "description": "Wikidata language code, or a comma-separated fallback list tried in order (e.g., \"en\", \"de\", \"fr,en\"), for the injected wikibase:label SERVICE \u2014 the language of ?<var>Label, ?<var>Description, and ?<var>AltLabel variables. The list falls back to the multilingual (\"mul\") label last unless it already names mul. Case-insensitive; \"_\" is read as \"-\"; blank means \"en\".",
+    "pattern": "^\\s*(?:[A-Za-z]{2,8}(?:[-_][A-Za-z0-9]{1,9})*(?:\\s*,\\s*[A-Za-z]{2,8}(?:[-_][A-Za-z0-9]{1,9})*)*\\s*)?$",
+    "type": "string"
+   },
+   "query": {
+    "description": "SPARQL SELECT query. Any other form \u2014 ASK, CONSTRUCT, DESCRIBE, an update, or plain search text \u2014 is rejected before it is sent. Standard prefixes (wd:, wdt:, p:, ps:, pq:, wikibase:, bd:, rdfs:, schema:) are injected automatically. Example: SELECT ?item ?itemLabel WHERE { ?item wdt:P31 wd:Q146. } LIMIT 10",
+    "minLength": 1,
+    "type": "string"
+   },
+   "timeout": {
+    "default": 30,
+    "description": "Client-side timeout in seconds (1\u201355). Capped at 55s \u2014 the Wikidata server hard limit is 60s.",
+    "maximum": 55,
+    "minimum": 1,
+    "type": "integer"
+   }
+  },
+  "required": [
+   "query"
+  ],
+  "type": "object"
+ },
+ "name": "wikidata_sparql_query",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "results",
+     "variables",
+     "truncated",
+     "totalCount"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `not_select_query`: The query is not a SELECT query: an ASK, CONSTRUCT, DESCRIBE, or update form, or plain text. `parse_error`: SPARQL syntax error \u2014 the query could not be parsed. `timeout`: Query exceeded the client-side timeout. `throttled`: Wikidata SPARQL endpoint is rate-limited (60 req/min, 5 concurrent per IP). Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "not_select_query",
+         "parse_error",
+         "timeout",
+         "throttled"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Present when the result was cut to fit the response budget (how to page or aggregate for the rest), or when no rows matched (check query logic or broaden filters).",
+    "type": "string"
+   },
+   "results": {
+    "description": "Result bindings: every row when the result fits the 64,000-byte response budget, otherwise the leading rows that fit (returnedCount of totalCount). Each row maps variable names to binding objects with { type, value, \"xml:lang\"?, datatype? } fields.",
+    "items": {
+     "additionalProperties": {
+      "additionalProperties": {},
+      "properties": {},
+      "type": "object"
+     },
+     "propertyNames": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "returnedCount": {
+    "description": "Number of rows in results \u2014 fewer than totalCount when the 64,000-byte response budget cut the result.",
+    "type": "number"
+   },
+   "totalCount": {
+    "description": "Number of rows the query produced, before any response-budget cut.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when the query produced 10,000 rows (totalCount) \u2014 the Wikidata/Blazegraph server-side cap \u2014 indicating the result set was likely truncated upstream. False otherwise. Add a LIMIT clause to avoid hitting the cap. Independent of the response-budget cut, which returnedCount reports. Note: the SPARQL endpoint does not expose an explicit truncation flag; this is an inferred signal.",
+    "type": "boolean"
+   },
+   "variables": {
+    "description": "Variable names returned by the SELECT clause.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Wikidata SPARQL Query"
+}

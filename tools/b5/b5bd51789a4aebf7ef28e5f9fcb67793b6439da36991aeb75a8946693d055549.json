@@ -1,0 +1,335 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "Create, list, update, delete, or fire a workspace job trigger. Four types:\n- \"sftp\"/\"aws_s3\": pulls files from a connection (sftp: remote server; aws_s3: S3 bucket/prefix) into an already-analyzed data spec on a schedule (hourly/daily/monthly, UTC). Type must match the connection's type; aws_s3 also requires s3Bucket (s3Prefix optional). Natural-language preRules (which files to pick up) and postRules (what to do after upload) are compiled into executable code server-side \u2014 never pass raw code. The connection must already exist and have passed test (see manage_connection). For a first-time \"set up a daily/scheduled pull\" request, prefer setup_scheduled_pull, which sets up the connection and trigger together.\n- \"spec_success\": fires a spec automatically whenever a DIFFERENT spec's job completes successfully (set upstreamSpecName to that spec). No connection/frequency. Use this when the request ties the run to another job finishing (e.g. \"run this after the customers load finishes\").\n- \"schedule\": fires a spec directly on a plain frequency (hourly/daily/monthly, UTC), no connection and no upstream spec. Use this when the request is time-based with no dependency (e.g. \"run this every morning\").\n\nIMPORTANT: \"spec_success\" and \"schedule\" triggers can only target a table-source (sourceType: \"tables\") or compaction (sourceType: \"compaction\") spec (see onboard_data_source) \u2014 they have no file to load, only a generated query to re-run or a set of tables to compact. If asked to set up a scheduled/recurring job that reads from an already-loaded table (e.g. \"keep a daily summary of the orders table up to date\"), create that as an onboard_data_source sourceType \"tables\" spec first, THEN create the trigger here. Same for a recurring compaction \u2014 create the sourceType \"compaction\" spec first. Prefer \"spec_success\" when the user's phrasing implies \"after X loads/finishes\"; prefer \"schedule\" when they just want a cadence with no stated dependency; ask if genuinely ambiguous. For sftp/aws_s3, the referenced spec must already have been analyzed once (see onboard_data_source).\n\nAfter firing a trigger (action \"run-now\") \u2014 or any one-off manual run \u2014 use action \"run-history\" to monitor its outcome: it starts as `status: running` and settles to `success`, `failed`, or `no-files`, with `filesPulled` and a `message`.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "action": {
+    "description": "Which operation to perform.",
+    "enum": [
+     "create",
+     "list",
+     "update",
+     "delete",
+     "run-now",
+     "clear-processed-files",
+     "run-history"
+    ],
+    "type": "string"
+   },
+   "connectionId": {
+    "description": "sftp/aws_s3 only. Connection to pull from. Required for create when type is \"sftp\"/\"aws_s3\". Also usable as a run-history filter.",
+    "type": "string"
+   },
+   "cursor": {
+    "description": "run-history: opaque `nextCursor` from a prior page (omit for the first page).",
+    "type": "string"
+   },
+   "dedupe": {
+    "description": "sftp/aws_s3 only. Required for create \u2014 ask the user rather than assuming a value; do not default it silently. Whether repeat pulls should skip files already loaded into this spec, matched by file name. Has real consequences: with dedupe true, a file that reappears under the same name (e.g. re-uploaded with corrected data) will be silently skipped; with dedupe false, an unchanged file left on the server will be reloaded every run. Omit only for update, where omitting leaves the trigger's existing setting unchanged.",
+    "type": "boolean"
+   },
+   "enabled": {
+    "description": "Whether the trigger is active. Defaults to true on create.",
+    "type": "boolean"
+   },
+   "endTime": {
+    "description": "run-history: ISO 8601 upper bound (inclusive) on when the run started.",
+    "type": "string"
+   },
+   "frequency": {
+    "additionalProperties": false,
+    "description": "Required for create when type is \"sftp\", \"aws_s3\", or \"schedule\"; optional on update to change the schedule. Not applicable to spec_success.",
+    "properties": {
+     "dayOfMonth": {
+      "description": "Required for monthly.",
+      "maximum": 31,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "hourOfDay": {
+      "description": "Required for daily/monthly (UTC).",
+      "maximum": 23,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "unit": {
+      "description": "Schedule cadence.",
+      "enum": [
+       "hourly",
+       "daily",
+       "monthly"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "unit"
+    ],
+    "type": "object"
+   },
+   "pageSize": {
+    "description": "run-history: records per page (default 25).",
+    "maximum": 100,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "postRules": {
+    "description": "sftp/aws_s3 only. Natural language: what to do after a file loads (e.g. \"rename with .done suffix\").",
+    "type": "string"
+   },
+   "preRules": {
+    "description": "sftp/aws_s3 only. Natural language: which files to pick up (e.g. \"only *.csv under /outbound\").",
+    "type": "string"
+   },
+   "s3Bucket": {
+    "description": "aws_s3 only. Bucket to poll. Required for create when type is \"aws_s3\", or to change it on update. Each run lists at most 5000 objects from the bucket/prefix (oldest key first) \u2014 past that, new files can be missed. On create, a successful response includes a `warnings` array with this note; relay it to the user and suggest an S3 lifecycle rule to expire/transition old objects.",
+    "type": "string"
+   },
+   "s3Prefix": {
+    "description": "aws_s3 only. Optional key prefix; defaults to the whole bucket.",
+    "type": "string"
+   },
+   "specId": {
+    "description": "run-history: filter to runs of triggers feeding this spec.",
+    "type": "string"
+   },
+   "specName": {
+    "description": "The spec this trigger fires. Required for create.",
+    "type": "string"
+   },
+   "startTime": {
+    "description": "run-history: ISO 8601 lower bound (inclusive) on when the run started.",
+    "type": "string"
+   },
+   "triggerId": {
+    "description": "Existing trigger. Required for update/delete/run-now/clear-processed-files.",
+    "type": "string"
+   },
+   "type": {
+    "description": "Trigger type. Optional for create (defaults to \"sftp\"). For sftp/aws_s3 must match the connection's type.",
+    "enum": [
+     "sftp",
+     "aws_s3",
+     "spec_success",
+     "schedule"
+    ],
+    "type": "string"
+   },
+   "upstreamSpecName": {
+    "description": "spec_success only. The spec whose successful job completion fires this trigger. Required for create when type is \"spec_success\".",
+    "type": "string"
+   },
+   "workspaceId": {
+    "description": "Workspace to act on. Defaults to your only workspace if you have exactly one.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "action"
+  ],
+  "type": "object"
+ },
+ "name": "manage_trigger",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "connectionId": {
+    "type": "string"
+   },
+   "count": {
+    "description": "action \"list\" only",
+    "type": "number"
+   },
+   "createdAt": {
+    "type": "number"
+   },
+   "createdBy": {
+    "type": "string"
+   },
+   "dedupe": {
+    "type": "boolean"
+   },
+   "deleted": {
+    "description": "action \"clear-processed-files\" only",
+    "type": "number"
+   },
+   "enabled": {
+    "type": "boolean"
+   },
+   "frequency": {
+    "additionalProperties": false,
+    "properties": {
+     "dayOfMonth": {
+      "type": "number"
+     },
+     "hourOfDay": {
+      "type": "number"
+     },
+     "unit": {
+      "enum": [
+       "hourly",
+       "daily",
+       "monthly"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "unit"
+    ],
+    "type": "object"
+   },
+   "lastJobId": {
+    "type": "string"
+   },
+   "lastRunAt": {
+    "type": "number"
+   },
+   "lastRunStatus": {
+    "type": "string"
+   },
+   "message": {
+    "type": "string"
+   },
+   "nextCursor": {
+    "description": "action \"run-history\" only",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "pageSize": {
+    "description": "action \"run-history\" only",
+    "type": "number"
+   },
+   "postRules": {
+    "type": "string"
+   },
+   "preRules": {
+    "type": "string"
+   },
+   "runs": {
+    "description": "action \"run-history\" only",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "connectionId": {
+       "type": "string"
+      },
+      "filesPulled": {
+       "type": "number"
+      },
+      "finishedAt": {
+       "type": "string"
+      },
+      "jobId": {
+       "type": "string"
+      },
+      "message": {
+       "type": "string"
+      },
+      "specId": {
+       "type": "string"
+      },
+      "specName": {
+       "type": "string"
+      },
+      "startedAt": {
+       "type": "string"
+      },
+      "status": {
+       "enum": [
+        "running",
+        "success",
+        "failed",
+        "no-files"
+       ],
+       "type": "string"
+      },
+      "triggerId": {
+       "type": "string"
+      },
+      "workspaceId": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "triggerId",
+      "startedAt",
+      "status",
+      "filesPulled",
+      "message"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "s3Bucket": {
+    "type": "string"
+   },
+   "s3Prefix": {
+    "type": "string"
+   },
+   "specId": {
+    "type": "string"
+   },
+   "specName": {
+    "type": "string"
+   },
+   "triggerId": {
+    "type": "string"
+   },
+   "triggers": {
+    "description": "action \"list\" only",
+    "items": {
+     "additionalProperties": {},
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "type": {
+    "enum": [
+     "sftp",
+     "aws_s3",
+     "spec_success",
+     "schedule"
+    ],
+    "type": "string"
+   },
+   "updatedAt": {
+    "type": "number"
+   },
+   "upstreamSpecId": {
+    "description": "type \"spec_success\" only",
+    "type": "string"
+   },
+   "upstreamSpecName": {
+    "description": "type \"spec_success\" only",
+    "type": "string"
+   },
+   "warnings": {
+    "description": "action \"create\", type \"aws_s3\" only. Advisory notes, e.g. the 5000-object S3 listing cap \u2014 relay to the user.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "workspaceId": {
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Manage a workspace trigger (SFTP/AWS S3 pull, spec chaining, or schedule)"
+}

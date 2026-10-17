@@ -1,0 +1,220 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "THE WAY TO MAKE AN EXISTING APP HIGHLY AVAILABLE. If the user asks for high availability, redundancy, no single point of failure, surviving a host or VM failure, or 'stay up if a machine dies', this is the tool: point it at their running VM and pass high_availability:true. It needs no rebuild and no redeploy, and the URL does not change. Turns a single running instance into a horizontally-autoscaling cluster: snapshots the instance and puts your SOURCE VM behind a load balancer as its ALWAYS-ON BASELINE MEMBER, then an autoscaling group adds EXTRA members (booted from that snapshot) on CPU load and scales them back down to zero. FLAVOR \u2014 LEAD WITH A MEMORY-OPTIMIZED SMALL-DISK FLAVOR (m1.mem16/m1.mem32) for the cluster, and ideally have the SOURCE VM on one too: clustering snapshots the source VM's FULL disk, so DISK size (not RAM) drives how long the cluster takes to build and to add each member under load \u2014 a 40 GB mem flavor is several times faster to snapshot and scale than a 160 GB standard flavor (m1.xlarge) and costs less for the same RAM. If the source VM is on a big-disk flavor, RECOMMEND migrating the app onto a mem-flavor VM first (a root disk cannot be shrunk in place), even though it is extra work \u2014 it pays off on every scale-out, and a clustered app is stateless anyway (state in the managed DB) so the lean disk fits. Expect a DRASTICALLY better clustering experience on a mem flavor: far faster cluster-create, snapshots, and every scale-out. The user can override with any flavor. At rest ONLY your source VM serves \u2014 there is NO idle extra VM to pay for (the source VM is the cluster's minimum, so the floor is 0 extra members). Use it to LOAD-SCALE a stateless app tier while managed services hold state: it becomes highly-available UNDER LOAD (multiple members behind the LB), but at rest a SINGLE source VM serves \u2014 and that source VM is a plain VM, not an autoscaled member, so it is NOT auto-replaced if it fails while idle (only the autoscaled extra members are ASG-managed and self-healed). If you need always-on redundancy, keep the app under enough load to hold >=1 extra member, or use a separate always-on setup. BILLED \u2014 at rest it costs just your source VM (which you already run) plus the load balancer; under load it adds up to max_size EXTRA members at the member flavor (flavor_id), billed only while they run. In guided mode show the cost that way (now: source VM already running + the LB; under load: up to max_size x the member flavor) and get the user's explicit go first. redu automatically repoints the extra members from the old single-VM URL to the load-balancer URL across app config. It REFUSES a STATEFUL VM with 409 cluster_needs_stateless unless confirm_stateless:true. To have redu help with a stateful VM instead of refusing, pass auto_restructure:true: for a single_vm Postgres the fully automatic move is switched off for now (409 auto_restructure_unavailable: move the database yourself first, then confirm_stateless:true); for a compose-stack DB it provisions the matching managed DB (set restructure_engine, e.g. 'mysql'/'mariadb' for WordPress) and returns migration commands to run from the app VM. WordPress/WooCommerce is not generic autoscaling: managed DB alone is not enough because wp-content/uploads is file state. Use app_profile:'wordpress'/'woocommerce', cluster_media_mode:'media_space', and either media_space_id or create_media_space:true so all members mount the same uploads filesystem; otherwise the backend refuses with 409 cluster_needs_media_space. PUT THE CLUSTER ON THE SAME private network as the managed DB and media space. HA: cluster members are spread across DIFFERENT physical hosts automatically, and an autoscaled member that is destroyed is REBUILT AUTOMATICALLY in 1.5 to 5 minutes depending on how it failed with no action from you (the always-on source/hero VM is a plain VM and is NOT covered by that). CRITICAL for members: the app must start on EVERY boot (systemd unit or container restart policy) - if it only starts from a first-boot cloud-init script, a rebooted or resized member comes back with no app, silently never rejoins the load balancer, and the cluster quietly loses capacity with nothing reporting an error. Pass startup_command if the app does not already auto-start on boot, and have it bind its port only once it is genuinely ready to serve (the health check can only see whether the port is open). SEQUENCING - this catches people: the snapshot is taken IMMEDIATELY, and every member boots from it, so the source VM's app must already be RUNNING before you call this. Clustering a freshly-created VM whose cloud-init has not finished captures an image with no enabled service, and all members then come up ACTIVE while failing the load-balancer health check forever - a cluster that looks built and serves nothing. Verify the app answers on its port first (get_ssh_command, or just fetch the VM's URL). The snapshot upload can take several minutes; poll list_clusters until CREATE_COMPLETE.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "app_profile": {
+    "description": "Set wordpress/woocommerce when upgrading an older deployment or raw VM that the backend has not profiled. WordPress/WooCommerce clusters require managed MySQL/MariaDB plus a media_space or explicitly configured central_media_origin.",
+    "enum": [
+     "generic",
+     "wordpress",
+     "woocommerce"
+    ],
+    "type": "string"
+   },
+   "auto_restructure": {
+    "description": "Instead of just refusing a stateful VM, have redu get its co-located database OFF the VM first, then cluster. For a single_vm Postgres (redu deployed it) the FULLY AUTOMATIC move is SWITCHED OFF by the platform for now: the call is refused with 409 auto_restructure_unavailable (done automatically it could lose writes in rare cases). Tell the user, then move the database first: create a managed database, copy the data into it, point the app at it and redeploy, then upgrade with confirm_stateless:true. (When it is switched on it needs high_availability:true.) For a compose/unknown DB, ASSISTED: redu provisions the matching managed DB (see restructure_engine) and returns the exact dump/restore/repoint commands to run FROM THE APP VM (response restructure.mode='assisted') \u2014 redu will not run an unattended dump against a database it does not own. Only addresses the co-located-DB refusal (cluster_needs_stateless); it does NOT bypass the WordPress media guard. Writes to the OLD VM during the (several-minute) upgrade are not migrated; cut traffic over to the cluster URL once it is up.",
+    "type": "boolean"
+   },
+   "cluster_media_mode": {
+    "description": "For WordPress/WooCommerce, use media_space as the default real cluster fix. local_uploads is refused because wp-content/uploads would diverge across members.",
+    "enum": [
+     "local_uploads",
+     "central_media_origin",
+     "media_space"
+    ],
+    "type": "string"
+   },
+   "confirm_stateless": {
+    "description": "Override the stateful-VM safety refusal. redu REFUSES to cluster a VM that holds its own data (deployed with database:'single_vm' or a compose 'db' service) - a cluster clones the VM into members, so on-VM data diverges and is lost on scale-in; it returns 409 cluster_needs_stateless + a restructure_plan (move the DB to managed, repoint, redeploy, then cluster). Set true ONLY when the VM is genuinely stateless (state in a managed DB / external store, e.g. database:'managed'), or a raw VM you have made stateless.",
+    "type": "boolean"
+   },
+   "create_media_space": {
+    "description": "Set TRUE when upgrading a WordPress/WooCommerce deployment that has no media_space_id yet. Redu creates a small NFS media VM + volume, records it, and mounts it on all members.",
+    "type": "boolean"
+   },
+   "dname": {
+    "description": "Optional public DNS name for the cluster's load-balancer access point (a .redu.cloud name is auto-generated if omitted).",
+    "type": "string"
+   },
+   "flavor_id": {
+    "description": "Member VM size \u2014 from list_flavors. Every autoscaling member uses this flavor. STRONGLY prefer m1.mem16/m1.mem32 (memory-optimized, 40 GB disk): clustering snapshots the source disk, so a lean disk makes cluster-create and every scale-out several times faster than a 160 GB standard flavor (and costs less for the same RAM). The member flavor's disk must be >= the source VM's disk, so the biggest win comes from the SOURCE VM being on a mem flavor too \u2014 if it is on a big-disk flavor, migrate the app onto a mem-flavor VM before clustering. The user can override with any flavor.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "high_availability": {
+    "description": "Set TRUE whenever the user asks for HIGH AVAILABILITY, redundancy, 'no single point of failure', 'survive a host/node failure', or 'stay up if a VM dies'. This is the ONLY way to get an HA cluster and you should pick it yourself when the user's intent is availability rather than load-scaling \u2014 do not make them discover it. It runs 3 permanent members spread across 3 DIFFERENT physical hosts; a member that is destroyed is rebuilt AUTOMATICALLY in 1.5 to 5 minutes depending on how it failed (both ends measured), with no action from anyone; updates roll one member at a time, keeping the cluster serving throughout (measured: about 2% of requests blip as each member is swapped, capacity never below 2 of 3, URL unchanged). Trade-off to state in the plan: 3 members run continuously (so 3x the member cost, versus 0 idle members in the default mode), and the source VM is retired once every member passes the load balancer's health check and no other web address (a custom domain, another port) still points at it; otherwise, or if the cluster is deleted meanwhile, it is kept serving, still billed, and the user is told why. Default false = load-scaling mode: the single source VM serves at rest and is NOT auto-replaced if it dies.",
+    "type": "boolean"
+   },
+   "idempotency_key": {
+    "minLength": 8,
+    "type": "string"
+   },
+   "instance_id": {
+    "description": "The instance to turn into a cluster (from list_instances, or the VM of a deploy_app/deploy_compose deployment). It is snapshotted, and the autoscaling members are booted from that snapshot.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "keypair_name": {
+    "description": "SSH keypair name \u2014 from list_keypairs.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "max_size": {
+    "description": "Peak member count under load (default 5). In the default mode this is EXTRA members added on top of your always-on source VM, and the floor is 0 extra. With high_availability:true the group runs between 3 and this number, so set it >= 3.",
+    "maximum": 10,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "media_mount_path": {
+    "description": "Host mount path on cluster members. Redu mounts this into /var/www/html/wp-content/uploads for WordPress/WooCommerce.",
+    "type": "string"
+   },
+   "media_origin_url": {
+    "description": "Public base URL where WordPress wp-content/uploads is served from the central media origin. This should be a separate media origin, not the DB VM.",
+    "format": "uri",
+    "type": "string"
+   },
+   "media_space_flavor_id": {
+    "description": "Flavor id for the media VM when create_media_space:true. Defaults to the cluster member flavor.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "media_space_id": {
+    "description": "Existing Redu media space id to mount on every WordPress/WooCommerce cluster member.",
+    "exclusiveMinimum": 0,
+    "type": "integer"
+   },
+   "media_space_name": {
+    "description": "Optional name for the media space when create_media_space:true. Defaults to <cluster-name>-media.",
+    "maxLength": 63,
+    "minLength": 1,
+    "type": "string"
+   },
+   "media_space_size_gb": {
+    "description": "Media space data volume size in GB when create_media_space:true (default 20).",
+    "maximum": 2048,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "name": {
+    "description": "Name for the cluster (lowercase letters, numbers, hyphens).",
+    "maxLength": 63,
+    "minLength": 1,
+    "type": "string"
+   },
+   "network_id": {
+    "description": "Private network id \u2014 from list_private_networks. Use the SAME network the app's managed DB / other services are on, so members can reach them by private IP.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "port": {
+    "description": "Port the app listens on / the load balancer forwards to (default 80). Your source VM must actually serve on this port \u2014 the load balancer health-checks it.",
+    "maximum": 65535,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "restructure_db_flavor_id": {
+    "description": "Optional VM size for the provisioned managed database (from list_flavors). Defaults to the member flavor; pick a smaller one (e.g. m1.small) if the DB is light.",
+    "type": "string"
+   },
+   "restructure_engine": {
+    "description": "For the ASSISTED path (a compose-stack database), which managed engine to provision. WordPress/WooCommerce = 'mysql' (or 'mariadb'). Required when auto_restructure is set and the DB runs inside the compose stack; ignored for a single_vm Postgres (always Postgres).",
+    "enum": [
+     "postgres",
+     "mysql",
+     "mariadb"
+    ],
+    "type": "string"
+   },
+   "scale_in_threshold": {
+    "description": "Average CPU fraction (0-1) below which a member is removed (default 0.2).",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "scale_out_threshold": {
+    "description": "Average CPU fraction (0-1) above which a member is added (default 0.7).",
+    "maximum": 1,
+    "minimum": 0,
+    "type": "number"
+   },
+   "startup_command": {
+    "description": "Single-line shell command to (re)start the app on each fresh member if the snapshot's own services do not auto-start it. For a podman-compose app: 'cd /opt/app && podman-compose up -d'. Omit to rely on the image's own auto-starting services.",
+    "maxLength": 2000,
+    "pattern": "^[^\\n\\r]*$",
+    "type": "string"
+   }
+  },
+  "required": [
+   "instance_id",
+   "name",
+   "flavor_id",
+   "network_id",
+   "keypair_name"
+  ],
+  "type": "object"
+ },
+ "name": "upgrade_to_cluster",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "available_keypairs": {
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "duplicate": {
+    "type": "boolean"
+   },
+   "error": {
+    "type": "boolean"
+   },
+   "idempotency_key": {
+    "type": "string"
+   },
+   "invalid_keypair_name": {
+    "type": "boolean"
+   },
+   "machine": {},
+   "mode": {
+    "type": "string"
+   },
+   "needs_keypair": {
+    "type": "boolean"
+   },
+   "needs_keypair_name": {
+    "type": "boolean"
+   },
+   "needs_plan": {
+    "type": "boolean"
+   },
+   "next": {
+    "type": "string"
+   },
+   "plan_tool": {
+    "type": "string"
+   },
+   "request": {},
+   "result": {},
+   "source_mismatch": {
+    "type": "boolean"
+   },
+   "validation": {}
+  },
+  "type": "object"
+ },
+ "title": "Upgrade an instance to an autoscaling cluster"
+}

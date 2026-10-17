@@ -1,0 +1,801 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Flagship workflow: map a domain's external attack surface end to end. Discovers subdomains from Certificate Transparency logs, resolves each to find live hosts, and (at standard+ depth) characterizes each live host's DNS records, TLS posture, and HTTP security headers and technology stack, plus optional RDAP/WHOIS registration. At thorough depth with a Shodan key it adds per-IP Shodan enrichment. Returns a structured surface map and a defensive assessment of observable facts (expiring certs, missing security headers, weak TLS) \u2014 never an exploitation plan. All work is passive (public records and the target's own published responses) and SSRF-guarded. Assess only assets you own or are explicitly authorized to test.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "depth": {
+    "default": "standard",
+    "description": "\"quick\" = subdomains + liveness only; \"standard\" = + DNS/TLS/HTTP posture; \"thorough\" = + Shodan enrichment (when keyed).",
+    "enum": [
+     "quick",
+     "standard",
+     "thorough"
+    ],
+    "type": "string"
+   },
+   "domain": {
+    "description": "Apex domain to map (e.g. \"example.com\").",
+    "type": "string"
+   },
+   "includeRegistration": {
+    "default": true,
+    "description": "When true (and depth is standard+), include RDAP/WHOIS registration for the apex.",
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "domain"
+  ],
+  "type": "object"
+ },
+ "name": "attacksurface_map_domain",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "domain",
+     "depth",
+     "subdomainCount",
+     "liveHostCount",
+     "liveHosts",
+     "unresolvedSubdomains",
+     "registration",
+     "assessment",
+     "notes",
+     "addressStatuses",
+     "coverage",
+     "nextToolSuggestions",
+     "guidanceCoverage",
+     "guidanceNotice"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "addressStatuses": {
+    "description": "Includes unresolved and blocked candidates.",
+    "items": {
+     "additionalProperties": false,
+     "description": "Candidate liveness outcome.",
+     "properties": {
+      "addressError": {
+       "description": "Failure, or null for successful/absent answers.",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "addresses": {
+       "description": "Successful address answers.",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "host": {
+       "description": "Examined candidate.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "host",
+      "addresses",
+      "addressError"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "assessment": {
+    "description": "Observable posture findings synthesized across the surface.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "cap": {
+    "description": "The ATTACKSURFACE_MAX_SUBDOMAINS cap applied.",
+    "type": "number"
+   },
+   "coverage": {
+    "additionalProperties": false,
+    "description": "Candidate and posture coverage, independent of CT completeness.",
+    "properties": {
+     "detailOmitted": {
+      "description": "Live hosts omitted by the snapshot detail cap.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     },
+     "detailed": {
+      "description": "Live hosts with requested posture attempted; zero at quick depth.",
+      "type": "number"
+     },
+     "discovered": {
+      "description": "Distinct candidates including the apex.",
+      "type": "number"
+     },
+     "examined": {
+      "description": "Candidates whose liveness was examined.",
+      "type": "number"
+     },
+     "retrieval": {
+      "description": "At most three executable examples; repeat over unexamined then detailOmitted names. DNS/TLS batches never exceed 50 hosts.",
+      "items": {
+       "additionalProperties": false,
+       "description": "A local follow-up tool call.",
+       "properties": {
+        "args": {
+         "additionalProperties": {},
+         "description": "Pre-filled executable tool arguments.",
+         "propertyNames": {
+          "type": "string"
+         },
+         "type": "object"
+        },
+        "reason": {
+         "description": "Why this follow-up advances the defensive review.",
+         "type": "string"
+        },
+        "toolName": {
+         "description": "Registered local tool to call next.",
+         "type": "string"
+        }
+       },
+       "required": [
+        "toolName",
+        "reason",
+        "args"
+       ],
+       "type": "object"
+      },
+      "type": "array"
+     },
+     "unexamined": {
+      "description": "Candidates omitted by the resolution cap.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "discovered",
+     "examined",
+     "unexamined",
+     "detailed",
+     "detailOmitted",
+     "retrieval"
+    ],
+    "type": "object"
+   },
+   "depth": {
+    "description": "Depth that was executed.",
+    "enum": [
+     "quick",
+     "standard",
+     "thorough"
+    ],
+    "type": "string"
+   },
+   "domain": {
+    "description": "Apex domain mapped (normalized).",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_domain`: The supplied domain is not a syntactically valid registrable domain. `discovery_failed`: No surface could be established and discovery had operational failures. `no_surface`: No subdomains were discovered and the apex did not resolve. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_domain",
+         "discovery_failed",
+         "no_surface"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "guidanceCoverage": {
+    "additionalProperties": false,
+    "description": "Guidance handoff coverage, separate from map discovery coverage.",
+    "properties": {
+     "eligibleCount": {
+      "description": "Hosts with guidance evidence.",
+      "type": "number"
+     },
+     "includedCount": {
+      "description": "Eligible prefix included in the guidance call, at most 50.",
+      "type": "number"
+     },
+     "omittedHosts": {
+      "description": "Exact eligible suffix to submit separately.",
+      "items": {
+       "type": "string"
+      },
+      "type": "array"
+     }
+    },
+    "required": [
+     "eligibleCount",
+     "includedCount",
+     "omittedHosts"
+    ],
+    "type": "object"
+   },
+   "guidanceNotice": {
+    "description": "How to submit omitted hosts, including byte-target exceptions.",
+    "type": "string"
+   },
+   "liveHostCount": {
+    "description": "Count of subdomains that resolved to an address.",
+    "type": "number"
+   },
+   "liveHosts": {
+    "description": "Per-live-host posture.",
+    "items": {
+     "additionalProperties": false,
+     "description": "Posture summary for one live host.",
+     "properties": {
+      "addresses": {
+       "description": "Resolved IP addresses.",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "dns": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "description": "DNS posture for one examined live host.",
+         "properties": {
+          "host": {
+           "description": "Host queried.",
+           "type": "string"
+          },
+          "hostError": {
+           "description": "Host or resolver failure, or null.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "propagationMismatches": {
+           "description": "Record types with different resolver answers.",
+           "items": {
+            "enum": [
+             "A",
+             "AAAA",
+             "CNAME",
+             "MX",
+             "NS",
+             "TXT",
+             "CAA"
+            ],
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "records": {
+           "additionalProperties": {
+            "items": {
+             "type": "string"
+            },
+            "type": "array"
+           },
+           "description": "Canonical records from the first configured resolver.",
+           "propertyNames": {
+            "type": "string"
+           },
+           "type": "object"
+          },
+          "resolved": {
+           "description": "Whether canonical A/AAAA records resolve.",
+           "type": "boolean"
+          },
+          "resolverResults": {
+           "description": "All configured resolver outcomes.",
+           "items": {
+            "additionalProperties": false,
+            "description": "Per-resolver outcome.",
+            "properties": {
+             "latencyInMs": {
+              "description": "Resolver latency in milliseconds.",
+              "type": "number"
+             },
+             "queryError": {
+              "description": "Operational error, or null for success/absence.",
+              "type": [
+               "string",
+               "null"
+              ]
+             },
+             "records": {
+              "additionalProperties": {
+               "items": {
+                "type": "string"
+               },
+               "type": "array"
+              },
+              "description": "This resolver\u2019s records.",
+              "propertyNames": {
+               "type": "string"
+              },
+              "type": "object"
+             },
+             "resolver": {
+              "description": "Resolver IP.",
+              "type": "string"
+             }
+            },
+            "required": [
+             "resolver",
+             "latencyInMs",
+             "records",
+             "queryError"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "host",
+          "resolved",
+          "records",
+          "resolverResults",
+          "propagationMismatches",
+          "hostError"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "DNS posture at standard+ depth, or null when skipped."
+      },
+      "errors": {
+       "additionalProperties": false,
+       "description": "Per-leg failures; null summaries at quick depth mean skipped work.",
+       "properties": {
+        "addresses": {
+         "description": "Address-family failure, or null.",
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "dns": {
+         "description": "DNS posture failure, or null.",
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "http": {
+         "description": "HTTP failure, or null.",
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "shodan": {
+         "description": "Shodan failure/no-data, or null.",
+         "type": [
+          "string",
+          "null"
+         ]
+        },
+        "tls": {
+         "description": "TLS failure, or null.",
+         "type": [
+          "string",
+          "null"
+         ]
+        }
+       },
+       "required": [
+        "addresses",
+        "dns",
+        "tls",
+        "http",
+        "shodan"
+       ],
+       "type": "object"
+      },
+      "host": {
+       "description": "Subdomain hostname.",
+       "type": "string"
+      },
+      "http": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "bodyInspection": {
+           "additionalProperties": false,
+           "description": "Body completeness; limited means the prefix cap was reached without observing EOF.",
+           "properties": {
+            "error": {
+             "description": "Body inspection failure reason, or null.",
+             "type": [
+              "string",
+              "null"
+             ]
+            },
+            "status": {
+             "description": "Observed body inspection state.",
+             "enum": [
+              "complete",
+              "limited",
+              "failed",
+              "not_read"
+             ],
+             "type": "string"
+            }
+           },
+           "required": [
+            "status",
+            "error"
+           ],
+           "type": "object"
+          },
+          "finalStatus": {
+           "description": "Final HTTP status after redirects.",
+           "type": "number"
+          },
+          "finalUrl": {
+           "description": "Final URL after redirects.",
+           "type": "string"
+          },
+          "missingSecurityHeaders": {
+           "description": "Missing header names derived from null raw audit fields.",
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "securityFindings": {
+           "description": "Security-header findings.",
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "technologies": {
+           "description": "Technology detections (name/category/version).",
+           "items": {
+            "additionalProperties": false,
+            "description": "A detected technology (name/category/version).",
+            "properties": {
+             "category": {
+              "description": "Detection category.",
+              "type": "string"
+             },
+             "name": {
+              "description": "Technology name.",
+              "type": "string"
+             },
+             "version": {
+              "description": "Version when disclosed.",
+              "type": "string"
+             }
+            },
+            "required": [
+             "name",
+             "category"
+            ],
+            "type": "object"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "finalStatus",
+          "finalUrl",
+          "bodyInspection",
+          "securityFindings",
+          "missingSecurityHeaders",
+          "technologies"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "HTTP posture summary (standard+ depth), or null when not probed/unreachable."
+      },
+      "shodan": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "lastUpdate": {
+           "description": "Shodan scan timestamp.",
+           "type": "string"
+          },
+          "ports": {
+           "description": "Open ports per Shodan's last scan.",
+           "items": {
+            "type": "number"
+           },
+           "type": "array"
+          }
+         },
+         "required": [
+          "ports"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Shodan enrichment (thorough depth + key), or null otherwise."
+      },
+      "tls": {
+       "anyOf": [
+        {
+         "additionalProperties": false,
+         "properties": {
+          "cipher": {
+           "description": "Negotiated cipher.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "daysUntilExpiry": {
+           "description": "Days until certificate expiry, or null when no certificate or parseable expiry is available.",
+           "type": [
+            "number",
+            "null"
+           ]
+          },
+          "findings": {
+           "description": "TLS posture findings.",
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "identityAuthorized": {
+           "description": "Whether the leaf matches the requested host, or null when unverifiable.",
+           "type": [
+            "boolean",
+            "null"
+           ]
+          },
+          "identityError": {
+           "description": "Requested-identity mismatch or verification error, or null.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "issuer": {
+           "description": "Certificate issuer common name.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "protocol": {
+           "description": "Negotiated TLS protocol.",
+           "type": [
+            "string",
+            "null"
+           ]
+          },
+          "validationAuthorized": {
+           "description": "Whether the chain validated against the trust store.",
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "protocol",
+          "cipher",
+          "issuer",
+          "daysUntilExpiry",
+          "validationAuthorized",
+          "findings",
+          "identityAuthorized",
+          "identityError"
+         ],
+         "type": "object"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "TLS posture summary (standard+ depth), or null when not inspected/handshake failed."
+      }
+     },
+     "required": [
+      "host",
+      "addresses",
+      "dns",
+      "errors",
+      "tls",
+      "http",
+      "shodan"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "nextToolSuggestions": {
+    "description": "At most one local prefilled guidance call.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A local follow-up tool call.",
+     "properties": {
+      "args": {
+       "additionalProperties": {},
+       "description": "Pre-filled executable tool arguments.",
+       "propertyNames": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "reason": {
+       "description": "Why this follow-up advances the defensive review.",
+       "type": "string"
+      },
+      "toolName": {
+       "description": "Registered local tool to call next.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "toolName",
+      "reason",
+      "args"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "notes": {
+    "description": "Operational notes (skipped sources, degraded steps, Shodan absence).",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "notice": {
+    "description": "Guidance when no subdomains or live hosts were found.",
+    "type": "string"
+   },
+   "registration": {
+    "anyOf": [
+     {
+      "additionalProperties": false,
+      "properties": {
+       "expiry": {
+        "description": "Expiration date when present.",
+        "type": "string"
+       },
+       "nameservers": {
+        "description": "Nameservers (domain lookups).",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "registrar": {
+        "description": "Registrar (domain lookups).",
+        "type": "string"
+       },
+       "source": {
+        "description": "Source that answered.",
+        "enum": [
+         "rdap",
+         "whois"
+        ],
+        "type": "string"
+       },
+       "statuses": {
+        "description": "Registry status codes.",
+        "items": {
+         "type": "string"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "source",
+       "statuses",
+       "nameservers"
+      ],
+      "type": "object"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Apex registration summary, or null."
+   },
+   "shown": {
+    "description": "Number of subdomains resolved after the cap.",
+    "type": "number"
+   },
+   "subdomainCount": {
+    "description": "Total distinct subdomains discovered.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when subdomain resolution was capped.",
+    "type": "boolean"
+   },
+   "unresolvedSubdomains": {
+    "description": "Discovered names that did not resolve.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "title": "attacksurface_map_domain"
+}

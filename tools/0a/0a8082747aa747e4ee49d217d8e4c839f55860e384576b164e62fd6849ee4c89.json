@@ -1,0 +1,677 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Fetch full curated UniProtKB entries by accession in one batch (up to 20). Each entry carries function, catalytic activity, cofactors, subcellular location, disease involvement, PTMs, natural variants, isoforms, domains, GO terms, keywords, and cross-references. Partial failures do not abort the batch \u2014 resolved entries land in succeeded[] and unknown or inactive (merged, demerged, deleted) accessions in failed[], where the error for an inactive accession names the accession to retry with or the UniParc ID that keeps its sequence. Pass fields to trim the upstream projection. A single oversized record returns kind: \"outline\" (a section listing with byte sizes) instead of overflowing context \u2014 re-call the same accession with sections:[...] (e.g. [\"disease\",\"variants\"]) to pull only those. sections takes exactly one accession; trim a batch with fields instead. A list section too large on its own (the natural variants of p53, over a thousand) pages with section_limit/section_offset on a re-call naming that one section. This tool does not search: accessions come from uniprot_search_proteins.results[].accession or uniprot_map_ids. Strip any isoform suffix (P04637-2 to P04637) before calling.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "accessions": {
+    "description": "Accessions to fetch (1\u201320). From uniprot_search_proteins or uniprot_map_ids.",
+    "items": {
+     "description": "A UniProtKB primary accession, e.g. \"P04637\". Canonical form only \u2014 strip any \"-N\" isoform suffix.",
+     "pattern": "^(?:[OPQ][0-9][A-Z0-9]{3}[0-9]|[A-NR-Z][0-9](?:[A-Z][A-Z0-9]{2}[0-9]){1,2})$",
+     "type": "string"
+    },
+    "maxItems": 20,
+    "minItems": 1,
+    "type": "array"
+   },
+   "fields": {
+    "description": "Comma-separated UniProtKB field names to project, e.g. \"accession,gene_names,cc_function,ft_variant\". Omit for the full curated default set. Use this on the initial call to trim payload.",
+    "type": "string"
+   },
+   "section_limit": {
+    "description": "Window size for one list section on a sections re-call: return at most this many items of it (1\u2013500). Requires sections naming exactly one list section, e.g. [\"variants\"] (or ptms, domains, goTerms). Omit together with section_offset to return the whole section.",
+    "maximum": 500,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "section_offset": {
+    "description": "Zero-based index of the first item in the windowed section. Defaults to 0. Pass the previous response's nextOffset to page forward. Same requirements as section_limit; set without section_limit, returns every item from this index on.",
+    "maximum": 9007199254740991,
+    "minimum": 0,
+    "type": "integer"
+   },
+   "sections": {
+    "description": "Only used to re-call one accession after a kind: \"outline\" response \u2014 pass a subset of the outlined section keys to fetch just those sections. Requires exactly one accession: a batch with sections is rejected, so trim a batch with fields. A requested section the record lacks is named in absentSections, not an error. Do not pass on the initial call.",
+    "items": {
+     "description": "A section key from a prior outline response, e.g. \"disease\", \"variants\", \"function\", \"xrefs\".",
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "required": [
+   "accessions"
+  ],
+  "type": "object"
+ },
+ "name": "uniprot_get_entry",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "kind"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "absentSections": {
+    "description": "Requested section keys this record does not carry \u2014 UniProt holds no annotation of that kind for it, or fields excluded it. Not an error: the other requested sections are returned. Present only on a sections re-call that named one.",
+    "items": {
+     "description": "A requested section key the record does not carry.",
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "cap": {
+    "description": "The section_limit applied. Present when truncated.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `sections_single_accession`: sections was passed with more than one accession \u2014 rejected before any request. sections re-calls a single outlined record. `unknown_section`: sections named a key this tool never emits \u2014 rejected before any request. The message lists every valid key. `invalid_section_window`: section_limit or section_offset was set without sections naming exactly one list section \u2014 no sections, several, or a non-list section such as organism or xrefs. Rejected before any request. `all_not_found`: No accession in the batch resolved to an active entry \u2014 each was unknown to UniProtKB or inactive (merged, demerged, or deleted). The message names each inactive accession and its replacement. `invalid_fields`: UniProtKB rejected the fields value \u2014 the message relays UniProt naming the rejected field. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "sections_single_accession",
+         "unknown_section",
+         "invalid_section_window",
+         "all_not_found",
+         "invalid_fields"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "failed": {
+    "description": "Accessions that were well-formed but did not resolve to an active entry \u2014 unknown to UniProtKB, or inactive (merged, demerged, or deleted). Present when kind is \"full\".",
+    "items": {
+     "additionalProperties": false,
+     "description": "A per-accession failure.",
+     "properties": {
+      "accession": {
+       "description": "The requested accession that did not resolve.",
+       "type": "string"
+      },
+      "error": {
+       "description": "Why it failed and how to recover. For an inactive accession: the merge target to retry with, the demerge products to choose among, or the UniParc ID that keeps a deleted sequence.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "accession",
+      "error"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "kind": {
+    "description": "Result kind. \"full\": the batch resolved \u2014 read succeeded[] and failed[]. \"outline\": a single record exceeded the context budget and is returned as a section listing \u2014 re-call the same accession with sections:[...] to pull specific sections.",
+    "enum": [
+     "full",
+     "outline"
+    ],
+    "type": "string"
+   },
+   "nextOffset": {
+    "description": "section_offset for the next window (same section_limit). Present while items remain.",
+    "type": "number"
+   },
+   "notice": {
+    "description": "Re-call guidance. On kind \"outline\": re-call the same accession with sections:[...] to pull specific sections. On a section window: the section_offset that pages the rest, or why the window came back empty.",
+    "type": "string"
+   },
+   "sections": {
+    "description": "Section outline returned when a single record exceeds the context budget. Present when kind is \"outline\".",
+    "items": {
+     "additionalProperties": false,
+     "description": "An outlined section with its serialized size.",
+     "properties": {
+      "bytes": {
+       "description": "Serialized byte size of the section.",
+       "type": "number"
+      },
+      "name": {
+       "description": "Section identifier \u2014 pass a subset in sections:[...] to retrieve it.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "bytes"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "shown": {
+    "description": "Items in the returned window. Present when truncated.",
+    "type": "number"
+   },
+   "succeeded": {
+    "description": "Entries that resolved successfully. Present when kind is \"full\".",
+    "items": {
+     "additionalProperties": false,
+     "description": "A full curated UniProtKB entry.",
+     "properties": {
+      "accession": {
+       "description": "UniProtKB primary accession.",
+       "type": "string"
+      },
+      "annotationScore": {
+       "description": "Annotation confidence on a 1\u20135 scale.",
+       "type": "number"
+      },
+      "catalyticActivity": {
+       "description": "Catalytic-activity reactions (Rhea-cross-referenced). Absent when not an enzyme.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A catalyzed reaction.",
+        "properties": {
+         "ecNumber": {
+          "description": "Enzyme Commission number. Omitted when none.",
+          "type": "string"
+         },
+         "name": {
+          "description": "Reaction equation, e.g. \"ATP + L-tyrosyl-[protein] = ...\".",
+          "type": "string"
+         },
+         "rheaId": {
+          "description": "Rhea reaction ID, e.g. \"RHEA:10596\". Omitted when none.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "name"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "cofactors": {
+       "description": "Cofactors. Absent when none are annotated.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A required cofactor.",
+        "properties": {
+         "chebiId": {
+          "description": "ChEBI identifier. Omitted when none.",
+          "type": "string"
+         },
+         "name": {
+          "description": "Cofactor name, e.g. \"Zn(2+)\".",
+          "type": "string"
+         }
+        },
+        "required": [
+         "name"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "disease": {
+       "description": "Disease involvements (DISEASE comments). Absent when none.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A disease association.",
+        "properties": {
+         "acronym": {
+          "description": "Disease acronym. Omitted when none.",
+          "type": "string"
+         },
+         "description": {
+          "description": "Disease description. Omitted when none.",
+          "type": "string"
+         },
+         "diseaseId": {
+          "description": "UniProt disease accession, e.g. \"DI-01537\". Omitted when none.",
+          "type": "string"
+         },
+         "name": {
+          "description": "Disease name.",
+          "type": "string"
+         },
+         "omimId": {
+          "description": "OMIM identifier. Omitted when none.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "name"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "domains": {
+       "description": "Domain and region features. Absent when none.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A sequence feature.",
+        "properties": {
+         "description": {
+          "description": "Free-text description of the feature. Omitted when absent.",
+          "type": "string"
+         },
+         "featureId": {
+          "description": "Stable feature identifier, e.g. \"VAR_066493\". Omitted when none.",
+          "type": "string"
+         },
+         "location": {
+          "additionalProperties": false,
+          "description": "Residue range of the feature.",
+          "properties": {
+           "end": {
+            "description": "End residue position. Omitted when not exact.",
+            "type": "number"
+           },
+           "start": {
+            "description": "Start residue position. Omitted when not exact.",
+            "type": "number"
+           }
+          },
+          "type": "object"
+         },
+         "type": {
+          "description": "Feature type, e.g. \"Modified residue\" or \"Domain\".",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "location"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "entryName": {
+       "description": "UniProtKB mnemonic ID, e.g. \"P53_HUMAN\".",
+       "type": "string"
+      },
+      "function": {
+       "description": "FUNCTION annotations. Absent on most TrEMBL entries.",
+       "items": {
+        "additionalProperties": false,
+        "description": "An annotation with its source evidence preserved.",
+        "properties": {
+         "evidence": {
+          "description": "Source evidence codes. Omitted when none are attached.",
+          "items": {
+           "description": "A PubMed/source evidence reference, e.g. \"PubMed:11025664\".",
+           "type": "string"
+          },
+          "type": "array"
+         },
+         "value": {
+          "description": "The annotated text.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "value"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "genes": {
+       "description": "Gene names and synonyms.",
+       "items": {
+        "description": "A gene name or synonym.",
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "goTerms": {
+       "description": "GO annotations. Absent when none.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A Gene Ontology annotation.",
+        "properties": {
+         "aspect": {
+          "description": "GO aspect: P (process), F (function), or C (component).",
+          "type": "string"
+         },
+         "id": {
+          "description": "GO identifier, e.g. \"GO:0006915\".",
+          "type": "string"
+         },
+         "term": {
+          "description": "GO term label, e.g. \"apoptotic process\".",
+          "type": "string"
+         }
+        },
+        "required": [
+         "id",
+         "term",
+         "aspect"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "isoforms": {
+       "description": "Isoforms (ALTERNATIVE PRODUCTS). Absent when only one product.",
+       "items": {
+        "additionalProperties": false,
+        "description": "An alternatively-spliced isoform.",
+        "properties": {
+         "isoformId": {
+          "description": "Isoform accession, e.g. \"P04637-2\".",
+          "type": "string"
+         },
+         "name": {
+          "description": "Isoform name. Omitted when none.",
+          "type": "string"
+         },
+         "sequenceStatus": {
+          "description": "Sequence status, e.g. \"Displayed\" or \"Described\". Omitted when none.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "isoformId"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "keywords": {
+       "description": "UniProt keywords. Absent when none.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A UniProt keyword.",
+        "properties": {
+         "category": {
+          "description": "Keyword category. Omitted when none.",
+          "type": "string"
+         },
+         "id": {
+          "description": "Keyword identifier, e.g. \"KW-0053\".",
+          "type": "string"
+         },
+         "name": {
+          "description": "Keyword name, e.g. \"Apoptosis\".",
+          "type": "string"
+         }
+        },
+        "required": [
+         "id",
+         "name"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "length": {
+       "description": "Canonical sequence length in residues.",
+       "type": "number"
+      },
+      "organism": {
+       "additionalProperties": false,
+       "description": "Source organism.",
+       "properties": {
+        "commonName": {
+         "description": "Organism common name. Omitted when none.",
+         "type": "string"
+        },
+        "mnemonic": {
+         "description": "Organism mnemonic, e.g. \"HUMAN\". Omitted when none.",
+         "type": "string"
+        },
+        "scientificName": {
+         "description": "Organism scientific name.",
+         "type": "string"
+        },
+        "taxonId": {
+         "description": "NCBI taxonomy ID.",
+         "type": "number"
+        }
+       },
+       "required": [
+        "scientificName",
+        "taxonId"
+       ],
+       "type": "object"
+      },
+      "proteinExistence": {
+       "description": "Protein-existence evidence level.",
+       "type": "string"
+      },
+      "proteinName": {
+       "description": "Recommended full protein name. Omitted when none.",
+       "type": "string"
+      },
+      "ptms": {
+       "description": "Post-translational modification features (modified residues, glycosylation, etc.). Absent when none.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A sequence feature.",
+        "properties": {
+         "description": {
+          "description": "Free-text description of the feature. Omitted when absent.",
+          "type": "string"
+         },
+         "featureId": {
+          "description": "Stable feature identifier, e.g. \"VAR_066493\". Omitted when none.",
+          "type": "string"
+         },
+         "location": {
+          "additionalProperties": false,
+          "description": "Residue range of the feature.",
+          "properties": {
+           "end": {
+            "description": "End residue position. Omitted when not exact.",
+            "type": "number"
+           },
+           "start": {
+            "description": "Start residue position. Omitted when not exact.",
+            "type": "number"
+           }
+          },
+          "type": "object"
+         },
+         "type": {
+          "description": "Feature type, e.g. \"Modified residue\" or \"Domain\".",
+          "type": "string"
+         }
+        },
+        "required": [
+         "type",
+         "location"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "reviewed": {
+       "description": "True for reviewed Swiss-Prot, false for unreviewed TrEMBL.",
+       "type": "boolean"
+      },
+      "subcellularLocation": {
+       "description": "Subcellular locations. Absent when none are annotated.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A subcellular location.",
+        "properties": {
+         "location": {
+          "description": "Subcellular location, e.g. \"Nucleus\".",
+          "type": "string"
+         },
+         "topology": {
+          "description": "Membrane topology. Omitted when not applicable.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "location"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "variants": {
+       "description": "Natural variants (dbSNP/ClinVar-linked). Absent when none.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A natural variant.",
+        "properties": {
+         "description": {
+          "description": "Variant description. Omitted when none.",
+          "type": "string"
+         },
+         "featureId": {
+          "description": "Variant identifier, e.g. \"VAR_066493\". Omitted when none.",
+          "type": "string"
+         },
+         "location": {
+          "additionalProperties": false,
+          "description": "Residue range of the variant.",
+          "properties": {
+           "end": {
+            "description": "End residue position. Omitted when not exact.",
+            "type": "number"
+           },
+           "start": {
+            "description": "Start residue position. Omitted when not exact.",
+            "type": "number"
+           }
+          },
+          "type": "object"
+         },
+         "original": {
+          "description": "Original residue(s). Omitted when not a substitution.",
+          "type": "string"
+         },
+         "variation": {
+          "description": "Variant residue(s). Omitted when not a substitution.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "location"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "xrefs": {
+       "additionalProperties": {
+        "items": {
+         "description": "A cross-reference identifier in that database.",
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "description": "Cross-references grouped by database (PDB, Ensembl, RefSeq, ChEMBL, AlphaFoldDB). Chain a PDB id into protein-mcp-server, a ChEMBL id into chembl. Absent when none.",
+       "propertyNames": {
+        "type": "string"
+       },
+       "type": "object"
+      }
+     },
+     "required": [
+      "accession",
+      "entryName",
+      "genes",
+      "organism",
+      "length",
+      "reviewed",
+      "annotationScore",
+      "proteinExistence"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "totalCount": {
+    "description": "Items in the windowed section before section_limit/section_offset applied. Present on every windowed call; 0 when the record lacks the section.",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when items remain past the returned window. Absent on the final window.",
+    "type": "boolean"
+   },
+   "window": {
+    "additionalProperties": false,
+    "description": "The window applied to succeeded[0]'s one requested section. Present only when section_limit or section_offset was set; totalCount and nextOffset place it in the full section.",
+    "properties": {
+     "offset": {
+      "description": "Index of the first returned item within the full section.",
+      "type": "number"
+     },
+     "section": {
+      "description": "The section key section_limit/section_offset windowed.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "section",
+     "offset"
+    ],
+    "type": "object"
+   }
+  },
+  "type": "object"
+ },
+ "title": "uniprot-mcp-server: get entry"
+}

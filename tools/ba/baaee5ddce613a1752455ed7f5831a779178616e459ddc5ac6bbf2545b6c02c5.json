@@ -1,0 +1,1206 @@
+{
+ "description": "REQUIRES set_api_key to be called first. Launch a local web page in the browser for a FaceSign session. You MUST supply `landingHtml` (the pre-session page shown before the iframe), `recapHtml` (the results page shown after the session finishes), and `uiStrings` (a per-language dictionary whose keys are invented by you to match placeholders in the HTML). The MCP server provides NO default chrome \u2014 every visible string comes from you. Each page load / refresh creates a fresh session.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "avatarId": {
+    "description": "Avatar ID from the facesign://catalog resource.",
+    "type": "string"
+   },
+   "clientReferenceId": {
+    "description": "Your own reference ID for this session",
+    "type": "string"
+   },
+   "customization": {
+    "additionalProperties": false,
+    "description": "UI customization",
+    "properties": {
+     "controls": {
+      "additionalProperties": false,
+      "properties": {
+       "autoHide": {
+        "description": "Whether controls may automatically fade out. Omitted or true preserves the default behavior; false keeps the selected buttons visible. Ignored when showUxControls is false",
+        "type": "boolean"
+       },
+       "buttons": {
+        "description": "Optional exact subset of in-session control buttons. Omit this field for the recommended default panel with all applicable controls. Set it only when the user requests a specialized flow or UI; for example, [\"captions\"] creates a captions-only panel, while an empty array hides the panel. Ignored when showUxControls is false",
+        "items": {
+         "enum": [
+          "microphone",
+          "camera",
+          "captions",
+          "language",
+          "close"
+         ],
+         "type": "string"
+        },
+        "type": "array"
+       },
+       "captionsOpenedByDefault": {
+        "description": "Start the session with the closed-captions (transcript) panel open. Omitted or false keeps it closed. The user can toggle it with the CC button either way. Set it for accessibility, or when viewers may be reading along in a second language. Ignored when showUxControls is false",
+        "type": "boolean"
+       },
+       "showUxControls": {
+        "description": "Master switch for the in-session control panel. When false the panel is not rendered and every other controls.* setting has no effect",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "permissionsPage": {
+      "additionalProperties": false,
+      "properties": {
+       "backgroundColor": {
+        "type": "string"
+       },
+       "backgroundType": {
+        "enum": [
+         "AVATAR",
+         "COLOR"
+        ],
+        "type": "string"
+       },
+       "buttonText": {
+        "type": "string"
+       },
+       "buttonTextTranslates": {
+        "additionalProperties": {
+         "type": "string"
+        },
+        "description": "Localized permission-button text, for example { es: 'Continuar' }",
+        "type": "object"
+       },
+       "mainHeading": {
+        "type": "string"
+       },
+       "mainHeadingTranslates": {
+        "$ref": "#/properties/customization/properties/permissionsPage/properties/buttonTextTranslates",
+        "description": "Localized permission-page headings"
+       },
+       "subheading": {
+        "type": "string"
+       },
+       "subheadingTranslates": {
+        "$ref": "#/properties/customization/properties/permissionsPage/properties/buttonTextTranslates",
+        "description": "Localized permission-page subheadings"
+       }
+      },
+      "type": "object"
+     }
+    },
+    "type": "object"
+   },
+   "defaultLang": {
+    "description": "Optional fallback BCP-47 language code used when the end-user's browser language is not in `langs`. DEFAULT BEHAVIOUR: OMIT this parameter. The MCP server falls back to 'en' internally only as a last-resort for UI string lookup; you should not hardcode a default language here unless the user explicitly asks for one. When set, must be one of the codes in `langs` (if `langs` is also set).",
+    "type": "string"
+   },
+   "extractionSchema": {
+    "description": "Optional schema describing fields the FaceSign backend should extract from the session transcript using an LLM. Results are populated post-session at `session.report.extractedData` as `{ [fieldName]: string | number | boolean | null }` (null when the transcript did not contain the data \u2014 every field is treated as optional). Use this for structured data collection that does NOT need its own dedicated node \u2014 e.g. follow-up questions in a single CONVERSATION node where you'd otherwise have to author multiple branching outcomes. The conversation flow itself is unaffected; extraction runs on the final transcript. Render the results in your recapHtml when present.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "description": {
+       "description": "Natural-language hint for the LLM describing what to look for in the transcript. This is the primary extraction signal \u2014 be specific (e.g. \"the user's full legal name\" rather than \"name\").",
+       "type": "string"
+      },
+      "enum": {
+       "description": "Optional allowed string values. When set, the LLM normalizes free-form answers (e.g. \"yeah\", \"sure\") into one of the listed values. Recommended for yes/no or fixed-choice questions.",
+       "items": {
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "fieldName": {
+       "description": "Key under which the extracted value appears in session.report.extractedData.",
+       "type": "string"
+      },
+      "type": {
+       "description": "Expected value type. `date` is returned as an ISO 8601 string.",
+       "enum": [
+        "string",
+        "number",
+        "boolean",
+        "date"
+       ],
+       "type": "string"
+      }
+     },
+     "required": [
+      "fieldName",
+      "type",
+      "description"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "flow": {
+    "description": "Array of nodes forming the session's directed graph",
+    "items": {
+     "anyOf": [
+      {
+       "additionalProperties": false,
+       "properties": {
+        "id": {
+         "description": "Unique node identifier",
+         "type": "string"
+        },
+        "outcome": {
+         "description": "The id of the next node",
+         "type": "string"
+        },
+        "type": {
+         "const": "start",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "type",
+        "outcome"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "id": {
+         "description": "Unique node identifier",
+         "type": "string"
+        },
+        "type": {
+         "const": "end",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "type"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "awaitExternal": {
+         "additionalProperties": false,
+         "description": "Optional background poll: the avatar keeps talking (normal outcomes stay active) while an external result becomes ready; exits via onDataReady/onTimeout/onError",
+         "properties": {
+          "exits": {
+           "additionalProperties": false,
+           "description": "Where to route when the background poll resolves",
+           "properties": {
+            "onDataReady": {
+             "description": "Node id when the endpoint returns HTTP 200 (result ready)",
+             "type": "string"
+            },
+            "onError": {
+             "description": "Node id when the call errors",
+             "type": "string"
+            },
+            "onTimeout": {
+             "description": "Node id when poll.timeoutMs elapses first",
+             "type": "string"
+            }
+           },
+           "required": [
+            "onDataReady",
+            "onTimeout",
+            "onError"
+           ],
+           "type": "object"
+          },
+          "poll": {
+           "additionalProperties": false,
+           "description": "Polling cadence and overall timeout",
+           "properties": {
+            "intervalMs": {
+             "description": "Delay between polls in milliseconds",
+             "type": "number"
+            },
+            "timeoutMs": {
+             "description": "Total time to keep polling before giving up",
+             "type": "number"
+            }
+           },
+           "required": [
+            "intervalMs",
+            "timeoutMs"
+           ],
+           "type": "object"
+          },
+          "request": {
+           "additionalProperties": false,
+           "description": "The endpoint to poll in the background",
+           "properties": {
+            "method": {
+             "description": "HTTP method. Defaults to POST (JSON body); GET sends vars as query params",
+             "enum": [
+              "GET",
+              "POST"
+             ],
+             "type": "string"
+            },
+            "url": {
+             "description": "Endpoint to call (must pass the server-side allowlist). The current sessionId is appended automatically as a query parameter",
+             "type": "string"
+            },
+            "vars": {
+             "description": "Payload variables, each resolving to a literal or a session value",
+             "items": {
+              "additionalProperties": false,
+              "properties": {
+               "name": {
+                "description": "Key under which the value is placed in the request payload",
+                "type": "string"
+               },
+               "value": {
+                "anyOf": [
+                 {
+                  "additionalProperties": false,
+                  "properties": {
+                   "type": {
+                    "const": "literal",
+                    "type": "string"
+                   },
+                   "value": {
+                    "description": "The literal scalar value",
+                    "type": [
+                     "string",
+                     "number",
+                     "boolean"
+                    ]
+                   }
+                  },
+                  "required": [
+                   "type",
+                   "value"
+                  ],
+                  "type": "object"
+                 },
+                 {
+                  "additionalProperties": false,
+                  "properties": {
+                   "field": {
+                    "description": "The field/key name within the source",
+                    "type": "string"
+                   },
+                   "source": {
+                    "description": "Source to resolve the referenced value from",
+                    "enum": [
+                     "extractedData",
+                     "providedData"
+                    ],
+                    "type": "string"
+                   },
+                   "type": {
+                    "const": "ref",
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "type",
+                   "source",
+                   "field"
+                  ],
+                  "type": "object"
+                 }
+                ],
+                "description": "Literal value or a reference resolved from session data"
+               }
+              },
+              "required": [
+               "name",
+               "value"
+              ],
+              "type": "object"
+             },
+             "type": "array"
+            }
+           },
+           "required": [
+            "url"
+           ],
+           "type": "object"
+          }
+         },
+         "required": [
+          "request",
+          "poll",
+          "exits"
+         ],
+         "type": "object"
+        },
+        "doesNotRequireReply": {
+         "description": "If true, avatar speaks without waiting for user reply",
+         "type": "boolean"
+        },
+        "id": {
+         "description": "Unique node identifier",
+         "type": "string"
+        },
+        "outcomes": {
+         "description": "Array of {id, targetNodeId, condition} routing entries",
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "condition": {
+            "description": "Condition description, e.g. \"default\", \"user says yes\"",
+            "type": "string"
+           },
+           "id": {
+            "type": "string"
+           },
+           "targetNodeId": {
+            "description": "The id of the node to route to",
+            "type": "string"
+           }
+          },
+          "required": [
+           "id",
+           "targetNodeId",
+           "condition"
+          ],
+          "type": "object"
+         },
+         "minItems": 1,
+         "type": "array"
+        },
+        "prompt": {
+         "description": "What the avatar says to the user",
+         "type": "string"
+        },
+        "type": {
+         "const": "conversation",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "type",
+        "prompt",
+        "outcomes"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "id": {
+         "description": "Unique node identifier",
+         "type": "string"
+        },
+        "outcomes": {
+         "additionalProperties": false,
+         "description": "Record mapping each outcome to a target node id. All four are required",
+         "properties": {
+          "deepfakeDetected": {
+           "description": "Node id when deepfake is detected",
+           "type": "string"
+          },
+          "inconclusive": {
+           "description": "Node id when the check produced no verdict \u2014 the detector could not decide, did not run, or there was nothing to analyse. This is our failure, not the user's: route it to a retry, a step-up or a manual review, never to the happy path by default",
+           "type": "string"
+          },
+          "livenessDetected": {
+           "description": "Node id when liveness is confirmed",
+           "type": "string"
+          },
+          "noFace": {
+           "description": "Node id when frames were captured but no face is on them",
+           "type": "string"
+          }
+         },
+         "required": [
+          "livenessDetected",
+          "deepfakeDetected",
+          "noFace",
+          "inconclusive"
+         ],
+         "type": "object"
+        },
+        "type": {
+         "const": "liveness_detection",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "type",
+        "outcomes"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "id": {
+         "description": "Unique node identifier",
+         "type": "string"
+        },
+        "outcomes": {
+         "additionalProperties": false,
+         "description": "Record mapping each outcome to a target node id",
+         "properties": {
+          "canceled": {
+           "description": "Node id when user cancels",
+           "type": "string"
+          },
+          "emailEntered": {
+           "description": "Node id when email is provided",
+           "type": "string"
+          }
+         },
+         "required": [
+          "emailEntered",
+          "canceled"
+         ],
+         "type": "object"
+        },
+        "prompt": {
+         "description": "Optional phrase the avatar says at the moment the email input field appears (direct speech, e.g. \"Could you please enter your email address?\"). Keep it short \u2014 one sentence. Omit to let the avatar stay silent while the field is shown.",
+         "type": "string"
+        },
+        "type": {
+         "const": "enter_email",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "type",
+        "outcomes"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "id": {
+         "description": "Unique node identifier",
+         "type": "string"
+        },
+        "outcomes": {
+         "description": "Array of {id, targetNodeId, condition} routing entries",
+         "items": {
+          "$ref": "#/properties/flow/items/anyOf/2/properties/outcomes/items"
+         },
+         "minItems": 1,
+         "type": "array"
+        },
+        "type": {
+         "const": "data_validation",
+         "type": "string"
+        },
+        "validation": {
+         "additionalProperties": false,
+         "properties": {
+          "action": {
+           "type": "string"
+          },
+          "field": {
+           "type": "string"
+          },
+          "value": {
+           "type": "string"
+          }
+         },
+         "required": [
+          "field",
+          "action"
+         ],
+         "type": "object"
+        }
+       },
+       "required": [
+        "id",
+        "type",
+        "validation",
+        "outcomes"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "allowedDocumentTypes": {
+         "description": "Allowed document types, e.g. [\"id\", \"passport\", \"dl\"]",
+         "items": {
+          "type": "string"
+         },
+         "minItems": 1,
+         "type": "array"
+        },
+        "id": {
+         "description": "Unique node identifier",
+         "type": "string"
+        },
+        "outcomes": {
+         "additionalProperties": false,
+         "description": "Record mapping each outcome to a target node id",
+         "properties": {
+          "scanSuccess": {
+           "description": "Node id on successful scan",
+           "type": "string"
+          },
+          "scanTimeout": {
+           "description": "Node id on scan timeout",
+           "type": "string"
+          },
+          "userCancelled": {
+           "description": "Node id when user cancels",
+           "type": "string"
+          }
+         },
+         "required": [
+          "scanSuccess",
+          "userCancelled",
+          "scanTimeout"
+         ],
+         "type": "object"
+        },
+        "scanningMode": {
+         "description": "Scanning mode",
+         "enum": [
+          "single",
+          "automatic"
+         ],
+         "type": "string"
+        },
+        "type": {
+         "const": "document_scan",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "type",
+        "scanningMode",
+        "allowedDocumentTypes",
+        "outcomes"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "id": {
+         "description": "Unique node identifier",
+         "type": "string"
+        },
+        "outcomes": {
+         "additionalProperties": false,
+         "description": "Record mapping each outcome to a target node id",
+         "properties": {
+          "newUser": {
+           "description": "Node id when user is new",
+           "type": "string"
+          },
+          "noFace": {
+           "description": "Node id when no face is found",
+           "type": "string"
+          },
+          "recognized": {
+           "description": "Node id when user is recognized",
+           "type": "string"
+          }
+         },
+         "required": [
+          "recognized",
+          "newUser",
+          "noFace"
+         ],
+         "type": "object"
+        },
+        "type": {
+         "const": "recognition",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "type",
+        "outcomes"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "captureInstructions": {
+         "type": "string"
+        },
+        "id": {
+         "description": "Unique node identifier",
+         "type": "string"
+        },
+        "outcomes": {
+         "additionalProperties": false,
+         "description": "Record mapping each outcome to a target node id",
+         "properties": {
+          "cancelled": {
+           "description": "Node id when user cancels",
+           "type": "string"
+          },
+          "error": {
+           "description": "Node id on error",
+           "type": "string"
+          },
+          "notPassed": {
+           "description": "Node id when face scan fails",
+           "type": "string"
+          },
+          "passed": {
+           "description": "Node id when face scan passes",
+           "type": "string"
+          }
+         },
+         "required": [
+          "passed",
+          "notPassed",
+          "cancelled",
+          "error"
+         ],
+         "type": "object"
+        },
+        "requireAILivenessCheck": {
+         "type": "boolean"
+        },
+        "requireLivenessChallenge": {
+         "type": "boolean"
+        },
+        "similarityThreshold": {
+         "description": "0-1, how similar faces must be",
+         "type": "number"
+        },
+        "type": {
+         "const": "face_scan",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "type",
+        "outcomes"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "emailTemplate": {
+         "type": "string"
+        },
+        "expirySeconds": {
+         "description": "OTP expiry in seconds, default 300",
+         "type": "number"
+        },
+        "id": {
+         "description": "Unique node identifier",
+         "type": "string"
+        },
+        "maxAttempts": {
+         "description": "Max verification attempts, default 3",
+         "type": "number"
+        },
+        "otpLength": {
+         "description": "OTP length 4-8, default 6",
+         "type": "number"
+        },
+        "outcomes": {
+         "additionalProperties": false,
+         "description": "Record mapping each outcome to a target node id",
+         "properties": {
+          "cancelled": {
+           "description": "Node id when user cancels",
+           "type": "string"
+          },
+          "delivery_failed": {
+           "description": "Node id when delivery fails",
+           "type": "string"
+          },
+          "error": {
+           "description": "Node id on error",
+           "type": "string"
+          },
+          "failed_unverified": {
+           "description": "Node id when max attempts exhausted",
+           "type": "string"
+          },
+          "verified": {
+           "description": "Node id when OTP verified",
+           "type": "string"
+          }
+         },
+         "required": [
+          "verified",
+          "delivery_failed",
+          "failed_unverified",
+          "cancelled",
+          "error"
+         ],
+         "type": "object"
+        },
+        "resendAfterSeconds": {
+         "description": "Seconds before allowing OTP resend",
+         "type": "number"
+        },
+        "showUI": {
+         "description": "Whether to show the OTP input UI",
+         "type": "boolean"
+        },
+        "type": {
+         "const": "two_factor_email",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "type",
+        "outcomes"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "expirySeconds": {
+         "description": "OTP expiry in seconds, default 300",
+         "type": "number"
+        },
+        "id": {
+         "description": "Unique node identifier",
+         "type": "string"
+        },
+        "maxAttempts": {
+         "description": "Max verification attempts, default 3",
+         "type": "number"
+        },
+        "otpLength": {
+         "description": "OTP length 4-8, default 6",
+         "type": "number"
+        },
+        "outcomes": {
+         "additionalProperties": false,
+         "description": "Record mapping each outcome to a target node id",
+         "properties": {
+          "cancelled": {
+           "description": "Node id when user cancels",
+           "type": "string"
+          },
+          "delivery_failed": {
+           "description": "Node id when delivery fails",
+           "type": "string"
+          },
+          "error": {
+           "description": "Node id on error",
+           "type": "string"
+          },
+          "failed_unverified": {
+           "description": "Node id when max attempts exhausted",
+           "type": "string"
+          },
+          "verified": {
+           "description": "Node id when OTP verified",
+           "type": "string"
+          }
+         },
+         "required": [
+          "verified",
+          "delivery_failed",
+          "failed_unverified",
+          "cancelled",
+          "error"
+         ],
+         "type": "object"
+        },
+        "resendAfterSeconds": {
+         "description": "Seconds before allowing OTP resend",
+         "type": "number"
+        },
+        "showUI": {
+         "description": "Whether to show the OTP input UI",
+         "type": "boolean"
+        },
+        "smsTemplate": {
+         "type": "string"
+        },
+        "type": {
+         "const": "two_factor_sms",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "type",
+        "outcomes"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "id": {
+         "description": "Unique node identifier",
+         "type": "string"
+        },
+        "outcomes": {
+         "additionalProperties": false,
+         "description": "Record mapping each outcome to a target node id",
+         "properties": {
+          "permissionsDenied": {
+           "description": "Node id when permissions are denied",
+           "type": "string"
+          },
+          "permissionsGranted": {
+           "description": "Node id when permissions are granted",
+           "type": "string"
+          }
+         },
+         "required": [
+          "permissionsGranted",
+          "permissionsDenied"
+         ],
+         "type": "object"
+        },
+        "permissions": {
+         "additionalProperties": false,
+         "description": "Which permissions to request",
+         "properties": {
+          "camera": {
+           "description": "Request camera access",
+           "type": "boolean"
+          },
+          "microphone": {
+           "description": "Request microphone access",
+           "type": "boolean"
+          }
+         },
+         "type": "object"
+        },
+        "prompt": {
+         "description": "Optional message the avatar says (direct speech mode, e.g. 'Say: Please enable your camera.')",
+         "type": "string"
+        },
+        "type": {
+         "const": "permissions",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "type",
+        "permissions",
+        "outcomes"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "id": {
+         "description": "Unique node identifier",
+         "type": "string"
+        },
+        "outcomes": {
+         "additionalProperties": false,
+         "description": "Record mapping each outcome to a target node id",
+         "properties": {
+          "imageUnavailable": {
+           "description": "Node id when one or both images could not be obtained",
+           "type": "string"
+          },
+          "match": {
+           "description": "Node id when faces match",
+           "type": "string"
+          },
+          "noMatch": {
+           "description": "Node id when faces do not match",
+           "type": "string"
+          }
+         },
+         "required": [
+          "match",
+          "noMatch",
+          "imageUnavailable"
+         ],
+         "type": "object"
+        },
+        "similarityThreshold": {
+         "description": "0-1, minimum similarity score required for a match",
+         "type": "number"
+        },
+        "sourceA": {
+         "additionalProperties": false,
+         "description": "First face image source",
+         "properties": {
+          "providedDataKey": {
+           "description": "Required when source is 'providedData' \u2014 the key in providedData that holds the image URL",
+           "type": "string"
+          },
+          "source": {
+           "description": "Source of the face image",
+           "enum": [
+            "sessionVideo",
+            "faceScan",
+            "providedData",
+            "documentPhoto"
+           ],
+           "type": "string"
+          }
+         },
+         "required": [
+          "source"
+         ],
+         "type": "object"
+        },
+        "sourceB": {
+         "additionalProperties": false,
+         "description": "Second face image source",
+         "properties": {
+          "providedDataKey": {
+           "$ref": "#/properties/flow/items/anyOf/12/properties/sourceA/properties/providedDataKey"
+          },
+          "source": {
+           "$ref": "#/properties/flow/items/anyOf/12/properties/sourceA/properties/source"
+          }
+         },
+         "required": [
+          "source"
+         ],
+         "type": "object"
+        },
+        "type": {
+         "const": "face_compare",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "type",
+        "sourceA",
+        "sourceB",
+        "outcomes"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "id": {
+         "description": "Unique node identifier",
+         "type": "string"
+        },
+        "outcome": {
+         "description": "Node id to advance to after the response is merged into providedData (never branches)",
+         "type": "string"
+        },
+        "request": {
+         "additionalProperties": false,
+         "description": "The external endpoint to call and the payload to send",
+         "properties": {
+          "method": {
+           "$ref": "#/properties/flow/items/anyOf/2/properties/awaitExternal/properties/request/properties/method"
+          },
+          "url": {
+           "$ref": "#/properties/flow/items/anyOf/2/properties/awaitExternal/properties/request/properties/url"
+          },
+          "vars": {
+           "$ref": "#/properties/flow/items/anyOf/2/properties/awaitExternal/properties/request/properties/vars"
+          }
+         },
+         "required": [
+          "url"
+         ],
+         "type": "object"
+        },
+        "type": {
+         "const": "external_call",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "type",
+        "request",
+        "outcome"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "default": {
+         "description": "Node id to route to when no rule matches",
+         "type": "string"
+        },
+        "id": {
+         "description": "Unique node identifier",
+         "type": "string"
+        },
+        "rules": {
+         "description": "Rules evaluated top-to-bottom; first match wins",
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "left": {
+            "additionalProperties": false,
+            "description": "Reference to the session value to test",
+            "properties": {
+             "field": {
+              "description": "The field/key name within the source",
+              "type": "string"
+             },
+             "source": {
+              "description": "Where the value is read from: 'extractedData' (a field from extractionSchema, extracted on demand from the transcript) or 'providedData' (a key set at creation or written by a prior external_call)",
+              "enum": [
+               "extractedData",
+               "providedData"
+              ],
+              "type": "string"
+             }
+            },
+            "required": [
+             "source",
+             "field"
+            ],
+            "type": "object"
+           },
+           "operator": {
+            "description": "Comparison operator (omit 'right' for 'exists'/'notExists')",
+            "enum": [
+             "equals",
+             "notEquals",
+             "gt",
+             "lt",
+             "gte",
+             "lte",
+             "exists",
+             "notExists"
+            ],
+            "type": "string"
+           },
+           "outcome": {
+            "description": "Node id to route to when this rule matches",
+            "type": "string"
+           },
+           "right": {
+            "anyOf": [
+             {
+              "$ref": "#/properties/flow/items/anyOf/2/properties/awaitExternal/properties/request/properties/vars/items/properties/value/anyOf/0"
+             },
+             {
+              "$ref": "#/properties/flow/items/anyOf/2/properties/awaitExternal/properties/request/properties/vars/items/properties/value/anyOf/1"
+             }
+            ],
+            "description": "Literal or reference to compare against; omit for 'exists'/'notExists'"
+           }
+          },
+          "required": [
+           "left",
+           "operator",
+           "outcome"
+          ],
+          "type": "object"
+         },
+         "minItems": 1,
+         "type": "array"
+        },
+        "type": {
+         "const": "field_condition",
+         "type": "string"
+        }
+       },
+       "required": [
+        "id",
+        "type",
+        "rules",
+        "default"
+       ],
+       "type": "object"
+      }
+     ]
+    },
+    "type": "array"
+   },
+   "landingHtml": {
+    "description": "REQUIRED. Raw HTML/JS for the pre-session landing page. NO CDATA, NO markdown fences. Every visible string MUST come from `uiStrings` \u2014 reference them via {{KEY}} placeholders (interpolated at inject time) or via window.t('KEY') (dynamic at runtime). Contract: reads window.__FACESIGN_FLOW__ (the flow array). MUST call window.__startSession(updatedFlow?) to launch the session. The session iframe has its own Start button for audio/video autoplay gesture \u2014 the landing page does NOT need one for that purpose.\n\nSTYLE GUIDE (Pre-Session Page):\nMatch this visual style for consistency with the FaceSign UI.\n\nBackground: Light gray #f5f7fa. Full-viewport centered layout (flexbox, min-height: 100vh; min-height: 100dvh \u2014 always use dvh with vh fallback for iOS compatibility).\n\nCard: White, border-radius 16px, box-shadow 0 4px 24px rgba(0,0,0,.08), padding 2.5-3rem, max-width 480-600px, centered.\n\nHeadings: Bold, 1.4-1.8rem, color #1a1a2e, centered in card.\n\nInputs: Full-width, padding 14px 16px, border 2px solid #d1d5db, border-radius 12px, font-size 1rem. Focus: border-color #5b7bab. Placeholder color #9ca3af.\n\nPrimary buttons: Background #7b8fb5 (steel-blue), color white, font-weight 600, font-size 1.05rem, border-radius 50px (pill shape), padding 14px, full-width in card. Hover: background #6a7fa5. Disabled: background #c5cdd8, cursor not-allowed.\n\nLinks: Color #4573b8, no underline, underline on hover. Back navigation: \"\u2190 Back\" at top-left of card, color #4573b8, font-size 0.95rem.\n\nProfile images: Circular (border-radius 50%), 120-150px diameter, centered, subtle box-shadow.\n\nSpacing: 2.5-3rem card padding, 1.5rem between form groups, 1rem between label and input, 2rem above primary button.\n\nFont: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif.\n\n\nCOMMON MISTAKES TO AVOID (UI/CSS):\n\n1. Never set padding or margin on body\nThe custom HTML is injected into a host page that controls its own layout. Setting padding, margin, or min-height on body will conflict with the host page styles and create unwanted spacing.\n\nWrong:\nbody { padding: 2rem; min-height: 100vh; }\n(Also wrong \u2014 using only 100vh without dvh fallback. Always add min-height: 100dvh after 100vh for iOS Safari.)\n\nRight \u2014 use a wrapper element instead:\nbody { margin: 0; padding: 0; }\n.wrap { max-width: 860px; margin: 0 auto; padding: 2rem; }\n\nThe same applies to background on body \u2014 avoid it unless you are certain the host page does not set its own background.\n\n2. Use HTML entities for emoji, not JS unicode escapes\nWhen building HTML strings in JavaScript (via innerHTML, string concatenation, etc.), JS unicode escapes like \\ud83c\\udfa5 will NOT render as emoji. They only work inside JS string literals that are directly displayed via textContent or similar APIs.\n\nWrong \u2014 renders as garbled text:\nh += '<div class=\"title\">\\ud83c\\udfa5 Video AI Analysis</div>';\n\nRight \u2014 use HTML numeric entities:\nh += '<div class=\"title\">&#127909; Video AI Analysis</div>';\n\nAlso right \u2014 use emoji directly in static HTML (outside of JS):\n<div class=\"title\">\ud83c\udfa5 Video AI Analysis</div>\n\nCommon emoji HTML entities reference:\n&#128100; \ud83d\udc64 User/person\n&#127874; \ud83c\udf82 Birthday cake\n&#128205; \ud83d\udccd Pin/location\n&#128187; \ud83d\udcbb Computer\n&#10024;  \u2728 Sparkles\n&#128269; \ud83d\udd0d Search\n&#127909; \ud83c\udfa5 Camera\n&#127916; \ud83c\udfac Clapper board\n&#128203; \ud83d\udccb Clipboard\n&#9895;   \u26a7 Gender symbol\n&#10003;  \u2713 Checkmark\n\n3. CSS class name collision between landingHtml and recapHtml\nCRITICAL: landingHtml and recapHtml are injected into the SAME host document. If both fragments use the same class names (e.g., .card, .container, .header), styles from one will leak into the other, causing layout breakage.\n\nALWAYS use unique prefixed class names:\n- landingHtml (pre-session/landing page): prefix all classes with .lp- (e.g., .lp-card, .lp-header, .lp-btn)\n- recapHtml (results page): prefix all classes with .r- (e.g., .r-card, .r-header, .r-wrap)\n\nWrong \u2014 causes collisions:\n/* in landingHtml */  .card { max-width: 460px; }\n/* in recapHtml */    .card { max-width: 900px; }\n\nRight \u2014 namespaced:\n/* in landingHtml */  .lp-card { max-width: 460px; }\n/* in recapHtml */    .r-card { max-width: 900px; }\n\n\nCOMMON MISTAKES TO AVOID (Code/API):\n\n4. window.__startSession race condition\nNEVER call window.__startSession() synchronously in a click handler. The host page may not have injected the function yet. ALWAYS use polling:\n\nfunction waitAndStart(input) {\n  var n = 0;\n  var iv = setInterval(function() {\n    n++;\n    if (typeof window.__startSession === 'function') {\n      clearInterval(iv);\n      window.__startSession(input);\n    } else if (n > 100) {\n      clearInterval(iv);\n      document.body.innerHTML = '<p style=\"text-align:center;padding:2rem;color:red;\">Failed to initialize session. Please refresh.</p>';\n    }\n  }, 100);\n}\n\nWrong:\nstartBtn.addEventListener('click', function() { window.__startSession(); });\n\nRight:\nstartBtn.addEventListener('click', function() { waitAndStart(); });\n\nFor exported apps, NEVER send window.__FACESIGN_FLOW__ or another graph back to\nthe server. To select a flow declared in export_app, pass its ID:\nwaitAndStart({ flowId: 'enhanced', providedData: { name: nameInput.value } });\n\n5. Permissions are automatic \u2014 do NOT add a permissions node by default\nFaceSign automatically requests camera and microphone permissions at session start. Most flows do NOT need a PERMISSIONS node. Only add one in these specific cases:\n(a) The user wants to request microphone and camera permissions separately at different times during the flow (instead of both at once at session start).\n(b) The user wants to move the permission request to the initial page (landingHtml), outside the FaceSign flow itself.\n\n6. nodeReport.type values are lowercase snake_case\nThe API returns nodeReport.type in lowercase snake_case: \"face_compare\", \"document_scan\", \"conversation\", \"permissions\", \"liveness_detection\", etc. \u2014 NOT uppercase like \"FACE_COMPARE\".\n\nALWAYS use case-insensitive comparison when looking up node reports:\n\nfunction getNode(r, type) {\n  var rr = (r && r.nodeReports) || [];\n  var tl = type.toLowerCase();\n  for (var i = 0; i < rr.length; i++) {\n    if (rr[i].type && rr[i].type.toLowerCase() === tl) return rr[i];\n  }\n  return null;\n}\n\n// Usage: getNode(report, 'face_compare'), getNode(report, 'document_scan')\n\n7. Microblink document report \u2014 nested field structure\nDOCUMENT_SCAN nodeReport.report fields are NOT plain strings. They use Microblink's nested structure:\n  firstName: { latin: { value: \"JANICE\" } }\n  dateOfBirth: { originalString: { latin: { value: \"04/30/1970\" } } }\n  \u2014 OR \u2014\n  dateOfBirth: { day: 30, month: 4, year: 1970 }\n\nNEVER read fields directly as strings (e.g., dr.firstName will be an object, not \"JANICE\").\n\nALWAYS use this safe-value extractor:\n\nfunction sv(v) {\n  if (v == null) return '';\n  if (typeof v === 'string') return v;\n  if (v.latin && v.latin.value != null) return String(v.latin.value);\n  if (v.originalString) return sv(v.originalString);\n  if (v.day != null && v.month != null && v.year != null)\n    return v.month + '/' + v.day + '/' + v.year;\n  return '';\n}\n\n// Usage: sv(dr.firstName) \u2192 \"JANICE\", sv(dr.dateOfBirth) \u2192 \"04/30/1970\"\n\n8. videoAIAnalysis criterion is camelCase \u2014 format for display\nThe criterion field (e.g., \"facialExpressionAndMovement\", \"useOfExternalDevices\") comes in camelCase. Convert to human-readable format:\n\nfunction toStartCase(s) {\n  if (!s) return '';\n  return s.replace(/([A-Z]+)/g, function(m) { return ' ' + m.toLowerCase(); })\n    .trim().replace(/^./, function(c) { return c.toUpperCase(); });\n}\n// \"facialExpressionAndMovement\" \u2192 \"Facial expression and movement\"\n\n9. Conversation node: condition vs prompt\nIn CONVERSATION nodes:\n- \"condition\" (in outcomes) = ONLY describes the trigger event for transitioning to the next node (e.g., \"User explicitly agrees to proceed\")\n- \"prompt\" = ALL instructions for the avatar's behavior, including how to greet, how to respond to questions, how to handle objections, and how to persuade\n- User questions or objections during the conversation are handled within the SAME node (continued dialog), NOT via separate outcomes\n- Conversation nodes can have any number of outcomes depending on the use case:\n  * Branching nodes (e.g., \"what color?\") \u2192 one outcome per branch + a fallback\n  * Consent/agreement nodes \u2192 typically 2: agreement + fallback after N attempts\n- ALWAYS include a fallback outcome for when the conversation stalls (e.g., \"conversation exceeded N exchanges with no condition met\" or \"user does not want to reply\")\n\nWrong \u2014 putting behavior instructions in condition:\n\"condition\": \"User agrees. If they ask questions, answer warmly and ask again\"\n\nRight \u2014 behavior in prompt, condition is just the trigger:\n\"prompt\": \"Explain the process. If the user has questions, answer them warmly. Once they're ready, confirm.\"\n\"condition\": \"User explicitly agrees or says they are ready\"",
+    "type": "string"
+   },
+   "langs": {
+    "description": "Optional whitelist of BCP-47 language codes (from facesign://catalog) the session may use. DEFAULT BEHAVIOUR (recommended): OMIT this parameter entirely \u2014 the session then supports every language in the FaceSign catalog, and `uiStrings` must cover every catalog language. ONLY set `langs` when the user EXPLICITLY restricts the language set (e.g. 'Spanish-only demo', 'support English and Russian'). Do NOT narrow to `['en']` just because the user described the demo in English or did not mention languages \u2014 that would silently drop multilingual support. Example (explicit restriction): [\"en\", \"es\", \"ru\"]. The set of target languages for `uiStrings` is derived from this list (or the full catalog if omitted).",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "metadata": {
+    "additionalProperties": {},
+    "description": "Arbitrary metadata to attach",
+    "type": "object"
+   },
+   "postSessionLiveness": {
+    "description": "Enable post-session liveness assessment with the selected public policy version. The result is available in session.report.postSessionLiveness after the interaction.",
+    "enum": [
+     "v1",
+     "v2"
+    ],
+    "type": "string"
+   },
+   "providedData": {
+    "additionalProperties": true,
+    "description": "Pre-known user data",
+    "properties": {
+     "email": {
+      "type": "string"
+     },
+     "name": {
+      "type": "string"
+     },
+     "phone": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   },
+   "recapHtml": {
+    "description": "REQUIRED. Raw HTML/JS for the results/recap page. NO CDATA, NO markdown fences. Every visible string MUST come from `uiStrings` (via {{KEY}} or window.t('KEY')). Contract: reads window.__FACESIGN_SESSION__ (session data, re-populated on each poll), window.__FACESIGN_SESSION_ID__, window.__refetchSession() (returns Promise with updated data). The COMMON MISTAKES sections from the `landingHtml` field description apply here too \u2014 read them once and follow for both fields. For the complete session data shape (Session, SessionReport, NodeReport types, delayed vs immediate fields), read the `facesign://session-data-types` MCP resource.\n\nSTYLE GUIDE (Results/Recap Page):\nMatch this visual style for consistency with the FaceSign UI.\n\nBackground: Light gray #f5f7fa with subtle gradient to light blue at top.\n\nLayout: Single-column, max-width 900px, centered (margin 0 auto), padding 2rem.\n\nPage header: \"Session summary\" bold 1.6rem. Subtitle with date/time and duration in muted color #888, font-size 0.9rem.\n\nUser info card: White card with rounded photo (80-100px), grid of icon+text pairs for age, gender, location, device. Icons in muted blue #6b7faa.\n\nSection cards: White background, border-radius 12px, box-shadow 0 2px 12px rgba(0,0,0,.05), padding 1.5rem, margin-bottom 1.5rem.\n\nSection headings: Bold 1.15rem, color #1a1a2e, with small emoji/icon prefix (e.g. \u2728 AI Analysis, \ud83d\udd0d Detected Signals, \ud83d\udccb Transcript). Margin-bottom 1rem.\n\nStatus banners (full-width within card, border-radius 12px, padding 1rem 1.5rem, white text, bold):\n- Verified/success: background #4a9d6e, shield \u2713 icon\n- High-risk/warning: background #d97b30, \u26a0 warning icon\n\nSignal items: Left border 4px solid, padding-left 1rem, margin-bottom 1rem, background white or tinted.\n- Normal: border-color #059669, light green tint background #f0fdf4\n- Suspicious: border-color #f59e0b, light yellow tint background #fefce8\n- High-risk: border-color #ef4444, light red tint background #fef2f2\n\nStatus badges (inline, pill): border-radius 6px, padding 2px 10px, font-weight 700, font-size 0.8rem, uppercase.\n- RECOGNIZED/NORMAL: background #d1fae5, color #065f46\n- SUSPICIOUS: background #fef3c7, color #92400e\n\nConfidence scores: Right-aligned, font-size 0.85rem, color #aaa.\n\nKey-value grid: Two-column layout. Label: small text, color #888, font-size 0.8rem, uppercase. Value: font-size 0.95rem, color #1a1a2e, below label.\n\nTranscript: Dark background #1e2a3a, border-radius 10px, padding 1.5rem, monospace font. \"CONVERSATION LOG\" header uppercase, small, muted. Each line: timestamp (gray #777), speaker label (FACESIGN: in teal #4db8a4, USER: in green #6bc96f), message text white. Line-height 1.8.\n\nVideo: Centered, border-radius 8px, max-width 100%, dark container background.\n\nFont: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif.\n\n\nBEST PRACTICES FOR STABLE RENDERING (recapHtml):\n\nSession data arrives in two stages: some fields are available immediately when the session ends (user info, AI analysis, transcript), while others require polling. Video AI analysis may take up to 60 seconds; media usually arrives sooner. Naive implementations cause layout jumping (DOM rebuild on each poll) and duplicate network requests.\n\nARCHITECTURE: Split Static vs Dynamic Rendering.\n\nrenderStatic(data) \u2014 called ONCE:\nRenders all sections that won't change: user info (age, sex, location, device), aiAnalysis.overallSummary, aiAnalysis.analysis list, transcript, documentImages.\n\nupdateDynamic(data) \u2014 called on each poll:\nUpdates ONLY sections whose data arrives asynchronously: nodeReports, videoAIAnalysis, deepfakeDetection, and media (avatarVideo, screenshots).\nIMPORTANT: nodeReports is DELAYED \u2014 do NOT render node report data (face compare results, document scan results, etc.) in renderStatic().\nEach dynamic section has its own wrapper element (e.g. <div id=\"video-ai-content\">, <div id=\"node-reports-content\">) so updates replace only that element's innerHTML, leaving the rest untouched.\nTrack completion with boolean flags (videoAIDone, recordingDone, nodeReportsDone). Once a section is populated, skip further updates.\nSet videoAIDone when videoAIAnalysisStatus is either `succeeded` or `failed`. A failed analysis is terminal: replace the spinner with an unavailable message and do not interpret the missing result as clean evidence. If the status is absent, analysis was not requested, so omit the section.\n\nHTML STRUCTURE:\n<!-- Static sections: rendered once -->\n<div id=\"userinfo-card\"></div>\n<div id=\"summary-card\"></div>\n<div id=\"analysis-card\"></div>\n\n<!-- Dynamic sections: inner content updated by polling -->\n<div id=\"video-ai-card\">\n  <div class=\"card\">\n    <div class=\"card-title\">Video AI Analysis</div>\n    <div id=\"video-ai-content\"><!-- spinner initially, replaced when data arrives --></div>\n  </div>\n</div>\n\n<div id=\"recording-card\">\n  <div class=\"card\">\n    <div class=\"card-title\">Session Recording</div>\n    <div id=\"recording-content\"><!-- spinner initially, replaced when data arrives --></div>\n  </div>\n</div>\n\n<!-- Static section: rendered once -->\n<div id=\"transcript-card\"></div>\n\nPOLLING: Single Entry Point with Guard (IIFE pattern):\nIMPORTANT: Polling MUST be limited \u2014 max 30 attempts, max 2 minutes total. Stop polling when limits are reached even if some data hasn't arrived.\n(function() {\n  var polling = false;\n  var pollCount = 0;\n  var MAX_POLLS = 30;\n  var startTime = Date.now();\n  var MAX_DURATION = 2 * 60 * 1000; // 2 minutes\n  var videoAIDone = false;\n  var recordingDone = false;\n  var nodeReportsDone = false;\n\n  function shouldStop() {\n    return pollCount >= MAX_POLLS || (Date.now() - startTime) >= MAX_DURATION;\n  }\n\n  function poll() {\n    if (polling) return;\n    if (shouldStop()) return;\n    polling = true;\n    pollCount++;\n    if (typeof window.__refetchSession !== 'function') {\n      polling = false;\n      setTimeout(poll, 2000);\n      return;\n    }\n    window.__refetchSession()\n      .then(function(data) {\n        polling = false;\n        updateDynamic(data);\n        if ((!videoAIDone || !recordingDone || !nodeReportsDone) && !shouldStop()) setTimeout(poll, 4000);\n      })\n      .catch(function() {\n        polling = false;\n        if (!shouldStop()) setTimeout(poll, 4000);\n      });\n  }\n\n  function init() {\n    var data = window.__FACESIGN_SESSION__;\n    if (!data) return;\n    renderStatic(data);\n    var needMore = updateDynamic(data);\n    if (needMore) setTimeout(poll, 4000);\n  }\n\n  if (window.__FACESIGN_SESSION__) {\n    init();\n  } else {\n    var chk = setInterval(function() {\n      if (window.__FACESIGN_SESSION__) { clearInterval(chk); init(); }\n    }, 500);\n  }\n})();\n\nKEY RULES:\n- Call renderStatic() exactly once \u2014 avoids DOM rebuild and layout jumps\n- updateDynamic() only touches dedicated container elements \u2014 no reflow outside the updated section\n- Use a polling boolean guard \u2014 prevents concurrent __refetchSession() calls\n- ALWAYS limit polling \u2014 max 30 attempts AND max 2 minutes total. Never poll indefinitely.\n- Use videoAIDone / recordingDone / nodeReportsDone flags \u2014 stops updating a section once its data has been rendered\n- For video AI, derive videoAIDone from videoAIAnalysisStatus, not from the presence of videoAIAnalysis alone\n- nodeReports is DELAYED \u2014 always render node report data (face compare, document scan, etc.) in updateDynamic(), never in renderStatic()\n- Single init() entry point via IIFE \u2014 eliminates duplicate initialization paths\n- Check typeof __refetchSession === 'function' before calling \u2014 handles the case where the API isn't injected yet\n- Use setTimeout not setInterval for polling \u2014 ensures the next poll starts only after the previous one completes\n- nodeReport.type is lowercase snake_case (\"face_compare\", \"document_scan\") \u2014 use case-insensitive comparison\n- Document scan report fields are Microblink nested objects \u2014 use a safe-value extractor function (see COMMON MISTAKES)\n- videoAIAnalysis criterion is camelCase \u2014 convert to human-readable with toStartCase() (see COMMON MISTAKES)\n\nSUMMARY: Render once, patch selectively, poll safely with limits. Static content is written to the DOM a single time. Dynamic content (nodeReports, videoAIAnalysis, media) targets specific container elements. Polling is serialized with a guard flag and stops as soon as all async data has arrived or limits are reached (max 30 attempts / 2 minutes).",
+    "type": "string"
+   },
+   "uiStrings": {
+    "additionalProperties": {
+     "additionalProperties": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "description": "REQUIRED. Per-language UI string dictionary: { langId: { key: translatedString } }. You invent the keys to match the {{KEY}} placeholders / window.t('KEY') calls in your landingHtml and recapHtml. Must contain an entry for `en` (ultimate runtime fallback) and for every language in `langs` (or every catalog language if `langs` is omitted). Every per-language dict must share the IDENTICAL set of keys. Example: { \"en\": { \"START\": \"Start\", \"LOADING\": \"Loading...\" }, \"fr\": { \"START\": \"Commencer\", \"LOADING\": \"Chargement...\" } }.",
+    "type": "object"
+   },
+   "videoAIAnalysisEnabled": {
+    "description": "Enable video AI fraud analysis",
+    "type": "boolean"
+   },
+   "zone": {
+    "description": "Data processing zone",
+    "enum": [
+     "us",
+     "eu"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "flow",
+   "landingHtml",
+   "recapHtml",
+   "uiStrings"
+  ],
+  "type": "object"
+ },
+ "name": "launch_session_ui"
+}

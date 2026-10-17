@@ -1,0 +1,626 @@
+{
+ "_meta": {
+  "openai/outputTemplate": "ui://widget/quote-compare-v41.html",
+  "openai/toolInvocation/invoked": "Fetched fabrication offers",
+  "openai/toolInvocation/invoking": "Checking fabrication vendors\u2026",
+  "openai/widgetAccessible": true,
+  "ui": {
+   "resourceUri": "ui://widget/quote-compare-v41.html"
+  }
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false
+ },
+ "description": "Narrow an existing quote with new constraints (destination ZIP the user just provided, deadline, outdoor/waterproof/heat/food-safety requirements, budget, vendor reliability, verbatim requirements terms, drawing callouts, a process filter \u2014 \"no, I meant in sheet metal\" \u2192 processes \u2014 a ship-from country filter \u2014 \"only US vendors\" \u2192 ships_from \u2014 or a vendor filter \u2014 \"only show A3D Manufacturing\" \u2192 vendors) \u2014 or CHANGE its spec: material, color, or quantities. Changing material/quantity is a spec change, not a narrowing \u2014 pass it via the material/color/quantities args, NOT as a requirements term; the affected lanes re-price with the new spec through warm vendor sessions. For side-by-side comparisons (\"how does carbon steel compare?\"), add a scenario label \u2014 labeled refines coexist instead of replacing each other (max 4). \"Organize by\" (\"sort by cheapest\", \"soonest arrival on top\", \"most green first\") is also this tool: sort_by for objective orders, sort_order + sort_label for orders you judged yourself from the previews \u2014 presentation only, instant, nothing re-prices. GOING BACK is also this tool: undo_last_step ALONE takes back exactly one refine step (the quote's steps[] names each step, newest first \u2014 the network restores the previous stored state exactly); clear removes whole constraints (\"drop the deadline\" \u2192 clear [\"deadline\"]); remove_requirements takes back individual requirements terms. Call with ONLY quote_id to re-read the quote (e.g. to pick up preview images that finished rendering).",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "bends": {
+    "anyOf": [
+     {
+      "anyOf": [
+       {
+        "not": {}
+       },
+       {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "angle_deg": {
+           "exclusiveMaximum": 180,
+           "exclusiveMinimum": 0,
+           "type": "number"
+          },
+          "direction": {
+           "enum": [
+            "up",
+            "down"
+           ],
+           "type": "string"
+          },
+          "face_id": {
+           "type": "integer"
+          },
+          "id": {
+           "maxLength": 32,
+           "minLength": 1,
+           "type": "string"
+          },
+          "line": {
+           "additionalProperties": false,
+           "properties": {
+            "p1": {
+             "items": [
+              {
+               "type": "number"
+              },
+              {
+               "type": "number"
+              },
+              {
+               "type": "number"
+              }
+             ],
+             "maxItems": 3,
+             "minItems": 3,
+             "type": "array"
+            },
+            "p2": {
+             "items": [
+              {
+               "type": "number"
+              },
+              {
+               "type": "number"
+              },
+              {
+               "type": "number"
+              }
+             ],
+             "maxItems": 3,
+             "minItems": 3,
+             "type": "array"
+            }
+           },
+           "required": [
+            "p1",
+            "p2"
+           ],
+           "type": "object"
+          },
+          "radius_mm": {
+           "exclusiveMinimum": 0,
+           "type": "number"
+          },
+          "source": {
+           "enum": [
+            "detected",
+            "user"
+           ],
+           "type": "string"
+          }
+         },
+         "required": [
+          "line",
+          "angle_deg",
+          "direction"
+         ],
+         "type": "object"
+        },
+        "maxItems": 50,
+        "type": "array"
+       }
+      ],
+      "description": "Sheet-metal bend lines, each as TWO POINTS in the part's own mm frame (flat DXF parts use z=0: a bend from (0,12.7) to (76.2,12.7) is p1 [0,12.7,0], p2 [76.2,12.7,0]). angle_deg is the target bend angle (90 = a right-angle flange), direction \"up\"/\"down\" is the fold direction relative to the flat pattern, radius_mm the requested inside radius (omit it \u2014 the shop resolves to its tooling and reports what it used). Pass these when the user articulates WHERE the bends go; a bare \"it has 2 bends\" is bend_count, not this."
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "New bend records for this part \u2014 a spec change: sheet lanes requote with exactly these bends (the list REPLACES the previous one, never patches it). Same shape as on get_fabrication_quote: each bend is two points in the part's own mm frame (flat DXF parts use z=0) plus angle_deg, direction up|down, and an optional requested radius_mm. Pass null to REMOVE every articulated bend"
+   },
+   "callouts": {
+    "description": "Dimensions you read off the user's drawing that matter (\"hole_diameter 6.5mm \u00b10.1\"). The tightest tolerance prunes vendors that cannot hold it.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "critical": {
+       "type": "boolean"
+      },
+      "name": {
+       "type": "string"
+      },
+      "tolerance_mm": {
+       "exclusiveMinimum": 0,
+       "type": "number"
+      },
+      "unit": {
+       "enum": [
+        "mm",
+        "in"
+       ],
+       "type": "string"
+      },
+      "value": {
+       "type": "number"
+      }
+     },
+     "required": [
+      "name",
+      "value",
+      "unit"
+     ],
+     "type": "object"
+    },
+    "maxItems": 50,
+    "type": "array"
+   },
+   "clear": {
+    "description": "REMOVE constraints entirely (\"drop the deadline\", \"forget the budget\", \"no more food-safe requirement\"): list the constraints to clear and each is removed from the quote \u2014 the one deliberate widening besides undo. Clearing a deadline or budget answers instantly from held offers (near-misses convert back); clearing an attribute/reliability/requirements demand re-prices honestly. Same effect as [\"any\"] on the three filter args, extended to every constraint",
+    "items": {
+     "enum": [
+      "deadline",
+      "budget",
+      "outdoor_rated",
+      "submersible",
+      "high_temp",
+      "food_safe",
+      "reliability",
+      "requirements",
+      "processes",
+      "ships_from",
+      "vendors"
+     ],
+     "type": "string"
+    },
+    "minItems": 1,
+    "type": "array"
+   },
+   "color": {
+    "description": "New color for this part (spec change \u2014 lanes requote). Colour WORDS only ('black', 'green', 'clear'); the network resolves them to each maker's stocked shades, dyes, filaments or coatings \u2014 a family word ('blue') brings back EVERY stocked shade of it, and the quote's color_shades_available lists them \u2014 never pass a material or a shade you invented. Pass null to REMOVE a previously asked color \u2014 back to vendor defaults",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "color_shades": {
+    "anyOf": [
+     {
+      "items": {
+       "maxLength": 48,
+       "minLength": 1,
+       "type": "string"
+      },
+      "maxItems": 64,
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "Narrow the board to these color SHADES exactly as the quote lists them (color_shades_available / \"Colors on this board\") \u2014 instant, nothing re-prices, the same quote id comes back with only those shades; pass null to show every shade again. Never invent a shade name."
+   },
+   "deadline": {
+    "description": "Latest acceptable delivery date, ISO YYYY-MM-DD",
+    "type": "string"
+   },
+   "finish": {
+    "description": "New surface finish (\"powder coat\", \"anodized\", \"bead blasted\") \u2014 a spec change: finish-capable lanes (sheet metal, CNC, metal print) requote WITH it; 3D-print lanes have no coating step, so they ignore the finish but keep the COLOR. A colored finish ask (\"black powder coat\") should set BOTH finish and color, so every lane lands on the buyer's color. Pass null to REMOVE a previously asked finish",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "food_safe": {
+    "type": "boolean"
+   },
+   "high_temp": {
+    "type": "boolean"
+   },
+   "inserts": {
+    "anyOf": [
+     {
+      "anyOf": [
+       {
+        "not": {}
+       },
+       {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "axis": {
+           "items": [
+            {
+             "type": "number"
+            },
+            {
+             "type": "number"
+            },
+            {
+             "type": "number"
+            }
+           ],
+           "maxItems": 3,
+           "minItems": 3,
+           "type": "array"
+          },
+          "depth_mm": {
+           "exclusiveMinimum": 0,
+           "type": "number"
+          },
+          "drilled_diameter_mm": {
+           "exclusiveMinimum": 0,
+           "type": "number"
+          },
+          "face_id": {
+           "type": "integer"
+          },
+          "hole": {
+           "minimum": 1,
+           "type": "integer"
+          },
+          "insert": {
+           "enum": [
+            "nut",
+            "flush_nut",
+            "standoff",
+            "blind_standoff",
+            "stud"
+           ],
+           "type": "string"
+          },
+          "length_mm": {
+           "exclusiveMinimum": 0,
+           "type": "number"
+          },
+          "located_at_mm": {
+           "additionalProperties": false,
+           "properties": {
+            "x": {
+             "type": "number"
+            },
+            "y": {
+             "type": "number"
+            },
+            "z": {
+             "type": "number"
+            }
+           },
+           "required": [
+            "x",
+            "y",
+            "z"
+           ],
+           "type": "object"
+          },
+          "points": {
+           "items": [
+            {
+             "type": "number"
+            },
+            {
+             "type": "number"
+            },
+            {
+             "type": "number"
+            }
+           ],
+           "maxItems": 3,
+           "minItems": 3,
+           "type": "array"
+          },
+          "thread": {
+           "maxLength": 32,
+           "minLength": 1,
+           "type": "string"
+          }
+         },
+         "required": [
+          "insert",
+          "thread"
+         ],
+         "type": "object"
+        },
+        "maxItems": 200,
+        "type": "array"
+       }
+      ],
+      "description": "PEM-style hardware inserts pressed into holes of a sheet-metal part \u2014 one record per hole. `insert` is the species (nut | flush_nut | standoff | blind_standoff | stud) and `thread` its size (\"M4\", \"1/4-20\"); both are required. When known, add length_mm (standoff/stud post length), the hole's center (located_at_mm, part's own mm frame), its axis, the drilled diameter, and `points` \u2014 the signed unit vector the insert's functional side faces (flip = negate). Pass these when the user asks for press-in nuts/standoffs/studs; vendors with a hardware service price them."
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "New hardware-insert records for this part \u2014 a spec change: sheet lanes requote with exactly these inserts (the list REPLACES the previous one, never patches it). Same shape as on get_fabrication_quote: species (nut|flush_nut|standoff|blind_standoff|stud) and thread required, hole geometry optional. Pass null to REMOVE every insert"
+   },
+   "material": {
+    "description": "New material for this part (\"I need it in PLA\" \u2192 \"pla\"). A spec change: lanes requote with this material through warm vendor sessions; an explicit material here replaces the quote's material fan-out. Free-form \u2014 unstocked asks resolve to the closest stocked material with a substitution note. Do NOT pass material changes as requirements terms. Pass null to REMOVE a previously asked material (\"forget the aluminum ask\") \u2014 the ask comes off the record and the process-default material fan returns",
+    "type": [
+     "string",
+     "null"
+    ]
+   },
+   "max_budget_usd": {
+    "exclusiveMinimum": 0,
+    "type": "number"
+   },
+   "min_vendor_reviews": {
+    "description": "Only vendors with at least this many verified-purchase reviews",
+    "exclusiveMinimum": 0,
+    "type": "integer"
+   },
+   "min_vendor_stars": {
+    "description": "Only vendors whose displayed review rating is at least this many stars (1-5); vendors with no reviews yet are excluded",
+    "maximum": 5,
+    "minimum": 1,
+    "type": "number"
+   },
+   "outdoor_rated": {
+    "type": "boolean"
+   },
+   "processes": {
+    "description": "Narrow this quote to specific fabrication processes (\"no, I meant in sheet metal\" \u2192 [\"sheet metal\"]). A CONSTRAINT, not a new quote: excluded lanes drop while warm vendor sessions survive, and further refines inherit the filter. Friendly terms accepted (\"sheet metal\", \"3d printing\", \"cnc\", \"laser\"); pass [\"any\"] to clear the filter and show every process again. When comparison scenarios are open and the user narrows the process, re-refine EVERY active scenario label with this same arg so all columns prune together",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 8,
+    "type": "array"
+   },
+   "proven_spec_orders": {
+    "description": "Only vendors with at least N completed orders for this exact process+material \u2014 \"a vendor that prints PC reliably\"",
+    "exclusiveMinimum": 0,
+    "type": "integer"
+   },
+   "quantities": {
+    "anyOf": [
+     {
+      "items": {
+       "exclusiveMinimum": 0,
+       "type": "integer"
+      },
+      "maxItems": 5,
+      "type": "array"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "New quantities the user wants (spec change \u2014 lanes requote at the new quantity). Same rules as on get_fabrication_quote: pass the real ask, never inflate it. Pass null to REMOVE a previously asked quantity \u2014 the quote returns to single-part pricing"
+   },
+   "quote_id": {
+    "type": "string"
+   },
+   "remove_requirements": {
+    "description": "Take back INDIVIDUAL requirements terms (\"drop the anodized ask, keep the rest\"): each listed term is removed from the quote's requirements by normalized match, the others stay. Unknown terms are ignored, never an error. Re-stating the requirements list can never drop a term (terms merge as a union) \u2014 this is the removal channel",
+    "items": {
+     "maxLength": 120,
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 20,
+    "minItems": 1,
+    "type": "array"
+   },
+   "requirements": {
+    "description": "Verbatim context terms from the user \u2014 materials, finishes, certifications, tolerances (\"UV resistant\", \"anodized: red\", \"iso 13485\", \"tolerance: 0.1mm\"). UFP applies what it can and reports what it could not; unresolvable terms are logged for vendor sourcing. Do not interrogate the user to fill this \u2014 pass what they said.",
+    "items": {
+     "maxLength": 120,
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 20,
+    "type": "array"
+   },
+   "scale": {
+    "additionalProperties": false,
+    "description": "Rescale the DESIGN ITSELF before re-quoting: per-axis stretch factors over the file's current geometry (\"make it 2x bigger\" = {\"x\":2,\"y\":2,\"z\":2}). Mesh designs are genuinely converted \u2014 the child quote prices a rescaled file; STEP/IGES designs keep their original file with the dimensions riding as callouts (pass those too). {1,1,1} is a no-op",
+    "properties": {
+     "x": {
+      "maximum": 100,
+      "minimum": 0.01,
+      "type": "number"
+     },
+     "y": {
+      "maximum": 100,
+      "minimum": 0.01,
+      "type": "number"
+     },
+     "z": {
+      "maximum": 100,
+      "minimum": 0.01,
+      "type": "number"
+     }
+    },
+    "required": [
+     "x",
+     "y",
+     "z"
+    ],
+    "type": "object"
+   },
+   "scenario": {
+    "description": "Comparison lane label. A labeled refine sits SIDE BY SIDE with the quote's other offers instead of replacing them: refines with the same label replace that scenario, different labels coexist (max 4 per quote), and a refine WITHOUT a scenario resets the baseline and supersedes every lane. \"How does X compare to Y?\" = one labeled refine per scenario (e.g. scenario \"carbon steel\" + material \"carbon steel\", then scenario \"aluminum\" + material \"aluminum\"). Keep labels short and human, like \"carbon steel\"",
+    "maxLength": 40,
+    "minLength": 1,
+    "type": "string"
+   },
+   "ship_to_zip": {
+    "description": "Destination US ZIP code, exactly as the user stated it \u2014 use this when the user provides their ZIP after a quote priced to the assumed central-US destination (routing.ship_to); the refined prices become theirs. NEVER guess or invent a ZIP",
+    "pattern": "^\\d{5}(-\\d{4})?$",
+    "type": "string"
+   },
+   "ships_from": {
+    "description": "Only vendors that ship from these countries/regions (\"only US vendors\", \"just European shops\", \"keep it domestic\") \u2014 an INCLUDE list naming where the user DOES want vendors from. A CONSTRAINT like processes: non-matching vendors drop instantly (nothing re-prices), further refines inherit the filter, and [\"any\"] clears it to show vendors everywhere again. Friendly terms accepted (\"US\", \"Europe\", \"Germany\", \"China\", \"UK\"). Vendors whose origin is unknown or whose network is worldwide (a specific origin cannot be guaranteed) are excluded, each with an honest note. For \"nothing from X\" asks, pass the regions the user does want instead",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 8,
+    "type": "array"
+   },
+   "sort_by": {
+    "description": "\"Organize by\": re-order the quote's offer cards (\"sort by cheapest\" \u2192 \"price\"; \"soonest arrival first\" \u2192 \"arrival\"; \"best rated\" \u2192 \"rating\"; \"total_price\" = part + cheapest shipping; \"recommended\" restores the default price+speed rank). PURE PRESENTATION \u2014 answers instantly on the same quote, never re-prices or drops offers, and the ordering sticks across re-reads, streaming, and later refines until changed",
+    "enum": [
+     "recommended",
+     "price",
+     "unit_price",
+     "total_price",
+     "arrival",
+     "rating"
+    ],
+    "type": "string"
+   },
+   "sort_direction": {
+    "description": "Flip a sort_by ordering: \"desc\" reverses the key's natural direction (\"most expensive first\" = sort_by \"price\" + \"desc\"). Only meaningful with sort_by",
+    "enum": [
+     "asc",
+     "desc"
+    ],
+    "type": "string"
+   },
+   "sort_label": {
+    "description": "Short human wording for a sort_order, displayed on the board (\"most green first\") \u2014 required with sort_order, since only you know what your order means",
+    "maxLength": 60,
+    "minLength": 1,
+    "type": "string"
+   },
+   "sort_order": {
+    "description": "EXPLICIT card order for asks only you can judge (\"sort the most green to the top\"): look at the offers' preview images, decide the order yourself, and pass the offer ids first-on-top. Offers you leave out (including ones that stream in later) land below the listed ones in the default rank. Pass sort_label with it",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 200,
+    "minItems": 1,
+    "type": "array"
+   },
+   "submersible": {
+    "type": "boolean"
+   },
+   "tapping": {
+    "anyOf": [
+     {
+      "anyOf": [
+       {
+        "not": {}
+       },
+       {
+        "items": {
+         "additionalProperties": false,
+         "properties": {
+          "axis": {
+           "items": [
+            {
+             "type": "number"
+            },
+            {
+             "type": "number"
+            },
+            {
+             "type": "number"
+            }
+           ],
+           "maxItems": 3,
+           "minItems": 3,
+           "type": "array"
+          },
+          "depth_mm": {
+           "exclusiveMinimum": 0,
+           "type": "number"
+          },
+          "drilled_diameter_mm": {
+           "exclusiveMinimum": 0,
+           "type": "number"
+          },
+          "face_id": {
+           "type": "integer"
+          },
+          "hole": {
+           "minimum": 1,
+           "type": "integer"
+          },
+          "located_at_mm": {
+           "additionalProperties": false,
+           "properties": {
+            "x": {
+             "type": "number"
+            },
+            "y": {
+             "type": "number"
+            },
+            "z": {
+             "type": "number"
+            }
+           },
+           "required": [
+            "x",
+            "y",
+            "z"
+           ],
+           "type": "object"
+          },
+          "thread": {
+           "maxLength": 32,
+           "minLength": 1,
+           "type": "string"
+          }
+         },
+         "required": [
+          "thread"
+         ],
+         "type": "object"
+        },
+        "maxItems": 200,
+        "type": "array"
+       }
+      ],
+      "description": "Tapped (threaded) holes for a sheet-metal part \u2014 one record per hole the user wants threads cut into. `thread` is the callout in the user's words (\"M6\", \"M4 x 0.7\", \"1/4-20\") and is all that's required; when known, add the hole's center in the part's own mm frame (located_at_mm), its unit axis, the pre-tap drilled diameter, and depth_mm so the shop taps the right hole. Pass these when the user asks for threaded/tapped holes; vendors with a tapping service price them."
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "New tapped-hole records for this part \u2014 a spec change: sheet lanes requote with exactly these taps (the list REPLACES the previous one, never patches it). Same shape as on get_fabrication_quote: thread callout (\"M6\", \"1/4-20\") required, hole geometry optional. Pass null to REMOVE every tap"
+   },
+   "thickness_in": {
+    "anyOf": [
+     {
+      "exclusiveMinimum": 0,
+      "maximum": 1,
+      "type": "number"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "description": "New sheet thickness in INCHES (\"make it in 1/8\" \u2192 0.125) \u2014 a spec change: sheet lanes requote at the nearest stocked gauge, flagging the substitution when the match isn't close. Pass null to REMOVE a previously asked thickness \u2014 back to the material's default gauge"
+   },
+   "undo_last_step": {
+    "description": "GO BACK EXACTLY ONE STEP (\"undo that\", \"go back\", \"put it back how it was\"): the network restores the previous quote's stored spec and constraints EXACTLY \u2014 never reconstructed from conversation \u2014 and re-prices where needed. Send it ALONE (no other args besides quote_id); combining it with changes is rejected. The quote's steps[] names what each undo would take back \u2014 steps[0] is the newest. Undo resets the baseline like any unlabeled refine, so open comparison scenarios close. Undoing the original quote is rejected with honest wording \u2014 relay it",
+    "type": "boolean"
+   },
+   "vendors": {
+    "description": "Only these specific vendors/makers (\"only show A3D Manufacturing\", \"just Slant 3D and Fictiv\") \u2014 an INCLUDE list of vendor names as they appear on offers. A CONSTRAINT like processes: other vendors' offers drop instantly (nothing re-prices), further refines inherit the filter, and [\"any\"] clears it to show every vendor again. Friendly names accepted (\"A3D\", \"slant 3d\"); unmatched names are reported, never an error. This is THE way to answer \"show me everything vendor X offers\" \u2014 the filtered quote lists that vendor's complete lineup",
+    "items": {
+     "minLength": 1,
+     "type": "string"
+    },
+    "maxItems": 16,
+    "type": "array"
+   }
+  },
+  "required": [
+   "quote_id"
+  ],
+  "type": "object"
+ },
+ "name": "refine_quote",
+ "title": "Refine quote"
+}

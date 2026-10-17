@@ -1,0 +1,324 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Search UniProtKB and return curated protein records. Pass text_search for a plain-language query (the 80% case) or query for the full Lucene field syntax (gene:TP53 AND organism_id:9606 AND reviewed:true) \u2014 exactly one is required. Reviewed (Swiss-Prot) entries are manually curated; unreviewed (TrEMBL) are computationally predicted and ~30x more numerous, so reviewed defaults to true to avoid drowning in predictions \u2014 set it false to search both tiers together (for TrEMBL only, put reviewed:false in query). The organism_id and reviewed filters apply to the whole query. Request facets (e.g. reviewed, model_organism) for server-side count breakdowns. Results page forward with an opaque cursor; UniProtKB has no offset paging. An inactive accession the query matches (merged, demerged, or deleted) comes back in inactive[] with the accessions that replace it, never as a result. This is the discovery entry point \u2014 chain results[].accession into uniprot_get_entry for full records, or uniprot_get_sequence for FASTA.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "cursor": {
+    "description": "Opaque forward-pagination cursor from a prior response. Walk pages with this; random access to page N is not supported.",
+    "type": "string"
+   },
+   "facets": {
+    "description": "Comma-separated upstream facet names for count breakdowns, e.g. \"reviewed,model_organism,proteins_with\". Returns a facets array alongside the hits.",
+    "type": "string"
+   },
+   "fields": {
+    "description": "Comma-separated UniProtKB field names to project, e.g. \"accession,gene_names,cc_function\". Omit for a sensible default set covering name, gene, organism, length, reviewed, score, and a function snippet.",
+    "type": "string"
+   },
+   "organism_id": {
+    "description": "Restrict to an NCBI taxon ID, e.g. 9606 for human. A convenience filter ANDed onto the whole query; resolve names with uniprot_get_taxonomy.",
+    "exclusiveMinimum": 0,
+    "maximum": 9007199254740991,
+    "type": "integer"
+   },
+   "query": {
+    "description": "UniProtKB Lucene query with field prefixes \u2014 gene, organism_id, keyword (KW-xxxx), go (GO id), reviewed, protein_name, family, length, existence, accession. Example: \"gene:BRCA1 AND organism_id:9606 AND reviewed:true\". Provide this OR text_search, not both.",
+    "type": "string"
+   },
+   "reviewed": {
+    "default": true,
+    "description": "Restrict to reviewed Swiss-Prot entries. Defaults to true (curated only). false applies no tier filter, returning reviewed and unreviewed TrEMBL entries together; for TrEMBL only, put reviewed:false in query. Ignored when query or text_search already contains a reviewed: clause.",
+    "type": "boolean"
+   },
+   "size": {
+    "description": "Number of hits per page (max 500). Omit for the server default.",
+    "exclusiveMinimum": 0,
+    "maximum": 500,
+    "type": "integer"
+   },
+   "text_search": {
+    "description": "Plain-language search across protein names, gene names, and function, e.g. \"kinase apoptosis\". Provide this OR query, not both.",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "uniprot_search_proteins",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "results",
+     "totalResults",
+     "effectiveQuery"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cursor": {
+    "description": "Forward cursor for the next page. Absent on the last page.",
+    "type": "string"
+   },
+   "effectiveQuery": {
+    "description": "The query as the server assembled and sent it to UniProtKB.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `missing_query`: Neither text_search nor query was provided. `conflicting_query`: Both text_search and query were provided. `invalid_query`: The query or text_search has unbalanced parentheses (rejected before any request), or UniProtKB rejected the query, text_search, fields, or facets value \u2014 the message names the rejected value. `invalid_cursor`: UniProt could not continue from the cursor (it answered HTTP 500) \u2014 the cursor is malformed or truncated. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "missing_query",
+         "conflicting_query",
+         "invalid_query",
+         "invalid_cursor"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "facets": {
+    "description": "Upstream facet count breakdowns. Present only when facets were requested.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A server-side facet breakdown.",
+     "properties": {
+      "label": {
+       "description": "Human-readable facet label, e.g. \"Status\".",
+       "type": "string"
+      },
+      "name": {
+       "description": "Facet identifier, e.g. \"reviewed\".",
+       "type": "string"
+      },
+      "values": {
+       "description": "Count buckets for this facet.",
+       "items": {
+        "additionalProperties": false,
+        "description": "A single facet bucket.",
+        "properties": {
+         "count": {
+          "description": "Number of matches in this bucket.",
+          "type": "number"
+         },
+         "label": {
+          "description": "Human-readable value label, e.g. \"Reviewed (Swiss-Prot)\".",
+          "type": "string"
+         },
+         "value": {
+          "description": "Facet value, e.g. \"true\".",
+          "type": "string"
+         }
+        },
+        "required": [
+         "value",
+         "label",
+         "count"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      }
+     },
+     "required": [
+      "name",
+      "label",
+      "values"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "inactive": {
+    "description": "Matching accessions that are inactive in UniProtKB (merged, demerged, or deleted) \u2014 not proteins to read, but pointers to the accessions that replace them. Present only when the page held any.",
+    "items": {
+     "additionalProperties": false,
+     "description": "An inactive accession the query matched, with where to go instead.",
+     "properties": {
+      "accession": {
+       "description": "The inactive UniProtKB accession the query matched.",
+       "type": "string"
+      },
+      "deletedReason": {
+       "description": "Why UniProt deleted the entry, when it says. Present on DELETED only.",
+       "type": "string"
+      },
+      "reason": {
+       "description": "UniProt inactiveReasonType: MERGED, DEMERGED, or DELETED. Omitted when UniProt names none.",
+       "type": "string"
+      },
+      "replacedBy": {
+       "description": "Accessions that replace it \u2014 the merge target (MERGED) or the demerge products (DEMERGED). Look these up instead.",
+       "items": {
+        "description": "A replacement UniProtKB accession.",
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "uniParcId": {
+       "description": "UniParc ID that still holds the sequence, when UniProt gives one.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "accession"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "notice": {
+    "description": "Guidance when nothing matched \u2014 echoes the query and suggests how to broaden.",
+    "type": "string"
+   },
+   "results": {
+    "description": "Matching active protein hits for this page. Inactive accessions are in inactive.",
+    "items": {
+     "additionalProperties": false,
+     "description": "A UniProtKB search hit.",
+     "properties": {
+      "accession": {
+       "description": "UniProtKB primary accession, e.g. \"P04637\". The lookup key for uniprot_get_entry and uniprot_get_sequence.",
+       "type": "string"
+      },
+      "annotationScore": {
+       "description": "Annotation confidence on a 1\u20135 scale; higher means more curation evidence.",
+       "type": "number"
+      },
+      "entryName": {
+       "description": "UniProtKB mnemonic ID, e.g. \"P53_HUMAN\". Not an input key \u2014 use accession.",
+       "type": "string"
+      },
+      "functionSnippet": {
+       "description": "First sentence(s) of the FUNCTION annotation, evidence references stripped. Omitted when no function is annotated.",
+       "type": "string"
+      },
+      "geneNames": {
+       "description": "Gene names and synonyms for the protein.",
+       "items": {
+        "description": "A gene name or synonym.",
+        "type": "string"
+       },
+       "type": "array"
+      },
+      "length": {
+       "description": "Canonical sequence length in residues.",
+       "type": "number"
+      },
+      "organism": {
+       "additionalProperties": false,
+       "description": "Source organism.",
+       "properties": {
+        "commonName": {
+         "description": "Organism common name, e.g. \"Human\". Omitted when none.",
+         "type": "string"
+        },
+        "scientificName": {
+         "description": "Organism scientific name, e.g. \"Homo sapiens\".",
+         "type": "string"
+        },
+        "taxonId": {
+         "description": "NCBI taxonomy ID, e.g. 9606.",
+         "type": "number"
+        }
+       },
+       "required": [
+        "scientificName",
+        "taxonId"
+       ],
+       "type": "object"
+      },
+      "proteinExistence": {
+       "description": "Evidence level for the protein's existence, e.g. \"1: Evidence at protein level\".",
+       "type": "string"
+      },
+      "proteinName": {
+       "description": "Recommended full protein name. Omitted when the entry has none.",
+       "type": "string"
+      },
+      "reviewed": {
+       "description": "True for reviewed Swiss-Prot (manually curated), false for unreviewed TrEMBL (computationally predicted).",
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "accession",
+      "entryName",
+      "geneNames",
+      "organism",
+      "length",
+      "reviewed",
+      "annotationScore",
+      "proteinExistence"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "totalResults": {
+    "description": "Total matches for the query before pagination (from the upstream result count), inactive accessions included.",
+    "type": "number"
+   }
+  },
+  "type": "object"
+ },
+ "title": "uniprot-mcp-server: search proteins"
+}

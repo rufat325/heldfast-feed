@@ -1,0 +1,420 @@
+{
+ "annotations": {
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Check a list of dietary supplements for a person: per-nutrient daily totals against NIH upper limits (UL) and RDA/AI, which products overlap, what each UL protects against, and single-product changes that would bring an above-UL nutrient back under it. Products can be given as names (\"Centrum Silver Women 50+\"), barcodes, DSLD IDs, or custom ingredient lists; optional candidates are evaluated as additions. Pass the person's medications and conditions (smoker, kidney_disease, hemochromatosis, lab_test_soon, cancer_treatment) to check them against the interactions in the NIH fact sheets. Returns agent_summary (plain sentences to relay), resolutions, suggestions, interactions, nutrient_totals and data_gaps. Label data only; food is included only with diet \"typical\".",
+ "inputSchema": {
+  "properties": {
+   "age": {
+    "description": "Age in years. For infants use a fraction: 0.25 = 3 months; 0-5 and 6-11 month values apply under 1.",
+    "maximum": 120,
+    "minimum": 0,
+    "type": "number"
+   },
+   "candidates": {
+    "description": "Optional, up to 5: products the user is considering adding. Each is evaluated as an addition to the stack in candidate_results[]; they are not included in nutrient_totals.",
+    "items": {
+     "anyOf": [
+      {
+       "additionalProperties": false,
+       "properties": {
+        "dsld_id": {
+         "description": "DSLD label ID, e.g. from /v1/products/search",
+         "exclusiveMinimum": 0,
+         "maximum": 10000000,
+         "type": "integer"
+        },
+        "servings_per_day": {
+         "description": "Servings taken per day. Default: the label maximum daily servings, else 1.",
+         "exclusiveMinimum": 0,
+         "maximum": 50,
+         "type": "number"
+        }
+       },
+       "required": [
+        "dsld_id"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "brand": {
+         "description": "Brand, if known separately",
+         "maxLength": 100,
+         "minLength": 1,
+         "type": "string"
+        },
+        "query": {
+         "description": "Product as the user named it, e.g. \"Centrum Silver Women 50+\". Resolved to the best-matching DSLD label; see resolutions[]",
+         "maxLength": 200,
+         "minLength": 2,
+         "type": "string"
+        },
+        "servings_per_day": {
+         "description": "Servings taken per day. Default: the label maximum daily servings, else 1.",
+         "exclusiveMinimum": 0,
+         "maximum": 50,
+         "type": "number"
+        }
+       },
+       "required": [
+        "query"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "servings_per_day": {
+         "description": "Servings taken per day. Default: the label maximum daily servings, else 1.",
+         "exclusiveMinimum": 0,
+         "maximum": 50,
+         "type": "number"
+        },
+        "upc": {
+         "description": "UPC-A or EAN barcode digits as printed on the bottle, e.g. \"031604026974\" (spaces and dashes are ignored)",
+         "maxLength": 32,
+         "minLength": 8,
+         "type": "string"
+        }
+       },
+       "required": [
+        "upc"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "ingredients": {
+         "items": {
+          "properties": {
+           "amount": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "number"
+           },
+           "form": {
+            "description": "Declared form, e.g. \"folic acid\", \"retinyl palmitate\", \"d-alpha tocopherol\"",
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+           },
+           "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+           },
+           "nutrient_basis": {
+            "description": "For minerals: whether amount is elemental or the whole compound weight",
+            "enum": [
+             "elemental",
+             "compound"
+            ],
+            "type": "string"
+           },
+           "unit": {
+            "description": "mg, mcg, g, IU, mcg DFE, mcg RAE, mg NE",
+            "maxLength": 30,
+            "minLength": 1,
+            "type": "string"
+           }
+          },
+          "required": [
+           "name",
+           "amount",
+           "unit"
+          ],
+          "type": "object"
+         },
+         "maxItems": 50,
+         "minItems": 1,
+         "type": "array"
+        },
+        "name": {
+         "maxLength": 200,
+         "minLength": 1,
+         "type": "string"
+        },
+        "servings_per_day": {
+         "description": "Servings taken per day. Default: the label maximum daily servings, else 1.",
+         "exclusiveMinimum": 0,
+         "maximum": 50,
+         "type": "number"
+        }
+       },
+       "required": [
+        "ingredients"
+       ],
+       "type": "object"
+      }
+     ]
+    },
+    "maxItems": 5,
+    "minItems": 1,
+    "type": "array"
+   },
+   "conditions": {
+    "description": "Conditions that change how NIH reads a dose: smoker (current or former, or asbestos exposure: beta-carotene), kidney_disease (potassium, magnesium, phosphorus), hemochromatosis (iron, vitamin C), lab_test_soon (biotin interferes with lab tests), cancer_treatment (antioxidant doses)",
+    "items": {
+     "enum": [
+      "smoker",
+      "kidney_disease",
+      "hemochromatosis",
+      "lab_test_soon",
+      "cancer_treatment"
+     ],
+     "type": "string"
+    },
+    "maxItems": 5,
+    "minItems": 1,
+    "type": "array"
+   },
+   "detail": {
+    "default": "full",
+    "description": "\"summary\" returns only what an agent needs to answer (agent_summary, flagged nutrients, suggestions, resolutions, candidate verdicts), about 1-3 KB instead of 20-40 KB",
+    "enum": [
+     "summary",
+     "full"
+    ],
+    "type": "string"
+   },
+   "diet": {
+    "default": "none",
+    "description": "\"typical\" adds the US average intake from food and drinks for this age and sex (NHANES) to estimate total intake; see with_typical_diet",
+    "enum": [
+     "none",
+     "typical"
+    ],
+    "type": "string"
+   },
+   "foods": {
+    "description": "Optional, up to 30: what the person eats in a day, e.g. [{\"query\":\"spinach cooked\",\"amount\":1,\"unit\":\"cup\"},{\"query\":\"whole milk\",\"grams\":488}]. Added to the supplement totals in nutrient_totals[].with_foods (USDA SR28, offline). Use instead of diet \"typical\".",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "amount": {
+       "description": "Amount in \"unit\" per day, e.g. 1.5 with unit \"cup\"",
+       "exclusiveMinimum": 0,
+       "maximum": 100,
+       "type": "number"
+      },
+      "grams": {
+       "description": "Amount eaten per day, in grams",
+       "exclusiveMinimum": 0,
+       "maximum": 5000,
+       "type": "number"
+      },
+      "ndb_number": {
+       "description": "USDA NDB number (SR Legacy), e.g. \"11458\"",
+       "pattern": "^\\d{4,5}$",
+       "type": "string"
+      },
+      "query": {
+       "description": "Food as the user named it, e.g. \"spinach cooked\", \"whole milk\"; matched to a USDA SR28 food (see foods.items)",
+       "maxLength": 120,
+       "minLength": 2,
+       "type": "string"
+      },
+      "unit": {
+       "description": "cup, tbsp, tsp, slice, large, medium, oz, lb, kg, g, fl oz... must match a USDA portion for the food (or be a weight)",
+       "maxLength": 30,
+       "minLength": 1,
+       "type": "string"
+      }
+     },
+     "type": "object"
+    },
+    "maxItems": 30,
+    "minItems": 1,
+    "type": "array"
+   },
+   "lang": {
+    "default": "en",
+    "description": "\"es\" writes agent_summary in Spanish (the English text is kept in agent_summary_en); other fields stay in English",
+    "enum": [
+     "en",
+     "es"
+    ],
+    "type": "string"
+   },
+   "life_stage": {
+    "description": "Pregnancy or lactation (breastfeeding) reference values; requires sex \"female\" and age 14-50",
+    "enum": [
+     "pregnancy",
+     "lactation"
+    ],
+    "type": "string"
+   },
+   "medications": {
+    "description": "Medications the person takes, as generic or brand names (\"warfarin\", \"Synthroid\", \"metformin 500 mg\"). Checked against the medication interactions listed in the NIH ODS fact sheets; not exhaustive. Never logged.",
+    "items": {
+     "maxLength": 100,
+     "minLength": 2,
+     "type": "string"
+    },
+    "maxItems": 30,
+    "minItems": 1,
+    "type": "array"
+   },
+   "products": {
+    "description": "1-15 products. Each is one of: {\"dsld_id\"}, {\"query\"} (a product name, resolved server-side), {\"upc\"} (barcode), or a custom product {\"name\",\"ingredients\"}. Add \"servings_per_day\" to any of them.",
+    "items": {
+     "anyOf": [
+      {
+       "additionalProperties": false,
+       "properties": {
+        "dsld_id": {
+         "description": "DSLD label ID, e.g. from /v1/products/search",
+         "exclusiveMinimum": 0,
+         "maximum": 10000000,
+         "type": "integer"
+        },
+        "servings_per_day": {
+         "description": "Servings taken per day. Default: the label maximum daily servings, else 1.",
+         "exclusiveMinimum": 0,
+         "maximum": 50,
+         "type": "number"
+        }
+       },
+       "required": [
+        "dsld_id"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "brand": {
+         "description": "Brand, if known separately",
+         "maxLength": 100,
+         "minLength": 1,
+         "type": "string"
+        },
+        "query": {
+         "description": "Product as the user named it, e.g. \"Centrum Silver Women 50+\". Resolved to the best-matching DSLD label; see resolutions[]",
+         "maxLength": 200,
+         "minLength": 2,
+         "type": "string"
+        },
+        "servings_per_day": {
+         "description": "Servings taken per day. Default: the label maximum daily servings, else 1.",
+         "exclusiveMinimum": 0,
+         "maximum": 50,
+         "type": "number"
+        }
+       },
+       "required": [
+        "query"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "servings_per_day": {
+         "description": "Servings taken per day. Default: the label maximum daily servings, else 1.",
+         "exclusiveMinimum": 0,
+         "maximum": 50,
+         "type": "number"
+        },
+        "upc": {
+         "description": "UPC-A or EAN barcode digits as printed on the bottle, e.g. \"031604026974\" (spaces and dashes are ignored)",
+         "maxLength": 32,
+         "minLength": 8,
+         "type": "string"
+        }
+       },
+       "required": [
+        "upc"
+       ],
+       "type": "object"
+      },
+      {
+       "additionalProperties": false,
+       "properties": {
+        "ingredients": {
+         "items": {
+          "properties": {
+           "amount": {
+            "maximum": 10000000,
+            "minimum": 0,
+            "type": "number"
+           },
+           "form": {
+            "description": "Declared form, e.g. \"folic acid\", \"retinyl palmitate\", \"d-alpha tocopherol\"",
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+           },
+           "name": {
+            "maxLength": 200,
+            "minLength": 1,
+            "type": "string"
+           },
+           "nutrient_basis": {
+            "description": "For minerals: whether amount is elemental or the whole compound weight",
+            "enum": [
+             "elemental",
+             "compound"
+            ],
+            "type": "string"
+           },
+           "unit": {
+            "description": "mg, mcg, g, IU, mcg DFE, mcg RAE, mg NE",
+            "maxLength": 30,
+            "minLength": 1,
+            "type": "string"
+           }
+          },
+          "required": [
+           "name",
+           "amount",
+           "unit"
+          ],
+          "type": "object"
+         },
+         "maxItems": 50,
+         "minItems": 1,
+         "type": "array"
+        },
+        "name": {
+         "maxLength": 200,
+         "minLength": 1,
+         "type": "string"
+        },
+        "servings_per_day": {
+         "description": "Servings taken per day. Default: the label maximum daily servings, else 1.",
+         "exclusiveMinimum": 0,
+         "maximum": 50,
+         "type": "number"
+        }
+       },
+       "required": [
+        "ingredients"
+       ],
+       "type": "object"
+      }
+     ]
+    },
+    "maxItems": 15,
+    "minItems": 1,
+    "type": "array"
+   },
+   "sex": {
+    "enum": [
+     "male",
+     "female"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "products"
+  ],
+  "type": "object"
+ },
+ "name": "stack_analyze"
+}

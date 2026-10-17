@@ -1,0 +1,83 @@
+{
+ "annotations": {
+  "destructiveHint": true,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false
+ },
+ "description": "Turns an EXISTING, running single-machine managed Postgres or ClickHouse into a THREE-machine highly available cluster, in place, keeping the data and the same username, password and database name. Use this when the user has a live database and wants it to survive a machine or host failure: they do NOT have to create a new one and migrate by hand. How it works: a full backup is taken first (a safety copy while the upgrade runs, deleted when it ends: the old machine is never touched and stays the restore point), the cluster is built alongside, the data is copied in and verified by counting both sides, and only then does the database's address move to the load balancer. The original machine is left running and untouched throughout, so a failure changes nothing and the user is never without a database. SAY THREE THINGS TO THE USER AND GET A YES BEFORE CALLING: (1) COST, it becomes three machines behind a load balancer instead of one, so roughly 3x the hourly rate, and the old single machine keeps billing for 3 days, until it is removed automatically; (2) WRITE LOSS, anything written to the old machine during the copy is not carried over (see acknowledge_write_loss); (3) THEY MUST REPOINT THE APP afterwards, the connection address changes and nothing redeploys their app for them. Takes about 20 minutes and returns immediately; poll list_databases / list_clickhouse_databases until the address changes. Requires a payment method: high availability is not available on the no-card trial. \u26d4 CLICKHOUSE ONLY, a FOURTH thing to say: after the upgrade every table has to use a REPLICATED engine. The existing tables are converted for them as part of the copy, but any NEW `CREATE TABLE ... ENGINE = MergeTree` is refused from then on (ClickHouse error 56) and has to be written `ENGINE = ReplicatedMergeTree`. It is refused rather than accepted because a plain MergeTree on three machines replicates its schema and not its rows, which would leave two of the three answering with an empty table and no error. If their app ships plain-MergeTree migrations (Plausible, PostHog and Langfuse all do), those migrations will fail after the upgrade and they should stay on the single machine. For the app tier rather than the database, use upgrade_to_cluster instead.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "acknowledge_write_loss": {
+    "default": false,
+    "description": "REQUIRED, and you must tell the user this in your own words and get a yes BEFORE you set it true. The upgrade copies the data while the old machine is still serving, so anything the application writes to the old machine AFTER the copy starts, and before you repoint the app at the new address, is NOT copied and cannot be recovered afterwards. This was measured on a real upgrade: one row written mid-copy was missing (5001 rows on the old machine, 5000 on the cluster). For a quiet database that is nothing; for one taking live orders it is lost orders. The safe sequence is: pause or drain writes, upgrade, repoint the app at the new address, resume. Never set this true on the user's behalf to be helpful.",
+    "type": "boolean"
+   },
+   "flavor_id": {
+    "description": "Only needed for an old database whose build settings were not recorded; the API says so if it is missing. Otherwise the cluster reuses the machine size the database already has.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "id": {
+    "anyOf": [
+     {
+      "minLength": 1,
+      "type": "string"
+     },
+     {
+      "exclusiveMinimum": 0,
+      "type": "integer"
+     }
+    ],
+    "description": "Numeric id of the EXISTING single-machine database (from list_databases / list_clickhouse_databases). It must be status='ready'."
+   },
+   "keypair_name": {
+    "description": "Only needed for an old database whose build settings were not recorded.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "network_id": {
+    "description": "Only needed for an old database whose build settings were not recorded. Otherwise the cluster joins the same private network.",
+    "minLength": 1,
+    "type": "string"
+   },
+   "service": {
+    "description": "Which managed database type the id belongs to. 'postgres' for one from create_database/list_databases; 'clickhouse' for one from create_clickhouse/list_clickhouse_databases. MySQL, MariaDB, Redis and Qdrant have no HA option and this tool cannot make them highly available.",
+    "enum": [
+     "postgres",
+     "clickhouse"
+    ],
+    "type": "string"
+   }
+  },
+  "required": [
+   "service",
+   "id"
+  ],
+  "type": "object"
+ },
+ "name": "upgrade_to_ha",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "error": {
+    "type": "boolean"
+   },
+   "mode": {
+    "type": "string"
+   },
+   "next": {
+    "type": "string"
+   },
+   "result": {}
+  },
+  "type": "object"
+ },
+ "title": "Make an existing database highly available"
+}

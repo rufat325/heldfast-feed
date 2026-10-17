@@ -1,0 +1,260 @@
+{
+ "annotations": {
+  "readOnlyHint": true
+ },
+ "description": "Look up drugs in the NDC (National Drug Code) Directory. Identify drug products by NDC code, find active ingredients, packaging details, or manufacturer info. Pair with openfda_get_drug_label using the returned brand_name or set_id to read the package insert. With stage=true, call openfda_dataframe_describe for the staged columns, then openfda_dataframe_query for SQL.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "canvas_id": {
+    "description": "Canvas ID returned by a prior stage=true call to this tool or an openFDA search tool (openfda_search_*). Passing one stages this lookup onto that canvas (same effect as stage=true) so result sets accumulate for cross-table joins. Omit to stage onto a fresh canvas.",
+    "pattern": "^[A-Za-z0-9_-]{10}$",
+    "type": "string"
+   },
+   "fields": {
+    "description": "Dotted record paths to keep on each returned record, e.g. [\"brand_name\", \"active_ingredients.name\"] \u2014 any key path on a returned record works, and openfda_describe_fields lists the searchable ones. Each record is projected to these paths plus its identity key (product_ndc) before the inline byte budget is measured, identically on both response surfaces, and a path through an array applies to every element. Use it when records are large: a page_bytes over the budget comes with the largest fields of the oversized record. A path no returned record carries is named on the notice. Omit for whole records. Paths take only letters, digits, underscores, and dots; anything else is rejected before the request. With stage=true, only the inline page is projected \u2014 the staged table keeps its columns.",
+    "items": {
+     "pattern": "^(?!\\.)(?!.*\\.\\.)(?!.*\\.$)[A-Za-z0-9_.]+$",
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "limit": {
+    "default": 10,
+    "description": "Maximum number of records to return (1-1000, default 10). Serialized record size varies by three orders of magnitude across openFDA endpoints, so the page is also bounded by a 24000-byte serialized budget: a page that would overrun it returns fewer records than requested and reports the cut on page_omitted. Whenever any record matched, at least one comes back, however large it measures \u2014 page_bytes then reports its size and page_largest_fields names its largest fields, which fields can project away. A record grows with its packaging list, so a product with many package configurations is several times the size of one with a single package.",
+    "maximum": 1000,
+    "minimum": 1,
+    "type": "number"
+   },
+   "search": {
+    "description": "openFDA search query. Examples: product_ndc:\"0363-0218\", brand_name:\"aspirin\", generic_name:\"metformin\", openfda.manufacturer_name:\"walgreen\", active_ingredients.name:\"ASPIRIN\". Double quotes, parentheses, and range brackets must balance, and the query must not end on a backslash \u2014 each is rejected before the request.",
+    "minLength": 1,
+    "pattern": "\\S",
+    "type": "string"
+   },
+   "skip": {
+    "default": 0,
+    "description": "Number of records to skip for pagination (default 0). openFDA caps pagination at 25000 records; a higher value returns a pagination_limit_reached error.",
+    "minimum": 0,
+    "type": "number"
+   },
+   "sort": {
+    "description": "Sort expression \u2014 a field path optionally suffixed with :asc or :desc (any letter case; :ascending and :descending are also accepted, and every direction is sent as asc or desc); comma-separate for multi-field sort. Example: listing_expiration_date:desc. Field paths take only letters, digits, underscores, and dots; any other character or direction is rejected before the request. A well-formed but non-sortable field still causes a query error \u2014 use a documented field name.",
+    "minLength": 1,
+    "pattern": "^\\s*(?=\\S)(?![,:.])(?!.*,(?: *[,:.]|\\s*$))(?!.*[^\\s,] +[^\\s,])(?!.*\\.(?:[.:,\\s]|$))(?!.*:(?!(?:[Aa][Ss][Cc](?:[Ee][Nn][Dd][Ii][Nn][Gg])?|[Dd][Ee][Ss][Cc](?:[Ee][Nn][Dd][Ii][Nn][Gg])?)(?: *,|\\s*$)))[A-Za-z0-9_.:, ]*[A-Za-z0-9_]\\s*$",
+    "type": "string"
+   },
+   "stage": {
+    "default": false,
+    "description": "Stage the matched set on a DataCanvas for SQL analysis \u2014 openfda_dataframe_describe lists the staged columns, openfda_dataframe_query runs the SQL. Default false \u2014 the call returns one page for one upstream request. When true, records are also drained onto a canvas table up to a size budget (staged_rows reports how many reached it). Staging is for record-level SQL over a bounded slice; for a distribution over everything that matched, openfda_count_values aggregates server-side in one request. Requires CANVAS_PROVIDER_TYPE=duckdb.",
+    "type": "boolean"
+   }
+  },
+  "required": [
+   "search"
+  ],
+  "type": "object"
+ },
+ "name": "openfda_lookup_ndc",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "meta",
+     "results",
+     "totalResults",
+     "effectiveQuery"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "canvas_id": {
+    "description": "DataCanvas session id for the staged result set. Present when this call staged. Pass to openfda_dataframe_query / openfda_dataframe_describe, or back into this tool to accumulate more tables on the same canvas.",
+    "type": "string"
+   },
+   "canvas_table": {
+    "description": "Canvas table holding the staged rows. Present when rows were staged; list its columns with openfda_dataframe_describe, then reference it in openfda_dataframe_query FROM clauses.",
+    "type": "string"
+   },
+   "effectiveQuery": {
+    "description": "Search filter applied to the NDC lookup, as submitted to openFDA",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `canvas_disabled`: Staging was requested (stage=true or a canvas_id) but DataCanvas is disabled. `canvas_not_found`: The canvas_id is well-formed but names no active canvas \u2014 expired or never minted. `canvas_capacity_exhausted`: canvas_id was omitted and the active canvas cap is already reached. `rate_limited`: The openFDA daily or per-minute request limit is exceeded. `upstream_error`: The openFDA API returned a 5xx server error. `malformed_search`: The search query leaves a double quote, parenthesis, or range bracket unclosed, or ends on a backslash. `query_error`: The search query was rejected by openFDA (malformed field name, invalid syntax). `pagination_limit_reached`: skip exceeds the 25000 record pagination ceiling. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "canvas_disabled",
+         "canvas_not_found",
+         "canvas_capacity_exhausted",
+         "rate_limited",
+         "upstream_error",
+         "malformed_search",
+         "query_error",
+         "pagination_limit_reached"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "meta": {
+    "additionalProperties": false,
+    "description": "Response metadata",
+    "properties": {
+     "lastUpdated": {
+      "description": "Dataset last updated date",
+      "type": "string"
+     },
+     "limit": {
+      "description": "Page size applied to this request \u2014 the requested limit, lowered to the records returned when the 24000-byte inline budget bounded the page (see page_omitted). Not a count of what arrived: a window running past the end of the matched set returns fewer records than this, so read the length of results for the actual count.",
+      "type": "number"
+     },
+     "skip": {
+      "description": "Pagination offset",
+      "type": "number"
+     },
+     "total": {
+      "description": "Total matching records",
+      "type": "number"
+     },
+     "totalUnverified": {
+      "description": "Present (true) only on an empty page at skip > 0 whose total could not be confirmed: openFDA answers a page past the end and a search that matched nothing alike, and the follow-up request for the total failed. total then reads 0 without ruling out records at a lower skip \u2014 re-call with skip=0 to tell.",
+      "type": "boolean"
+     }
+    },
+    "required": [
+     "total",
+     "skip",
+     "limit",
+     "lastUpdated"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Canvas staging disclosure when the call staged, the fields projection and any requested path no record carries, the byte-budget disclosure when the inline page was bounded or one record exceeds it (with the routes to the withheld records and the largest fields of the oversized record), and guidance when results are empty \u2014 how to broaden filters or correct field names.",
+    "type": "string"
+   },
+   "page_bytes": {
+    "description": "Serialized size of results in this response, in UTF-8 bytes. Present when the 24000-byte inline budget bounded the page or when the page exceeds it; larger than the budget only when a single record exceeds it on its own, which is returned whole \u2014 page_largest_fields then names its largest fields, and fields projects the record to the paths you need.",
+    "type": "number"
+   },
+   "page_largest_fields": {
+    "description": "Present only when page_bytes exceeds the 24000-byte budget, which happens only when the one record on the page exceeds it on its own: that record's largest fields, largest first \u2014 the deepest single field that holds the overrun, or else up to three top-level fields. Leave them out with a fields projection to shrink the record.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One field of the oversized record and its serialized size.",
+     "properties": {
+      "bytes": {
+       "description": "Serialized UTF-8 bytes the field holds, totalled across array elements.",
+       "type": "number"
+      },
+      "path": {
+       "description": "Dotted field path on the record. Fields of array elements share their array path, so patient.drug.openfda covers that block in every drug of the report.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "path",
+      "bytes"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "page_omitted": {
+    "description": "Records dropped from the requested limit/skip window so the page fit the inline byte budget. Present only when records were dropped. Read them by re-calling with skip advanced by the number of records returned, lower limit for a smaller page (when more than one record came back), pass fields to keep only the paths you need, or pass stage=true to query a bounded drain of the match with openfda_dataframe_query.",
+    "type": "number"
+   },
+   "projected_fields": {
+    "description": "The field paths each record in results was projected to, as requested \u2014 present only when the call passed fields. Every record also keeps its identity key; any other field is absent because the projection left it out, not because openFDA lacks it. Re-call without fields for whole records.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "results": {
+    "description": "NDC directory records \u2014 product_ndc, brand_name, generic_name, labeler_name, dosage_form, route, marketing_category, active_ingredients[], packaging[], listing_expiration_date.",
+    "items": {
+     "additionalProperties": {},
+     "propertyNames": {
+      "type": "string"
+     },
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "spilled": {
+    "description": "True when this call staged its matched set on the canvas \u2014 use canvas_id with openfda_dataframe_describe for its columns, then openfda_dataframe_query for SQL. Absent when staging was not requested.",
+    "type": "boolean"
+   },
+   "staged_rows": {
+    "description": "Rows written to the canvas table. Compare with meta.total: a smaller value means staging stopped at its size budget and the table holds only the first staged_rows records.",
+    "type": "number"
+   },
+   "totalResults": {
+    "description": "Total matching NDC records in the dataset",
+    "type": "number"
+   },
+   "truncated": {
+    "description": "True when fewer rows reached the canvas than matched upstream \u2014 staging stopped at its size budget or openFDA's 25000-row pagination ceiling. Narrow the query (filters, date range) for a complete set.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Openfda Lookup Ndc"
+}

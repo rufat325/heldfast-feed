@@ -1,0 +1,190 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": false
+ },
+ "description": "First step of setting up a new data integration: creates a data spec. By default (sourceType \"file\") this returns presigned upload URL(s) for the sample file (and optional format/target-schema file). Creating the spec does NOT upload anything: you must PUT each file to its URL yourself (or have the user attach it so your platform can), confirm the PUT returned HTTP 200, and only then call finish_data_source_onboarding with the returned specId to kick off AI analysis and wait for it to complete. finish_data_source_onboarding checks storage and refuses if the upload never landed, so skipping the upload cannot be worked around by retrying it.\n\nUse sourceType \"tables\" instead when the request is to derive/aggregate data that is ALREADY loaded into workspace tables \u2014 e.g. \"build me a daily summary of the customers table\", or \"set up a job that reads from the orders table and maintains a running total\" \u2014 rather than loading a new file. It generates a SQL query (INSERT or MERGE, per `merge`) via AI instead of a Python parser, run through the query engine instead of a Glue job. There are never sample/format files, but targetOption still works the same three ways as sourceType \"file\" (see targetOption below) \u2014 so this call returns files: [] and you can call finish_data_source_onboarding immediately UNLESS targetOption is \"target-schema-file\", in which case it returns one upload URL for that file, same as the file-source path. The generated SQL automatically windows itself to rows added since the spec's last successful run. sourceType \"tables\" ALSO requires autoRefresh \u2014 how this spec stays up to date is not optional to decide, and must not be inferred from other jobs/triggers that happen to already exist in the workspace: ask the user whether it should re-run automatically whenever a specific upstream spec finishes loading (\"spec_success\" \u2014 the natural choice when the request is \"run this after X finishes/loads\"), on a plain cron-like cadence (\"schedule\" \u2014 the natural choice when the request is \"run this every day/hour\" with no mention of depending on another job), or stay manual-only (\"none\" \u2014 re-run later with run_data_job). If the request already states the timing unambiguously, that answers it; otherwise ask before calling this tool. Getting this wrong either way has a real cost: \"none\" means the summary silently goes stale until someone remembers to re-run it by hand, while an unwanted trigger keeps re-running (and charging credits for) a spec the user only wanted once. See autoRefresh below.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "additionalPrompt": {
+    "description": "Instructions for the AI. For sourceType \"tables\", describe what the query should compute from the source table(s) (e.g. \"count signups per day per region\"). This is stored on the spec verbatim and reused on every future re-analysis, so keep it to instructions that actually change behavior \u2014 do not restate default platform behavior (e.g. that unmapped target columns are null/preserved, see merge above) just to document it, since a note that's only true for one case (like new rows) can read as a standing instruction later and cause confusion on updates.",
+    "type": "string"
+   },
+   "autoRefresh": {
+    "description": "sourceType \"tables\" only. Required for it \u2014 ask the user rather than assuming, and do not infer this from other jobs/triggers already in the workspace (a similar existing pipeline is not the user's answer for this one). \"spec_success\" re-runs this spec whenever autoRefreshUpstreamSpecName finishes loading; \"schedule\" re-runs it on autoRefreshFrequency; \"none\" leaves it manual-only (re-run later with run_data_job).",
+    "enum": [
+     "spec_success",
+     "schedule",
+     "none"
+    ],
+    "type": "string"
+   },
+   "autoRefreshFrequency": {
+    "additionalProperties": false,
+    "description": "Required when autoRefresh is \"schedule\".",
+    "properties": {
+     "dayOfMonth": {
+      "description": "Required for monthly.",
+      "maximum": 31,
+      "minimum": 1,
+      "type": "integer"
+     },
+     "hourOfDay": {
+      "description": "Required for daily/monthly (UTC).",
+      "maximum": 23,
+      "minimum": 0,
+      "type": "integer"
+     },
+     "unit": {
+      "description": "Schedule cadence.",
+      "enum": [
+       "hourly",
+       "daily",
+       "monthly"
+      ],
+      "type": "string"
+     }
+    },
+    "required": [
+     "unit"
+    ],
+    "type": "object"
+   },
+   "autoRefreshUpstreamSpecName": {
+    "description": "Required when autoRefresh is \"spec_success\". The spec whose successful job completion should re-run this one.",
+    "type": "string"
+   },
+   "description": {
+    "description": "Optional description of the data spec.",
+    "type": "string"
+   },
+   "expirePriorSnapshots": {
+    "description": "sourceType \"compaction\" only, default false. When false the job commits the compacted files and changes nothing else \u2014 prior snapshots still reference the replaced files, so no storage is freed. When true it also expires every snapshot older than its own commit and deletes the replaced files in the same run, which frees storage but ends the ability to roll back to before the compaction.",
+    "type": "boolean"
+   },
+   "formatFileName": {
+    "description": "sourceType \"file\" only. File name of an optional format spec file.",
+    "type": "string"
+   },
+   "merge": {
+    "description": "Upsert instead of plain append when true (default false). For sourceType \"tables\": generates a MERGE statement instead of an INSERT \u2014 use true for a running aggregate/summary that updates existing rows. For sourceType \"file\" with targetOption \"existing-tables\": upserts loaded rows by the target table's inferred key instead of always inserting \u2014 use true whenever the request implies re-loading the same rows shouldn't create duplicates (e.g. \"upsert on id\", syncing/backfilling into a table that already has overlapping rows). Already automatic, no need to request it via additionalPrompt: target columns with no corresponding source column are null on newly inserted rows, and on a match keep their existing value rather than being nulled out.",
+    "type": "boolean"
+   },
+   "sampleFileName": {
+    "description": "sourceType \"file\" only (and required for it). File name of the sample data file (e.g. \"customers.csv\") \u2014 used to derive content-type, not read from disk.",
+    "type": "string"
+   },
+   "sourceTables": {
+    "description": "Names of existing workspace tables. Required for sourceType \"tables\" (the tables the generated query reads from) and for sourceType \"compaction\" (the tables to compact).",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "sourceType": {
+    "description": "Defaults to \"file\" (upload a sample file). Use \"tables\" to query existing workspace table(s) \u2014 see sourceTables \u2014 instead of loading a new file. Use \"compaction\" to bin-pack the small data files of existing tables: it moves no data and produces no new table, so it takes NO target of any kind, needs no analysis, and is ready to run the moment it is created.",
+    "enum": [
+     "file",
+     "tables",
+     "compaction"
+    ],
+    "type": "string"
+   },
+   "specName": {
+    "description": "Name for the new data spec.",
+    "type": "string"
+   },
+   "targetOption": {
+    "description": "Where transformed data should land \u2014 works the same for both sourceType values: \"auto-infer\" (default) lets the AI design the target table (for sourceType \"tables\", it designs the schema and the query together in one pass), \"existing-tables\" uses a table already in the workspace (requires targetTables), \"target-schema-file\" creates the table from a provided schema file (requires targetSchemaFileName).",
+    "enum": [
+     "auto-infer",
+     "existing-tables",
+     "target-schema-file"
+    ],
+    "type": "string"
+   },
+   "targetSchemaFileName": {
+    "description": "File name of a target schema file. Required when targetOption is \"target-schema-file\", for either sourceType.",
+    "type": "string"
+   },
+   "targetTables": {
+    "description": "Names of existing workspace tables to target \u2014 exactly one entry for sourceType \"tables\" (the generated query has a single target), one or more for sourceType \"file\". Required when targetOption is \"existing-tables\". Optional otherwise: for \"target-schema-file\"/\"auto-infer\" the target table (and its name) is derived automatically \u2014 from the schema file, or AI-designed \u2014 unless you want to pin the name yourself, in which case pass exactly one entry.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   },
+   "workspaceId": {
+    "description": "Workspace to act on. Defaults to your only workspace if you have exactly one.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "specName"
+  ],
+  "type": "object"
+ },
+ "name": "onboard_data_source",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "files": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "contentType": {
+       "type": "string"
+      },
+      "fileName": {
+       "type": "string"
+      },
+      "url": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "fileName",
+      "url",
+      "contentType"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "message": {
+    "type": "string"
+   },
+   "nextStep": {
+    "description": "The finish_data_source_onboarding call to make (once upload(s) are done, or immediately for sourceType \"tables\").",
+    "type": "string"
+   },
+   "specId": {
+    "type": "string"
+   },
+   "specName": {
+    "type": "string"
+   },
+   "triggerId": {
+    "description": "sourceType \"tables\" only, when autoRefresh was not \"none\": the auto-refresh trigger created alongside the spec.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "message",
+   "specId",
+   "specName",
+   "files",
+   "nextStep"
+  ],
+  "type": "object"
+ },
+ "title": "Onboard a new data source, step 1: create a data spec and get upload URL(s)"
+}

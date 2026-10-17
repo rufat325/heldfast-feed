@@ -1,0 +1,255 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "List possible double debits"
+ },
+ "description": "Find the pairs of outgoing bank movements that may be one charge taken twice, and say how many movements were scanned to find them. Use it for \"was I charged twice?\", \"double debit\", \"pr\u00e9lev\u00e9 deux fois\" or \"doublon de pr\u00e9l\u00e8vement\" about a supplier. It reads the bank movements itself: do not scan `well_query_records` rows by eye to look for pairs.\n\nA PAIR is two outgoing debits of this workspace to the same creditor company, in the same currency, for the same amount, executed 7 days apart or fewer (counted by calendar day). Both debits must sit inside the window. Outgoing is read from the legs: the debtor leg is on an account of the workspace (any account that is not a counterparty's, so an account of unknown ownership counts), and the stored flow is empty or a supplier payment. A transfer to an account the workspace owns is not a payment to a supplier: it is not scanned and never paired. It does NOT answer which subscriptions a workspace pays or what each costs month by month (`well_measure_subscriptions`: cadence and price per supplier), a total or a spend per supplier (`well_sum_transactions`), or a list of payments to a named supplier (`well_query_records`). A same-amount pair inside 7 days belongs HERE whatever the supplier's cadence: a subscription charged twice in a week is a pair, and `recurring_hint` carries the overlap.\n\n`from` is inclusive and `to` is EXCLUSIVE, both optional. Omit both for the last 6 months, which is what \"recently\" means here. **A window is at most 13 months**: a longer one is refused with an error, never trimmed, so ask again with a shorter one. Only this workspace's own movements are read.\n\n**An open pair is an upper bound, never a verdict.** Two same-amount payments to one supplier within a week are a double debit or a legitimate pair (a split payment, two instalments, a weekly plan), and nothing here can tell which. Say \"possible double debit\" and \"to check\", and say what would settle it: the supplier's invoices for the two dates and the bank statement line. Never state that an open pair IS a double charge, and never offer a claim for one.\n\n**Every pair carries its class**, read from stored fields and never from a label:\n  - `open_pair`: no stored verdict and no separate invoice behind each debit. This is the only class to raise as a possible double debit, \"to check\". `needs_review_reason` says why it is still open: `recurring_undecided` when `recurring_hint` is true, `no_invoice_evidence` otherwise.\n  - `distinct_invoices`: each debit has its own confirmed invoice or its own document, and none is shared. Two invoices for two debits are not a double debit. Count it, do not raise it.\n  - `imported_twice`: one debit stored twice by the bank import, not two charges. Count it, do not raise it.\n  - `confirmed_distinct`: a person already confirmed these are two real payments, so it is never a possible double debit to check again. Count it. `distinct_invoice_links` says what the two payments rest on: `true` is two purchases, each with its own invoice or document, and nothing to raise; `false` means the two debits do not each have one, so a caller that looks for money to recover may raise the pair as a double charge confirmed as two separate payments, to take up with the supplier. The field does not say which of the two debits lacks its invoice.\n  - `set_aside`: a movement of the pair was already dismissed as a duplicate. Count it, do not raise it again.\nA pair is tested against these in that stored-state order: `imported_twice`, then `confirmed_distinct`, then `set_aside`, then `distinct_invoices`, and `open_pair` is what none of them claims.\n\n`recurring_hint: true` means the same creditor, currency and amount also appears in at least 2 OTHER months of the window, so the pair may be a subscription charged twice or a plan with two instalments. The read excludes nothing for recurrence: a recurring pair is still returned as an `open_pair`, and you word the hint.\n\n`distinct_invoice_links` is true when each debit of the pair has a confirmed invoice edge or an attached document of its own and no invoice or document is shared by both. A provisional edge is not evidence of a payment.\n\n**Every pair is returned, so a group of n same-amount debits inside the window is n(n-1)/2 pairs**, not one entry per group. `dates` and `movement_ids` are in the same order, earlier day first. `amount.value` is the magnitude, whatever sign the bank feed stores.\n\n**Always state what was scanned, and never say \"no double debit\" without it.** `scanned_count` is every outgoing debit of the workspace in the window: the movements read. `eligible_count` is the part of it that could be paired, with a creditor company and an amount above zero that reads as a number. The rest is explained and adds up: `scanned_count = eligible_count + excluded_malformed + excluded_no_creditor_company`. `excluded_malformed` are debits whose amount could not be read as a number or is zero (a zero is never a double debit), and `excluded_no_creditor_company` are debits to a payee with no company on record (a person, a bare name), which no pair can be built on. Say so when either is above 0, and when `scanned_count` is 0 say nothing was read in the window. Debits an import stored twice are in `scanned_count`; this count is not the row count `well_query_records` reports, which leaves them out.\n\n`counts_by_class` counts EVERY pair found, exact. `pairs` is cut at 100 with the open pairs kept first: `truncated: true` means more pairs exist than the list shows, so state the open count from `counts_by_class` and say the list is partial. A window with no open pair is a statement about `counts_by_class.open_pair`, never about the length of a cut list.\n\n**`success: false` means the window is UNKNOWN, not clean.** The read failed, so `pairs`, the counts and `truncated` are absent rather than zero. Say the check could not be done; never report \"no double debit\" from a failed read.\n\nWhen the token authorizes one workspace, call this directly \u2014 no workspace call is needed first. When it authorizes several, this read will not guess which one you mean: pass `workspace_id` on the call.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation id returned by the previous Well result, in its meta under well/conversation_id, in its structuredContent, or in its JSON text block. Pass it back on every call in the same conversation, including a call a card makes, so the chosen workspace and the earlier answers still apply. It decides the conversation on its own: nothing the host states about the session replaces it. Omit it only on the first call of a conversation.",
+    "type": "string"
+   },
+   "from": {
+    "description": "Inclusive start of the window, ISO-8601 (e.g. 2026-04-01). Omit both bounds for the last 6 months. A window is at most 13 months.",
+    "type": "string"
+   },
+   "to": {
+    "description": "EXCLUSIVE end of the window, ISO-8601 \u2014 the first instant after the last day you want. Defaults to now.",
+    "type": "string"
+   },
+   "workspace_id": {
+    "description": "Target workspace. Omit when the token authorizes one workspace. Required when it authorizes several: this read reports one workspace's own figures and will not choose which.",
+    "format": "uuid",
+    "pattern": "^([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[1-8][0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}|00000000-0000-0000-0000-000000000000|ffffffff-ffff-ffff-ffff-ffffffffffff)$",
+    "type": "string"
+   },
+   "workspace_scope": {
+    "description": "Restrict this call to the family: the token's primary workspace plus the company workspaces under it that you are a member of. Unrelated authorized workspaces drop out of the read; row reads merge across the family, while a per-workspace figure still reports exactly one workspace.",
+    "enum": [
+     "family"
+    ],
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "well_list_possible_double_debits",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "conversation_id": {
+    "description": "The conversation this result belongs to. Pass it back as the conversation_id argument on every later Well call in the same conversation.",
+    "type": "string"
+   },
+   "conversation_id_note": {
+    "description": "Present only when the server opened a fresh lane, stating that no choice recorded earlier was read.",
+    "type": "string"
+   },
+   "conversation_id_source": {
+    "description": "Where the conversation id came from: the host's own request meta, the caller's argument, or a fresh lane the server opened.",
+    "enum": [
+     "host_meta",
+     "argument",
+     "minted"
+    ],
+    "type": "string"
+   },
+   "counts_by_class": {
+    "additionalProperties": false,
+    "properties": {
+     "confirmed_distinct": {
+      "type": "number"
+     },
+     "distinct_invoices": {
+      "type": "number"
+     },
+     "imported_twice": {
+      "type": "number"
+     },
+     "open_pair": {
+      "type": "number"
+     },
+     "set_aside": {
+      "type": "number"
+     }
+    },
+    "required": [
+     "open_pair",
+     "distinct_invoices",
+     "imported_twice",
+     "confirmed_distinct",
+     "set_aside"
+    ],
+    "type": "object"
+   },
+   "eligible_count": {
+    "type": "number"
+   },
+   "error": {
+    "type": "string"
+   },
+   "excluded_malformed": {
+    "type": "number"
+   },
+   "excluded_no_creditor_company": {
+    "type": "number"
+   },
+   "newly_connected": {
+    "description": "Tools that connected to this workspace since the last result and that no session was told about yet, oldest first. Present only when at least one tool is new. The connected-line rule says when to tell an entry; when it does, one line per entry, in the person's language: \"<name> is connected.\". Never fold several entries into one sentence. Each entry comes back once, on one result only: never repeat its line later.",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "name": {
+       "type": "string"
+      },
+      "service_id": {
+       "type": "string"
+      }
+     },
+     "required": [
+      "name",
+      "service_id"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "pairs": {
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "amount": {
+       "additionalProperties": false,
+       "properties": {
+        "currency": {
+         "type": "string"
+        },
+        "value": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "value",
+        "currency"
+       ],
+       "type": "object"
+      },
+      "creditor_company_id": {
+       "type": "string"
+      },
+      "dates": {
+       "items": {
+        "type": "string"
+       },
+       "maxItems": 2,
+       "minItems": 2,
+       "type": "array"
+      },
+      "distinct_invoice_links": {
+       "type": "boolean"
+      },
+      "movement_ids": {
+       "items": {
+        "type": "string"
+       },
+       "maxItems": 2,
+       "minItems": 2,
+       "type": "array"
+      },
+      "needs_review_reason": {
+       "enum": [
+        "recurring_undecided",
+        "no_invoice_evidence"
+       ],
+       "type": "string"
+      },
+      "pair_class": {
+       "enum": [
+        "open_pair",
+        "distinct_invoices",
+        "imported_twice",
+        "confirmed_distinct",
+        "set_aside"
+       ],
+       "type": "string"
+      },
+      "recurring_hint": {
+       "type": "boolean"
+      }
+     },
+     "required": [
+      "pair_class",
+      "amount",
+      "dates",
+      "creditor_company_id",
+      "movement_ids",
+      "distinct_invoice_links",
+      "recurring_hint"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "resolved_workspace": {
+    "additionalProperties": false,
+    "description": "The workspace that answered, when the caller named none and the token authorizes several.",
+    "properties": {
+     "name": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
+     "workspace_id": {
+      "type": "string"
+     }
+    },
+    "required": [
+     "workspace_id",
+     "name"
+    ],
+    "type": "object"
+   },
+   "scanned_count": {
+    "type": "number"
+   },
+   "success": {
+    "type": "boolean"
+   },
+   "truncated": {
+    "type": "boolean"
+   },
+   "window": {
+    "additionalProperties": false,
+    "properties": {
+     "from": {
+      "type": "string"
+     },
+     "to": {
+      "type": "string"
+     }
+    },
+    "type": "object"
+   }
+  },
+  "required": [
+   "window",
+   "success"
+  ],
+  "type": "object"
+ },
+ "title": "List possible double debits"
+}

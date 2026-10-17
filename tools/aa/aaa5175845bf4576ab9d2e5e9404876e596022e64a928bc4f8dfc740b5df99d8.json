@@ -1,0 +1,4462 @@
+{
+ "_meta": {
+  "ui": {
+   "resourceUri": "ui://render-ui/view.html"
+  },
+  "ui/resourceUri": "ui://render-ui/view.html"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Render UI"
+ },
+ "description": "Render an interactive Angular Material UI inline in the chat. Pass `spec`: one complete json-render spec object (not JSON Patch lines). The input schema lists every component, its props and allowed values, and every action; use only those.\n\n- `root` is the key of the top element. `elements` is a flat map of key \u2192 { type, props, children: [child keys] }; every child key must exist in `elements`.\n- `state` holds the data. Read it with {\"$state\":\"/path\"} rather than repeating values in props. Data-backed UI always needs `state`; use realistic sample data.\n- A prop can be dynamic: {\"$state\":\"/p\"} reads, {\"$bindState\":\"/p\"} binds a form field both ways, {\"$template\":\"Hi ${/name}\"} interpolates, {\"$cond\":{\"$state\":\"/p\"},\"$then\":a,\"$else\":b} picks.\n- Lists: on a container, \"repeat\":{\"statePath\":\"/items\",\"key\":\"id\"}; its children render once per item and read {\"$item\":\"field\"}, or ${field} inside a $template.\n- `visible` and `on` sit next to `props`, never inside: \"visible\":{\"$state\":\"/tab\",\"eq\":\"home\"}, \"on\":{\"press\":{\"action\":\"setState\",\"params\":{\"statePath\":\"/tab\",\"value\":\"home\"}}}.\n- Forms: give inputs props.validation {\"checks\":[{\"type\":\"required\",\"message\":\"...\"}]} and submit with submitForm, which runs its inner action only when every field is valid.\n- To continue the conversation from a button, use sendMessage: {\"action\":\"sendMessage\",\"params\":{\"text\":\"Approve release 2.4.0\",\"data\":{\"$state\":\"/release\"}}}. The host puts `text` (and `data` as JSON) in the chat as the user's message, so write it in their voice. For a form: {\"action\":\"submitForm\",\"params\":{\"action\":\"sendMessage\",\"params\":{\"text\":\"Sign me up\",\"data\":{\"$state\":\"/form\"}}}}.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "definitions": {
+   "ActionBinding": {
+    "oneOf": [
+     {
+      "additionalProperties": false,
+      "description": "sendMessage: Send a message to you, the assistant, as the user, so the conversation continues from the UI. Params: { \"text\": \"what the user chose or asks for\", \"data\"?: { \"$state\": \"/path\" } }. `data` is optional and is attached as JSON; make it a single reference to a state object, because references nested inside `data` are not resolved. Use it for choices and follow-ups (\"Approve\", \"Show more\", a picked option). To send a form, gate it with submitForm: { \"action\": \"submitForm\", \"params\": { \"action\": \"sendMessage\", \"params\": { \"text\": \"Submit the sign-up form\", \"data\": { \"$state\": \"/form\" } } } }. The host puts the message in the chat as the user's (Claude lets the user review it and send it), so write `text` in their voice.",
+      "properties": {
+       "action": {
+        "const": "sendMessage",
+        "type": "string"
+       },
+       "confirm": {},
+       "onError": {},
+       "onSuccess": {},
+       "params": {
+        "additionalProperties": false,
+        "properties": {
+         "data": {
+          "anyOf": [
+           {
+            "additionalProperties": {},
+            "propertyNames": {
+             "type": "string"
+            },
+            "type": "object"
+           },
+           {
+            "$ref": "#/definitions/DynamicValue"
+           }
+          ]
+         },
+         "text": {
+          "anyOf": [
+           {
+            "type": "string"
+           },
+           {
+            "$ref": "#/definitions/DynamicValue"
+           }
+          ]
+         }
+        },
+        "required": [
+         "text"
+        ],
+        "type": "object"
+       },
+       "preventDefault": {
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "action",
+       "params"
+      ],
+      "type": "object"
+     },
+     {
+      "additionalProperties": false,
+      "description": "setState: Update a value in the state model at the given statePath. Params: { statePath: string, value: any }\npushState: Append an item to an array in state. Params: { statePath: string, value: any, clearStatePath?: string }. Value can contain {\"$state\":\"/path\"} refs and \"$id\" for auto IDs.\nremoveState: Remove an item from an array in state by index. Params: { statePath: string, index: number }\nvalidateForm: Validate all registered form fields and write the result to state. Params: { statePath?: string }. Defaults to /formValidation. Result: { valid: boolean, errors: Record<string, string[]> }.\nsubmitForm: Validate all registered form fields and, only if every one passes, dispatch another action. Params: { action: string, params?: object, statePath?: string }. Writes the same { valid, errors } result as validateForm. Use this on a form's submit button: it is validateForm and the submit in one binding, and the submit is skipped when the form is invalid.",
+      "properties": {
+       "action": {
+        "enum": [
+         "setState",
+         "pushState",
+         "removeState",
+         "validateForm",
+         "submitForm"
+        ],
+        "type": "string"
+       },
+       "confirm": {},
+       "onError": {},
+       "onSuccess": {},
+       "params": {
+        "additionalProperties": {},
+        "propertyNames": {
+         "type": "string"
+        },
+        "type": "object"
+       },
+       "preventDefault": {
+        "type": "boolean"
+       }
+      },
+      "required": [
+       "action"
+      ],
+      "type": "object"
+     }
+    ]
+   },
+   "DynamicValue": {
+    "additionalProperties": {},
+    "description": "Dynamic value: {\"$state\"}, {\"$bindState\"}, {\"$bindItem\"}, {\"$item\"}, {\"$index\"}, {\"$template\"} or {\"$cond\",\"$then\",\"$else\"}.",
+    "properties": {},
+    "type": "object"
+   },
+   "Events": {
+    "additionalProperties": {
+     "anyOf": [
+      {
+       "$ref": "#/definitions/ActionBinding"
+      },
+      {
+       "items": {
+        "$ref": "#/definitions/ActionBinding"
+       },
+       "type": "array"
+      }
+     ]
+    },
+    "description": "Event name (such as \"press\", \"change\" or \"submit\") \u2192 action binding.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "Repeat": {
+    "additionalProperties": false,
+    "description": "Render the children once per item of the state array at statePath; they read {\"$item\":\"field\"} and {\"$index\":true}.",
+    "properties": {
+     "key": {
+      "type": "string"
+     },
+     "statePath": {
+      "anyOf": [
+       {
+        "type": "string"
+       },
+       {
+        "$ref": "#/definitions/DynamicValue"
+       }
+      ]
+     }
+    },
+    "required": [
+     "statePath"
+    ],
+    "type": "object"
+   },
+   "Visibility": {
+    "description": "Show the element only when this holds: {\"$state\":\"/p\",\"eq\":v} (or neq, gt, gte, lt, lte, not), an array of conditions (all), {\"$or\":[...]}, true or false."
+   },
+   "Watchers": {
+    "additionalProperties": {
+     "anyOf": [
+      {
+       "$ref": "#/definitions/ActionBinding"
+      },
+      {
+       "items": {
+        "$ref": "#/definitions/ActionBinding"
+       },
+       "type": "array"
+      }
+     ]
+    },
+    "description": "State path \u2192 action binding, run when the value at that path changes.",
+    "propertyNames": {
+     "type": "string"
+    },
+    "type": "object"
+   },
+   "__schema0": {
+    "anyOf": [
+     {
+      "type": "boolean"
+     },
+     {
+      "anyOf": [
+       {
+        "properties": {
+         "$state": {
+          "type": "string"
+         },
+         "eq": {},
+         "gt": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "properties": {
+             "$state": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "$state"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "gte": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "properties": {
+             "$state": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "$state"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "lt": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "properties": {
+             "$state": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "$state"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "lte": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "properties": {
+             "$state": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "$state"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "neq": {},
+         "not": {
+          "const": true,
+          "type": "boolean"
+         }
+        },
+        "required": [
+         "$state"
+        ],
+        "type": "object"
+       },
+       {
+        "properties": {
+         "$item": {
+          "type": "string"
+         },
+         "eq": {},
+         "gt": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "properties": {
+             "$state": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "$state"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "gte": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "properties": {
+             "$state": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "$state"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "lt": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "properties": {
+             "$state": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "$state"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "lte": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "properties": {
+             "$state": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "$state"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "neq": {},
+         "not": {
+          "const": true,
+          "type": "boolean"
+         }
+        },
+        "required": [
+         "$item"
+        ],
+        "type": "object"
+       },
+       {
+        "properties": {
+         "$index": {
+          "const": true,
+          "type": "boolean"
+         },
+         "eq": {},
+         "gt": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "properties": {
+             "$state": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "$state"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "gte": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "properties": {
+             "$state": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "$state"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "lt": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "properties": {
+             "$state": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "$state"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "lte": {
+          "anyOf": [
+           {
+            "type": "number"
+           },
+           {
+            "properties": {
+             "$state": {
+              "type": "string"
+             }
+            },
+            "required": [
+             "$state"
+            ],
+            "type": "object"
+           }
+          ]
+         },
+         "neq": {},
+         "not": {
+          "const": true,
+          "type": "boolean"
+         }
+        },
+        "required": [
+         "$index"
+        ],
+        "type": "object"
+       }
+      ]
+     },
+     {
+      "items": {
+       "anyOf": [
+        {
+         "properties": {
+          "$state": {
+           "type": "string"
+          },
+          "eq": {},
+          "gt": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "properties": {
+              "$state": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "$state"
+             ],
+             "type": "object"
+            }
+           ]
+          },
+          "gte": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "properties": {
+              "$state": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "$state"
+             ],
+             "type": "object"
+            }
+           ]
+          },
+          "lt": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "properties": {
+              "$state": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "$state"
+             ],
+             "type": "object"
+            }
+           ]
+          },
+          "lte": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "properties": {
+              "$state": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "$state"
+             ],
+             "type": "object"
+            }
+           ]
+          },
+          "neq": {},
+          "not": {
+           "const": true,
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "$state"
+         ],
+         "type": "object"
+        },
+        {
+         "properties": {
+          "$item": {
+           "type": "string"
+          },
+          "eq": {},
+          "gt": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "properties": {
+              "$state": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "$state"
+             ],
+             "type": "object"
+            }
+           ]
+          },
+          "gte": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "properties": {
+              "$state": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "$state"
+             ],
+             "type": "object"
+            }
+           ]
+          },
+          "lt": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "properties": {
+              "$state": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "$state"
+             ],
+             "type": "object"
+            }
+           ]
+          },
+          "lte": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "properties": {
+              "$state": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "$state"
+             ],
+             "type": "object"
+            }
+           ]
+          },
+          "neq": {},
+          "not": {
+           "const": true,
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "$item"
+         ],
+         "type": "object"
+        },
+        {
+         "properties": {
+          "$index": {
+           "const": true,
+           "type": "boolean"
+          },
+          "eq": {},
+          "gt": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "properties": {
+              "$state": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "$state"
+             ],
+             "type": "object"
+            }
+           ]
+          },
+          "gte": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "properties": {
+              "$state": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "$state"
+             ],
+             "type": "object"
+            }
+           ]
+          },
+          "lt": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "properties": {
+              "$state": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "$state"
+             ],
+             "type": "object"
+            }
+           ]
+          },
+          "lte": {
+           "anyOf": [
+            {
+             "type": "number"
+            },
+            {
+             "properties": {
+              "$state": {
+               "type": "string"
+              }
+             },
+             "required": [
+              "$state"
+             ],
+             "type": "object"
+            }
+           ]
+          },
+          "neq": {},
+          "not": {
+           "const": true,
+           "type": "boolean"
+          }
+         },
+         "required": [
+          "$index"
+         ],
+         "type": "object"
+        }
+       ]
+      },
+      "type": "array"
+     },
+     {
+      "properties": {
+       "$and": {
+        "items": {
+         "$ref": "#/definitions/__schema0"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "$and"
+      ],
+      "type": "object"
+     },
+     {
+      "properties": {
+       "$or": {
+        "items": {
+         "$ref": "#/definitions/__schema0"
+        },
+        "type": "array"
+       }
+      },
+      "required": [
+       "$or"
+      ],
+      "type": "object"
+     }
+    ]
+   }
+  },
+  "properties": {
+   "spec": {
+    "additionalProperties": false,
+    "properties": {
+     "elements": {
+      "additionalProperties": {
+       "oneOf": [
+        {
+         "additionalProperties": false,
+         "description": "Stack: Layout container that stacks children vertically or horizontally. The primary building block \u2014 use it for every group of elements.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "align": {
+             "anyOf": [
+              {
+               "enum": [
+                "start",
+                "center",
+                "end",
+                "stretch"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "direction": {
+             "anyOf": [
+              {
+               "enum": [
+                "vertical",
+                "horizontal"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "gap": {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "justify": {
+             "anyOf": [
+              {
+               "enum": [
+                "start",
+                "center",
+                "between",
+                "end"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "padding": {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "wrap": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Stack",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Grid: Responsive grid that places children in equal columns, collapsing to one column on narrow screens. Use for dashboards and card galleries.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "columns": {
+             "anyOf": [
+              {
+               "maximum": 6,
+               "minimum": 1,
+               "type": "number"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "gap": {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Grid",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Card: Material card with an optional title/subtitle header and an \"actions\" slot rendered as a footer button row.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "appearance": {
+             "anyOf": [
+              {
+               "enum": [
+                "outlined",
+                "raised",
+                "filled"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "subtitle": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "title": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Card",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Toolbar: Material toolbar for a page or section header. Children are placed at the trailing edge.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "color": {
+             "anyOf": [
+              {
+               "enum": [
+                "primary",
+                "accent",
+                "warn"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "title": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Toolbar",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "ExpansionPanel: Collapsible Material panel. Use for secondary detail that should not compete with the main content.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "description": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "expanded": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "title": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "title"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "ExpansionPanel",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Tabs: Material tab group. Children MUST all be Tab components; each Tab supplies one tab and its body.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {},
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Tabs",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Tab: A single tab inside a Tabs component. Valid only as a direct child of Tabs.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "label": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "label"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Tab",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Stepper: Material stepper for a multi-step form or wizard. Children MUST all be Step components; each Step supplies one step and its body. Every step but the first gets a Back button and every step but the last a Next button (`backLabel`, `nextLabel` rename them). Next validates the bound fields inside its step and moves on only if they all pass, so put each field's `validation` on it as usual and the final submit button (submitForm) in the last Step. With `linear: true` the step headers cannot skip ahead to a step not reached yet. `selected` is the 0-based index of the open step; bind it with {\"$bindState\":\"/path\"} to read or drive it.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "backLabel": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "linear": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "nextLabel": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "orientation": {
+             "anyOf": [
+              {
+               "enum": [
+                "horizontal",
+                "vertical"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "selected": {
+             "anyOf": [
+              {
+               "maximum": 9007199254740991,
+               "minimum": 0,
+               "type": "integer"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Stepper",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Step: A single step inside a Stepper. Valid only as a direct child of Stepper.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "label": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "label"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Step",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Divider: Horizontal Material divider.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {},
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Divider",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Heading: Section heading (level 1\u20133) using the Material type scale.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "content": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "level": {
+             "anyOf": [
+              {
+               "maximum": 3,
+               "minimum": 1,
+               "type": "number"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "content"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Heading",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Text: A paragraph of body text; \"\\n\" in content starts a new line.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "content": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "tone": {
+             "anyOf": [
+              {
+               "enum": [
+                "default",
+                "muted",
+                "strong"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "content"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Text",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Icon: Material Symbols icon. `name` is the ligature, e.g. \"home\", \"check_circle\", \"warning\".",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "color": {
+             "anyOf": [
+              {
+               "enum": [
+                "primary",
+                "accent",
+                "warn"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "name": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "name"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Icon",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Metric: Key metric tile with an optional delta and trend direction. Use inside a Grid for dashboard summaries.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "delta": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "label": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "trend": {
+             "anyOf": [
+              {
+               "enum": [
+                "up",
+                "down",
+                "flat"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "value": {
+             "anyOf": [
+              {
+               "type": [
+                "string",
+                "number"
+               ]
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "label",
+            "value"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Metric",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Chip: Material chip, for tags and status labels.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "color": {
+             "anyOf": [
+              {
+               "enum": [
+                "primary",
+                "accent",
+                "warn"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "icon": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "label": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "label"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Chip",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "List: Material list container. Children MUST all be ListItem components.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {},
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "List",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "ListItem: Row inside a List. Emits a 'press' event when clicked. Valid only as a direct child of List.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "description": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "icon": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "title": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "title"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "ListItem",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Table: Material table. `columns` describes the header; `rows` is an array of objects keyed by each column's `field`. Bind `rows` to a state array with {\"$state\":\"/path\"} rather than using repeat.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "columns": {
+             "anyOf": [
+              {
+               "items": {
+                "properties": {
+                 "align": {
+                  "enum": [
+                   "start",
+                   "end"
+                  ],
+                  "type": "string"
+                 },
+                 "field": {
+                  "type": "string"
+                 },
+                 "header": {
+                  "type": "string"
+                 }
+                },
+                "required": [
+                 "field",
+                 "header"
+                ],
+                "type": "object"
+               },
+               "type": "array"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "rows": {
+             "anyOf": [
+              {
+               "items": {
+                "additionalProperties": {},
+                "propertyNames": {
+                 "type": "string"
+                },
+                "type": "object"
+               },
+               "type": "array"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "columns",
+            "rows"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Table",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Button: Material button that emits a 'press' event. `variant` follows the Material 3 button appearances; use \"filled\" for the primary action on a screen and \"text\" for secondary ones. Put the action in the element's `on.press`, never in props.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "color": {
+             "anyOf": [
+              {
+               "enum": [
+                "primary",
+                "accent",
+                "warn"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "disabled": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "icon": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "label": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "variant": {
+             "anyOf": [
+              {
+               "enum": [
+                "text",
+                "filled",
+                "elevated",
+                "outlined",
+                "tonal"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "label"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Button",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "IconButton: Icon-only Material button that emits a 'press' event. `label` is the accessible name and is required; it is also shown as a tooltip on hover and focus.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "color": {
+             "anyOf": [
+              {
+               "enum": [
+                "primary",
+                "accent",
+                "warn"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "disabled": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "icon": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "label": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "icon",
+            "label"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "IconButton",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Input: Material text field. Bind `value` with {\"$bindState\":\"/path\"} for two-way binding; emits 'submit' on Enter. `required` only draws the asterisk \u2014 enforcement comes from `validation`. Validation: see `elements`.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "disabled": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "hint": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "label": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "placeholder": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "required": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "type": {
+             "anyOf": [
+              {
+               "enum": [
+                "text",
+                "number",
+                "email",
+                "password"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "validation": {
+             "anyOf": [
+              {
+               "properties": {
+                "checks": {
+                 "items": {
+                  "properties": {
+                   "args": {
+                    "additionalProperties": {
+                     "anyOf": [
+                      {
+                       "type": "string"
+                      },
+                      {
+                       "type": "number"
+                      },
+                      {
+                       "type": "boolean"
+                      },
+                      {
+                       "type": "null"
+                      },
+                      {
+                       "properties": {
+                        "$state": {
+                         "type": "string"
+                        }
+                       },
+                       "required": [
+                        "$state"
+                       ],
+                       "type": "object"
+                      }
+                     ]
+                    },
+                    "propertyNames": {
+                     "type": "string"
+                    },
+                    "type": "object"
+                   },
+                   "message": {
+                    "type": "string"
+                   },
+                   "type": {
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "type",
+                   "message"
+                  ],
+                  "type": "object"
+                 },
+                 "type": "array"
+                },
+                "enabled": {
+                 "allOf": [
+                  {
+                   "$ref": "#/definitions/__schema0"
+                  }
+                 ]
+                },
+                "validateOn": {
+                 "enum": [
+                  "change",
+                  "blur",
+                  "submit"
+                 ],
+                 "type": "string"
+                }
+               },
+               "type": "object"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "value": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Input",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Textarea: Multi-line Material text field. Bind `value` with {\"$bindState\":\"/path\"}. Validation: see `elements`.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "disabled": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "label": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "placeholder": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "rows": {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "validation": {
+             "anyOf": [
+              {
+               "properties": {
+                "checks": {
+                 "items": {
+                  "properties": {
+                   "args": {
+                    "additionalProperties": {
+                     "anyOf": [
+                      {
+                       "type": "string"
+                      },
+                      {
+                       "type": "number"
+                      },
+                      {
+                       "type": "boolean"
+                      },
+                      {
+                       "type": "null"
+                      },
+                      {
+                       "properties": {
+                        "$state": {
+                         "type": "string"
+                        }
+                       },
+                       "required": [
+                        "$state"
+                       ],
+                       "type": "object"
+                      }
+                     ]
+                    },
+                    "propertyNames": {
+                     "type": "string"
+                    },
+                    "type": "object"
+                   },
+                   "message": {
+                    "type": "string"
+                   },
+                   "type": {
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "type",
+                   "message"
+                  ],
+                  "type": "object"
+                 },
+                 "type": "array"
+                },
+                "enabled": {
+                 "allOf": [
+                  {
+                   "$ref": "#/definitions/__schema0"
+                  }
+                 ]
+                },
+                "validateOn": {
+                 "enum": [
+                  "change",
+                  "blur",
+                  "submit"
+                 ],
+                 "type": "string"
+                }
+               },
+               "type": "object"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "value": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Textarea",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Select: Material select. Bind `value` with {\"$bindState\":\"/path\"}; `options` is an explicit list. With `multiple: true` the user can pick several options and `value` is an array of the chosen values (start it as []); a required check then fails on an empty array. Validation: see `elements`.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "disabled": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "label": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "multiple": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "options": {
+             "anyOf": [
+              {
+               "items": {
+                "properties": {
+                 "label": {
+                  "type": "string"
+                 },
+                 "value": {
+                  "type": "string"
+                 }
+                },
+                "required": [
+                 "value",
+                 "label"
+                ],
+                "type": "object"
+               },
+               "type": "array"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "validation": {
+             "anyOf": [
+              {
+               "properties": {
+                "checks": {
+                 "items": {
+                  "properties": {
+                   "args": {
+                    "additionalProperties": {
+                     "anyOf": [
+                      {
+                       "type": "string"
+                      },
+                      {
+                       "type": "number"
+                      },
+                      {
+                       "type": "boolean"
+                      },
+                      {
+                       "type": "null"
+                      },
+                      {
+                       "properties": {
+                        "$state": {
+                         "type": "string"
+                        }
+                       },
+                       "required": [
+                        "$state"
+                       ],
+                       "type": "object"
+                      }
+                     ]
+                    },
+                    "propertyNames": {
+                     "type": "string"
+                    },
+                    "type": "object"
+                   },
+                   "message": {
+                    "type": "string"
+                   },
+                   "type": {
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "type",
+                   "message"
+                  ],
+                  "type": "object"
+                 },
+                 "type": "array"
+                },
+                "enabled": {
+                 "allOf": [
+                  {
+                   "$ref": "#/definitions/__schema0"
+                  }
+                 ]
+                },
+                "validateOn": {
+                 "enum": [
+                  "change",
+                  "blur",
+                  "submit"
+                 ],
+                 "type": "string"
+                }
+               },
+               "type": "object"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "value": {
+             "anyOf": [
+              {
+               "anyOf": [
+                {
+                 "type": "string"
+                },
+                {
+                 "items": {
+                  "type": "string"
+                 },
+                 "type": "array"
+                }
+               ]
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "options"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Select",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "DatePicker: Material date field with a calendar popup. Dates in `value`, `min` and `max` are \"YYYY-MM-DD\" strings. Bind `value` with {\"$bindState\":\"/path\"}; clearing the field writes \"\". `min` and `max` limit the days the calendar offers. ISO dates compare as strings, so an end date after a start date is {\"type\":\"greaterThan\",\"args\":{\"other\":{\"$state\":\"/start\"}},\"message\":\"...\"}. Validation: see `elements`.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "disabled": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "hint": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "label": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "max": {
+             "anyOf": [
+              {
+               "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "min": {
+             "anyOf": [
+              {
+               "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "validation": {
+             "anyOf": [
+              {
+               "properties": {
+                "checks": {
+                 "items": {
+                  "properties": {
+                   "args": {
+                    "additionalProperties": {
+                     "anyOf": [
+                      {
+                       "type": "string"
+                      },
+                      {
+                       "type": "number"
+                      },
+                      {
+                       "type": "boolean"
+                      },
+                      {
+                       "type": "null"
+                      },
+                      {
+                       "properties": {
+                        "$state": {
+                         "type": "string"
+                        }
+                       },
+                       "required": [
+                        "$state"
+                       ],
+                       "type": "object"
+                      }
+                     ]
+                    },
+                    "propertyNames": {
+                     "type": "string"
+                    },
+                    "type": "object"
+                   },
+                   "message": {
+                    "type": "string"
+                   },
+                   "type": {
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "type",
+                   "message"
+                  ],
+                  "type": "object"
+                 },
+                 "type": "array"
+                },
+                "enabled": {
+                 "allOf": [
+                  {
+                   "$ref": "#/definitions/__schema0"
+                  }
+                 ]
+                },
+                "validateOn": {
+                 "enum": [
+                  "change",
+                  "blur",
+                  "submit"
+                 ],
+                 "type": "string"
+                }
+               },
+               "type": "object"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "value": {
+             "anyOf": [
+              {
+               "pattern": "^\\d{4}-\\d{2}-\\d{2}$",
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "DatePicker",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Checkbox: Material checkbox. Bind `checked` with {\"$bindState\":\"/path\"} or {\"$bindItem\":\"field\"} inside a repeat. Validation: see `elements`.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "checked": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "disabled": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "label": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "validation": {
+             "anyOf": [
+              {
+               "properties": {
+                "checks": {
+                 "items": {
+                  "properties": {
+                   "args": {
+                    "additionalProperties": {
+                     "anyOf": [
+                      {
+                       "type": "string"
+                      },
+                      {
+                       "type": "number"
+                      },
+                      {
+                       "type": "boolean"
+                      },
+                      {
+                       "type": "null"
+                      },
+                      {
+                       "properties": {
+                        "$state": {
+                         "type": "string"
+                        }
+                       },
+                       "required": [
+                        "$state"
+                       ],
+                       "type": "object"
+                      }
+                     ]
+                    },
+                    "propertyNames": {
+                     "type": "string"
+                    },
+                    "type": "object"
+                   },
+                   "message": {
+                    "type": "string"
+                   },
+                   "type": {
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "type",
+                   "message"
+                  ],
+                  "type": "object"
+                 },
+                 "type": "array"
+                },
+                "enabled": {
+                 "allOf": [
+                  {
+                   "$ref": "#/definitions/__schema0"
+                  }
+                 ]
+                },
+                "validateOn": {
+                 "enum": [
+                  "change",
+                  "blur",
+                  "submit"
+                 ],
+                 "type": "string"
+                }
+               },
+               "type": "object"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "label"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Checkbox",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "RadioGroup: Material radio group. Bind `value` with {\"$bindState\":\"/path\"}. Validation: see `elements`.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "direction": {
+             "anyOf": [
+              {
+               "enum": [
+                "vertical",
+                "horizontal"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "label": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "options": {
+             "anyOf": [
+              {
+               "items": {
+                "properties": {
+                 "label": {
+                  "type": "string"
+                 },
+                 "value": {
+                  "type": "string"
+                 }
+                },
+                "required": [
+                 "value",
+                 "label"
+                ],
+                "type": "object"
+               },
+               "type": "array"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "validation": {
+             "anyOf": [
+              {
+               "properties": {
+                "checks": {
+                 "items": {
+                  "properties": {
+                   "args": {
+                    "additionalProperties": {
+                     "anyOf": [
+                      {
+                       "type": "string"
+                      },
+                      {
+                       "type": "number"
+                      },
+                      {
+                       "type": "boolean"
+                      },
+                      {
+                       "type": "null"
+                      },
+                      {
+                       "properties": {
+                        "$state": {
+                         "type": "string"
+                        }
+                       },
+                       "required": [
+                        "$state"
+                       ],
+                       "type": "object"
+                      }
+                     ]
+                    },
+                    "propertyNames": {
+                     "type": "string"
+                    },
+                    "type": "object"
+                   },
+                   "message": {
+                    "type": "string"
+                   },
+                   "type": {
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "type",
+                   "message"
+                  ],
+                  "type": "object"
+                 },
+                 "type": "array"
+                },
+                "enabled": {
+                 "allOf": [
+                  {
+                   "$ref": "#/definitions/__schema0"
+                  }
+                 ]
+                },
+                "validateOn": {
+                 "enum": [
+                  "change",
+                  "blur",
+                  "submit"
+                 ],
+                 "type": "string"
+                }
+               },
+               "type": "object"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "value": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "options"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "RadioGroup",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "ToggleGroup: Segmented control: a row of 2\u20135 buttons, one of which is chosen. Prefer it to a RadioGroup or Select for a short, frequently switched choice such as a view mode or a time range. Bind `value` with {\"$bindState\":\"/path\"}; an option may carry a Material Symbols `icon`. Validation: see `elements`.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "disabled": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "label": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "options": {
+             "anyOf": [
+              {
+               "items": {
+                "properties": {
+                 "icon": {
+                  "type": "string"
+                 },
+                 "label": {
+                  "type": "string"
+                 },
+                 "value": {
+                  "type": "string"
+                 }
+                },
+                "required": [
+                 "value",
+                 "label"
+                ],
+                "type": "object"
+               },
+               "type": "array"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "validation": {
+             "anyOf": [
+              {
+               "properties": {
+                "checks": {
+                 "items": {
+                  "properties": {
+                   "args": {
+                    "additionalProperties": {
+                     "anyOf": [
+                      {
+                       "type": "string"
+                      },
+                      {
+                       "type": "number"
+                      },
+                      {
+                       "type": "boolean"
+                      },
+                      {
+                       "type": "null"
+                      },
+                      {
+                       "properties": {
+                        "$state": {
+                         "type": "string"
+                        }
+                       },
+                       "required": [
+                        "$state"
+                       ],
+                       "type": "object"
+                      }
+                     ]
+                    },
+                    "propertyNames": {
+                     "type": "string"
+                    },
+                    "type": "object"
+                   },
+                   "message": {
+                    "type": "string"
+                   },
+                   "type": {
+                    "type": "string"
+                   }
+                  },
+                  "required": [
+                   "type",
+                   "message"
+                  ],
+                  "type": "object"
+                 },
+                 "type": "array"
+                },
+                "enabled": {
+                 "allOf": [
+                  {
+                   "$ref": "#/definitions/__schema0"
+                  }
+                 ]
+                },
+                "validateOn": {
+                 "enum": [
+                  "change",
+                  "blur",
+                  "submit"
+                 ],
+                 "type": "string"
+                }
+               },
+               "type": "object"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "value": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "options"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "ToggleGroup",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "SlideToggle: Material slide toggle for on/off settings. Bind `checked` with {\"$bindState\":\"/path\"}.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "checked": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "disabled": {
+             "anyOf": [
+              {
+               "type": "boolean"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "label": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "label"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "SlideToggle",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Slider: Material slider for a numeric range. Bind `value` with {\"$bindState\":\"/path\"}.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "label": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "max": {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "min": {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "step": {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "value": {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Slider",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "ProgressBar: Material progress bar (0\u2013100). Use mode \"indeterminate\" when the amount of work is unknown.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "color": {
+             "anyOf": [
+              {
+               "enum": [
+                "primary",
+                "accent",
+                "warn"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "mode": {
+             "anyOf": [
+              {
+               "enum": [
+                "determinate",
+                "indeterminate"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "value": {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "ProgressBar",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Spinner: Material indeterminate progress spinner, for loading states.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "color": {
+             "anyOf": [
+              {
+               "enum": [
+                "primary",
+                "accent",
+                "warn"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "diameter": {
+             "anyOf": [
+              {
+               "type": "number"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Spinner",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        },
+        {
+         "additionalProperties": false,
+         "description": "Callout: Inline message block for informational, success, warning, or error text.",
+         "properties": {
+          "children": {
+           "default": [],
+           "items": {
+            "type": "string"
+           },
+           "type": "array"
+          },
+          "on": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Events"
+            }
+           ]
+          },
+          "props": {
+           "additionalProperties": false,
+           "properties": {
+            "content": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "severity": {
+             "anyOf": [
+              {
+               "enum": [
+                "info",
+                "success",
+                "warning",
+                "error"
+               ],
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            },
+            "title": {
+             "anyOf": [
+              {
+               "type": "string"
+              },
+              {
+               "$ref": "#/definitions/DynamicValue"
+              }
+             ]
+            }
+           },
+           "required": [
+            "content"
+           ],
+           "type": "object"
+          },
+          "repeat": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Repeat"
+            }
+           ]
+          },
+          "type": {
+           "const": "Callout",
+           "type": "string"
+          },
+          "visible": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Visibility"
+            }
+           ]
+          },
+          "watch": {
+           "allOf": [
+            {
+             "$ref": "#/definitions/Watchers"
+            }
+           ]
+          }
+         },
+         "required": [
+          "type",
+          "props"
+         ],
+         "type": "object"
+        }
+       ]
+      },
+      "description": "Elements by key. On every component that takes `validation`: Validate it with `validation`: {\"checks\":[{\"type\":\"required\",\"message\":\"...\"}],\"validateOn\":\"blur\"}. Check types: required, requiredIf, email, url, numeric, minLength, maxLength, pattern, min, max, matches, equalTo, lessThan, greaterThan. Args go in `args` (e.g. {\"type\":\"minLength\",\"args\":{\"min\":8},\"message\":\"...\"}). Validation needs a bound value. The built-in validateForm action checks every bound field at once, and submitForm checks them and then dispatches your submit action only if they all pass.",
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "root": {
+      "description": "Key of the top element in `elements`.",
+      "type": "string"
+     },
+     "state": {
+      "additionalProperties": {},
+      "description": "Initial state model; bindings read it with {\"$state\": \"/path\"}.",
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     }
+    },
+    "required": [
+     "root",
+     "elements"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "spec"
+  ],
+  "type": "object"
+ },
+ "name": "render-ui",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "spec": {
+    "additionalProperties": {},
+    "description": "The json-render spec that was rendered.",
+    "properties": {
+     "elements": {
+      "additionalProperties": {
+       "additionalProperties": {},
+       "properties": {
+        "children": {
+         "items": {
+          "type": "string"
+         },
+         "type": "array"
+        },
+        "props": {
+         "additionalProperties": {},
+         "propertyNames": {
+          "type": "string"
+         },
+         "type": "object"
+        },
+        "type": {
+         "type": "string"
+        }
+       },
+       "required": [
+        "type",
+        "props",
+        "children"
+       ],
+       "type": "object"
+      },
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     },
+     "root": {
+      "type": "string"
+     },
+     "state": {
+      "additionalProperties": {},
+      "propertyNames": {
+       "type": "string"
+      },
+      "type": "object"
+     }
+    },
+    "required": [
+     "root",
+     "elements"
+    ],
+    "type": "object"
+   }
+  },
+  "required": [
+   "spec"
+  ],
+  "type": "object"
+ },
+ "title": "Render UI"
+}

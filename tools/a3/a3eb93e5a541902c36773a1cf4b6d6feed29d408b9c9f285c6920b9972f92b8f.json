@@ -1,0 +1,138 @@
+{
+ "_meta": {
+  "dev.emem/bundles": [],
+  "dev.emem/category": "verify",
+  "dev.emem/level": "L1",
+  "dev.emem/mutation": "none: this call does not modify server state",
+  "dev.emem/observed_latency": {
+   "n": 9,
+   "note": "measured here over recent calls, not a budget",
+   "p50_ms": 0,
+   "p95_ms": 2
+  },
+  "dev.emem/shape": "proof",
+  "dev.emem/tier": "core"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": false,
+  "readOnlyHint": true,
+  "title": "Check whether the citations in a draft actually verify"
+ },
+ "description": "Run the emem-guard policy checks on text before you send it. The checks use this responder's corpus. The tool finds every emem: citation, resolves each one, and returns allow or deny with a reason that a machine can read: `EMEM-GUARD DENY <CODE> token=<token|-> fix=<fix> leaf=<leaf|->`. The codes are: PROV_SIG (the signature did not verify). PROV_BYTES (the citation resolved to different content). PROV_DRIFT (the reading moved past its band threshold). PROV_VALUE (a stated value does not agree with the cited fact). CLAIM_UNGROUNDED (a measurable claim has no citation; turn it on with claim_gating). `fix` tells you what to do: refresh_token, remove_reference, contact_admin, cite_observation, correct_value. Only a self-hosted guard returns GEO_ZONE and redact_and_retry. This tool is ADVISORY: it blocks nothing. A citation that this responder does not hold is never a denial, because it can be a citation from another responder. Memory algebra: the `verify` operation (https://emem.dev/docs/model.html).\n\nWhen to use: Call it on your draft before you assert something, or on a tool result before you reason on it. Then you can fix a citation that does not resolve. With `claim_gating: true`, it also names measurable claims with no citation, and the band that answers each. For a payload from another framework (CloudEvent, OPA input, OpenAI moderations body, a tool call from another server), send it unchanged and name its `shape`. The default reader reads only `texts`, and a check that read nothing answers allow. To ENFORCE the policy, use emem_guard_selfhost. It returns the procedure for your own node.\n\nExample arguments: {\"texts\":[\"Lusail ground sits at 2.6 m per emem:fact:defi.zb521.jawI.gOze:f3yr3urkrfwamlemwadulgth2qpw645vi6l6fhtuu4dy5o7onahq\"]}",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "properties": {
+   "agent": {
+    "description": "Optional free-text label for who is asking. Advisory only, never a trust boundary.",
+    "type": "string"
+   },
+   "claim_gating": {
+    "default": false,
+    "description": "Also flag measurable physical-world claims that carry NO citation (deny code CLAIM_UNGROUNDED, fix cite_observation). Off by default: it reports on the absence of a citation rather than on a failed check. The verdict names the sentence, the magnitude, and the emem band that would answer it.",
+    "type": "boolean"
+   },
+   "shape": {
+    "default": "native",
+    "description": "Which envelope YOUR payload is in, so you never have to reshape it to ask the question: send the body your own framework produced and name its shape. native reads `texts`; `mcp` reads a JSON-RPC tools/call or tool result; `openai` reads a moderations (`input`) or chat-completions body; `cloudevent` reads a CloudEvents 1.0 structured event; `policy` reads {input}. It matters: a CloudEvent whose citation sits at data.text is invisible to the native reader, and a check that read nothing answers `allow`, so confirm `citations_found` matches what you sent. Unrecognised values fall back to native rather than erroring. This selects how the body is READ only \u2014 the verdict always comes back in this tool's declared output shape, because a tool that declares an outputSchema owes conforming structuredContent. To get the ANSWER translated into the same envelope too (an OPA `result:{allow,deny}`, an MCP CallToolResult to substitute on a deny), call POST /v1/guard/verdict?shape=\u2026 directly.",
+    "enum": [
+     "native",
+     "mcp",
+     "openai",
+     "cloudevent",
+     "policy"
+    ],
+    "type": "string"
+   },
+   "texts": {
+    "description": "Free text to check, and the only input this tool needs. Send just the pieces the question is about: a draft answer, a tool result, one turn. Do not send surrounding conversation, because nothing here reads it and a checker should ask for the smallest input that answers the question.",
+    "items": {
+     "type": "string"
+    },
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "name": "emem_guard_verdict",
+ "outputSchema": {
+  "properties": {
+   "action": {
+    "description": "NOT a clearance. `allow` means no rule fired, which on a transcript that cited nothing is silence rather than approval. Branch on citations_found and receipt.fact_cids.",
+    "enum": [
+     "allow",
+     "deny"
+    ],
+    "type": "string"
+   },
+   "advisory": {
+    "description": "True on the hosted route, where nothing is blocked. Run your own node to enforce.",
+    "type": "boolean"
+   },
+   "checked": {
+    "description": "How many were actually resolved, bounded by the verdict budget.",
+    "type": "integer"
+   },
+   "citations": {
+    "description": "Each citation and what it came to here: verified, signature_failed, byte_mismatch, not_held_here (minted elsewhere or nonexistent: resolve it where it was minted before relying on it), or drifted.",
+    "items": {
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "citations_found": {
+    "description": "How many emem: tokens were found in the text. Compare with receipt.fact_cids: a well-formed token that resolved to nothing counts here and not there.",
+    "type": "integer"
+   },
+   "citations_verified_here": {
+    "description": "How many of the citations this responder holds and verified.",
+    "type": "integer"
+   },
+   "claim": {
+    "description": "On CLAIM_UNGROUNDED: the sentence, magnitude, quantity, anchor, and source_band. source_band is a recallable band key, or null when this responder observes no band in that quantity.",
+    "type": "object"
+   },
+   "code": {
+    "description": "Present only on a deny.",
+    "enum": [
+     "PROV_SIG",
+     "PROV_BYTES",
+     "PROV_DRIFT",
+     "PROV_VALUE",
+     "GEO_ZONE",
+     "CLAIM_UNGROUNDED",
+     "POLICY_MODULE"
+    ],
+    "type": "string"
+   },
+   "fix": {
+    "description": "The actionable half: what to change and retry.",
+    "enum": [
+     "refresh_token",
+     "remove_reference",
+     "contact_admin",
+     "redact_and_retry",
+     "cite_observation",
+     "correct_value"
+    ],
+    "type": "string"
+   },
+   "receipt": {
+    "description": "ed25519 receipt. `fact_cids` lists what actually resolved and is the field that separates a real citation from an invented one.",
+    "type": "object"
+   }
+  },
+  "required": [
+   "action",
+   "advisory",
+   "checked",
+   "citations_found",
+   "receipt"
+  ],
+  "type": "object"
+ },
+ "title": "Check whether the citations in a draft actually verify"
+}

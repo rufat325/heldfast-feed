@@ -1,0 +1,514 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Look a Church Slavonic word up"
+ },
+ "description": "Look an Old Church Slavonic word up on Wiktionary and return its senses\nplus full declension/conjugation tables \u2014 attested content (singular, dual\nand plural), not invented. Any form of the word works; an inflected query\nis resolved to its lemma automatically via previously cached paradigms and\nthe result notes the resolution. With search_language='eng' the query is\nan English word instead: the result lists its per-sense Old Church\nSlavonic equivalents (the translations block) plus their expanded entries.\nReturns Markdown plus the same result as structuredContent matching the\ndeclared outputSchema.\n\nResults are cached server-side; first-time queries reach the live upstream\npolitely and calls are rate limited \u2014 on a rate-limit error, wait a few\nseconds and retry. Content is from en.wiktionary.org (CC BY-SA 4.0 \u2014\nattribute and share alike if republished).\n",
+ "inputSchema": {
+  "$defs": {
+   "SearchLanguage": {
+    "description": "The query language. ``chu`` looks an Old Church Slavonic word up directly\n(any of its forms \u2014 an inflected query resolves via cached paradigms). ``eng``\nsearches in reverse: the English Wiktionary page for the query word lists\nper-sense Old Church Slavonic translations, and each distinct lemma is then\nlooked up normally.",
+    "enum": [
+     "chu",
+     "eng"
+    ],
+    "title": "SearchLanguage",
+    "type": "string"
+   }
+  },
+  "properties": {
+   "include_forms": {
+    "default": true,
+    "description": "When true (default), each match's full declension/conjugation table is returned INLINE \u2014 usable cases/tenses (singular, dual AND plural) in ONE call, no follow-up slavonic_get_inflections. Set false for a cheap screen of which entries exist. Bounded by a per-search cap \u2014 use max_forms to adjust per call. For eng queries this governs the expanded OCS entries; the per-sense translations list itself is always returned.",
+    "title": "Include Forms",
+    "type": "boolean"
+   },
+   "max_forms": {
+    "anyOf": [
+     {
+      "maximum": 12,
+      "minimum": 0,
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Optional override for how many inflection tables to expand this call (0\u201312). On an uncached query each table is one politely paced upstream fetch, so high values on cold queries are slow. Omit for the server default.",
+    "title": "Max Forms"
+   },
+   "query": {
+    "description": "The word to look up, in the language search_language names. Church Slavonic (default): a SINGLE Old Church Slavonic word in Cyrillic, any form \u2014 an inflected form ('\u0431\u043e\u0433\u0430') is resolved to its lemma ('\u0431\u043e\u0433\u044a') automatically via cached paradigms, and the result says so; normalized OCS spelling works best, but titlos/accents and modern-Cyrillic respellings (\u044b for \ua651) are folded. English (search_language='eng'): the English word whose Old Church Slavonic equivalents you want \u2014 multiword entries like 'apple tree' work.",
+    "maxLength": 80,
+    "minLength": 1,
+    "title": "Query",
+    "type": "string"
+   },
+   "search_language": {
+    "$ref": "#/$defs/SearchLanguage",
+    "default": "chu",
+    "description": "Language the query word is in: 'chu' (default) looks the Old Church Slavonic word up directly; 'eng' finds the OCS equivalents of an English word (per-sense, from Wiktionary's translation tables) and returns their full entries. Glosses are in English either way."
+   }
+  },
+  "required": [
+   "query"
+  ],
+  "title": "slavonic_searchArguments",
+  "type": "object"
+ },
+ "name": "slavonic_search",
+ "outputSchema": {
+  "$defs": {
+   "Entry": {
+    "description": "One Old Church Slavonic entry on the page: the headword (page title) with\none part-of-speech section's senses.",
+    "properties": {
+     "entry_id": {
+      "default": "",
+      "description": "Page title \u2014 feed to slavonic_get_inflections.",
+      "title": "Entry Id",
+      "type": "string"
+     },
+     "headword": {
+      "title": "Headword",
+      "type": "string"
+     },
+     "part_of_speech": {
+      "default": "",
+      "title": "Part Of Speech",
+      "type": "string"
+     },
+     "senses": {
+      "items": {
+       "$ref": "#/$defs/Sense"
+      },
+      "title": "Senses",
+      "type": "array"
+     },
+     "word_class": {
+      "default": "",
+      "description": "POS section \u2014 feed to slavonic_get_inflections.",
+      "title": "Word Class",
+      "type": "string"
+     }
+    },
+    "required": [
+     "headword"
+    ],
+    "title": "Entry",
+    "type": "object"
+   },
+   "InflectionHandle": {
+    "description": "A structured anchor for fetching a full paradigm: feed ``entry_id`` (the page\ntitle) + ``word_class`` (the POS section) to ``slavonic_get_inflections`` \u2014 or ask\n``search`` to include the table inline (``forms``).",
+    "properties": {
+     "context": {
+      "default": "",
+      "description": "Nearby headword / hint.",
+      "title": "Context",
+      "type": "string"
+     },
+     "entry_id": {
+      "description": "Wiktionary page title \u2014 the Cyrillic lemma itself.",
+      "title": "Entry Id",
+      "type": "string"
+     },
+     "forms": {
+      "anyOf": [
+       {
+        "discriminator": {
+         "mapping": {
+          "nominal": "#/$defs/SlavonicNominalParadigm",
+          "not_found": "#/$defs/ParadigmNotFound",
+          "verbal": "#/$defs/SlavonicVerbalParadigm"
+         },
+         "propertyName": "category"
+        },
+        "oneOf": [
+         {
+          "$ref": "#/$defs/SlavonicNominalParadigm"
+         },
+         {
+          "$ref": "#/$defs/SlavonicVerbalParadigm"
+         },
+         {
+          "$ref": "#/$defs/ParadigmNotFound"
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "The full paradigm, populated when a search is asked to include forms. None when not requested or beyond the cap.",
+      "title": "Forms"
+     },
+     "pos_hint": {
+      "default": "",
+      "description": "Part-of-speech hint.",
+      "title": "Pos Hint",
+      "type": "string"
+     },
+     "word_class": {
+      "description": "Part-of-speech section, e.g. 'verb', 'noun'.",
+      "title": "Word Class",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entry_id",
+     "word_class"
+    ],
+    "title": "InflectionHandle",
+    "type": "object"
+   },
+   "ParadigmNotFound": {
+    "description": "No inflection table for this page/POS (no Old Church Slavonic section, no\ntable, or the page doesn't exist). ``found`` is False and there is no body.",
+    "properties": {
+     "category": {
+      "const": "not_found",
+      "default": "not_found",
+      "title": "Category",
+      "type": "string"
+     },
+     "entry_id": {
+      "title": "Entry Id",
+      "type": "string"
+     },
+     "found": {
+      "const": false,
+      "default": false,
+      "title": "Found",
+      "type": "boolean"
+     },
+     "source": {
+      "default": "Wiktionary, the free dictionary (en.wiktionary.org), Old Church Slavonic entries. Wikimedia Foundation. Text available under CC BY-SA 4.0; attribution and share-alike required when republishing. (CC BY-SA 4.0: https://creativecommons.org/licenses/by-sa/4.0/) Adapted: reformatted and condensed from the original.",
+      "title": "Source",
+      "type": "string"
+     },
+     "word_class": {
+      "title": "Word Class",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entry_id",
+     "word_class"
+    ],
+    "title": "ParadigmNotFound",
+    "type": "object"
+   },
+   "SearchLanguage": {
+    "description": "The query language. ``chu`` looks an Old Church Slavonic word up directly\n(any of its forms \u2014 an inflected query resolves via cached paradigms). ``eng``\nsearches in reverse: the English Wiktionary page for the query word lists\nper-sense Old Church Slavonic translations, and each distinct lemma is then\nlooked up normally.",
+    "enum": [
+     "chu",
+     "eng"
+    ],
+    "title": "SearchLanguage",
+    "type": "string"
+   },
+   "Sense": {
+    "description": "One sense of an entry: the (HTML-stripped) Wiktionary definition line.",
+    "properties": {
+     "examples": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Examples",
+      "type": "array"
+     },
+     "gloss": {
+      "title": "Gloss",
+      "type": "string"
+     },
+     "label": {
+      "default": "",
+      "title": "Label",
+      "type": "string"
+     }
+    },
+    "required": [
+     "gloss"
+    ],
+    "title": "Sense",
+    "type": "object"
+   },
+   "SlavonicNominalParadigm": {
+    "description": "Declension of a noun/adjective/pronoun/etc.: case \u2192 {singular, dual, plural}.\n\nGender-split tables (adjectives, pronouns, participles) carry the gender \u2014 and,\nfor adjectives, the short/long variant \u2014 in the key: 'nominative masculine',\n'long nominative feminine'. ``category`` discriminates this from the verbal and\nnot-found shapes \u2014 switch on it before reading the body.",
+    "properties": {
+     "cases": {
+      "additionalProperties": {
+       "$ref": "#/$defs/SlavonicNumberForms"
+      },
+      "description": "Case key (lower-case: 'nominative', 'genitive', \u2026; gender and short/long variant prefixed when the table splits by them) \u2192 its singular/dual/plural forms, in table order.",
+      "title": "Cases",
+      "type": "object"
+     },
+     "category": {
+      "const": "nominal",
+      "default": "nominal",
+      "title": "Category",
+      "type": "string"
+     },
+     "entry_id": {
+      "title": "Entry Id",
+      "type": "string"
+     },
+     "found": {
+      "const": true,
+      "default": true,
+      "title": "Found",
+      "type": "boolean"
+     },
+     "source": {
+      "default": "Wiktionary, the free dictionary (en.wiktionary.org), Old Church Slavonic entries. Wikimedia Foundation. Text available under CC BY-SA 4.0; attribution and share-alike required when republishing. (CC BY-SA 4.0: https://creativecommons.org/licenses/by-sa/4.0/) Adapted: reformatted and condensed from the original.",
+      "title": "Source",
+      "type": "string"
+     },
+     "word_class": {
+      "title": "Word Class",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entry_id",
+     "word_class",
+     "cases"
+    ],
+    "title": "SlavonicNominalParadigm",
+    "type": "object"
+   },
+   "SlavonicNumberForms": {
+    "description": "A declension cell: the THREE number forms of one case \u2014 Old Church Slavonic\nkeeps a full dual. Forms are verbatim normalized OCS Cyrillic; alternates stay\ncomma-separated as Wiktionary renders them. A number the table doesn't give\n(defective paradigms) is an empty string.",
+    "properties": {
+     "dual": {
+      "default": "",
+      "title": "Dual",
+      "type": "string"
+     },
+     "plural": {
+      "default": "",
+      "title": "Plural",
+      "type": "string"
+     },
+     "singular": {
+      "default": "",
+      "title": "Singular",
+      "type": "string"
+     }
+    },
+    "title": "SlavonicNumberForms",
+    "type": "object"
+   },
+   "SlavonicVerbalParadigm": {
+    "description": "Conjugation of a verb, grouped the way Wiktionary's table is: finite cells\nkeyed by tense/mood \u2192 person-and-number \u2192 form, plus the non-finite sections\n(infinitive, supine, l-participle and the other participles).",
+    "properties": {
+     "category": {
+      "const": "verbal",
+      "default": "verbal",
+      "title": "Category",
+      "type": "string"
+     },
+     "entry_id": {
+      "title": "Entry Id",
+      "type": "string"
+     },
+     "finite": {
+      "additionalProperties": {
+       "additionalProperties": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "description": "Tense/mood (lower-case, e.g. 'present', 'imperfect', 'aorist', 'imperative') \u2192 person and number ('first singular' \u2026 'third dual' \u2026 'third plural') \u2192 the form. Periphrastic rows (perfect, pluperfect, future) appear under the single key 'all'. Alternates are comma-separated; an em-dash cell (no such form) is omitted.",
+      "title": "Finite",
+      "type": "object"
+     },
+     "found": {
+      "const": true,
+      "default": true,
+      "title": "Found",
+      "type": "boolean"
+     },
+     "nonfinite": {
+      "additionalProperties": {
+       "additionalProperties": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "description": "Non-finite section ('infinitive', 'supine', 'l-participle') \u2192 label ('form' for the single-form sections; 'singular masculine' etc. for the participle) \u2192 the form.",
+      "title": "Nonfinite",
+      "type": "object"
+     },
+     "source": {
+      "default": "Wiktionary, the free dictionary (en.wiktionary.org), Old Church Slavonic entries. Wikimedia Foundation. Text available under CC BY-SA 4.0; attribution and share-alike required when republishing. (CC BY-SA 4.0: https://creativecommons.org/licenses/by-sa/4.0/) Adapted: reformatted and condensed from the original.",
+      "title": "Source",
+      "type": "string"
+     },
+     "word_class": {
+      "title": "Word Class",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entry_id",
+     "word_class",
+     "finite",
+     "nonfinite"
+    ],
+    "title": "SlavonicVerbalParadigm",
+    "type": "object"
+   },
+   "TranslationSense": {
+    "description": "One English sense (a translations table) and the OCS terms it offers.",
+    "properties": {
+     "sense": {
+      "description": "The sense gloss the source table carries.",
+      "title": "Sense",
+      "type": "string"
+     },
+     "terms": {
+      "items": {
+       "$ref": "#/$defs/TranslationTerm"
+      },
+      "title": "Terms",
+      "type": "array"
+     }
+    },
+    "required": [
+     "sense"
+    ],
+    "title": "TranslationSense",
+    "type": "object"
+   },
+   "TranslationTerm": {
+    "description": "One Old Church Slavonic word a translations table offers for an English\nsense. ``word`` is the Wiktionary page title in Cyrillic (what an ``eng``\nsearch re-searches and what ``slavonic_get_inflections`` needs); only the Cyrillic\nscript row is read \u2014 the parallel Glagolitic spelling is the same lemma on a\nsoft-redirect page, so surfacing it would only duplicate the term.",
+    "properties": {
+     "display": {
+      "default": "",
+      "description": "Rendered form when it differs from the title.",
+      "title": "Display",
+      "type": "string"
+     },
+     "gender": {
+      "default": "",
+      "description": "Grammatical gender as marked, e.g. 'f'.",
+      "title": "Gender",
+      "type": "string"
+     },
+     "qualifier": {
+      "default": "",
+      "description": "Usage qualifier as marked, e.g. 'poetic'; else empty.",
+      "title": "Qualifier",
+      "type": "string"
+     },
+     "transliteration": {
+      "default": "",
+      "description": "Scientific romanization as Wiktionary prints it, e.g. 'voda'.",
+      "title": "Transliteration",
+      "type": "string"
+     },
+     "word": {
+      "description": "Wiktionary page title \u2014 the Cyrillic lemma itself.",
+      "title": "Word",
+      "type": "string"
+     }
+    },
+    "required": [
+     "word"
+    ],
+    "title": "TranslationTerm",
+    "type": "object"
+   }
+  },
+  "description": "The result of a dictionary search.",
+  "properties": {
+   "entries": {
+    "items": {
+     "$ref": "#/$defs/Entry"
+    },
+    "title": "Entries",
+    "type": "array"
+   },
+   "forms_truncated": {
+    "default": 0,
+    "description": "How many handles did NOT get an inline table because the per-search cap was reached.",
+    "title": "Forms Truncated",
+    "type": "integer"
+   },
+   "found": {
+    "description": "False when nothing matched. For an eng query, True means Old Church Slavonic translations were found \u2014 entries may still be empty when none of them could be expanded (see translations).",
+    "title": "Found",
+    "type": "boolean"
+   },
+   "handles": {
+    "items": {
+     "$ref": "#/$defs/InflectionHandle"
+    },
+    "title": "Handles",
+    "type": "array"
+   },
+   "language": {
+    "$ref": "#/$defs/SearchLanguage"
+   },
+   "query": {
+    "title": "Query",
+    "type": "string"
+   },
+   "resolved_from": {
+    "default": "",
+    "description": "The original inflected query when resolved; else empty. chu queries only \u2014 always empty for eng results.",
+    "title": "Resolved From",
+    "type": "string"
+   },
+   "resolved_lemma": {
+    "default": "",
+    "description": "The lemma actually searched when resolved; else empty. chu queries only \u2014 always empty for eng results.",
+    "title": "Resolved Lemma",
+    "type": "string"
+   },
+   "search_method": {
+    "default": "direct",
+    "description": "How the match was found: 'direct' = the query itself matched; 'lemma_index' = an inflected form resolved via a previously cached paradigm; 'translations' = an English query resolved via Wiktionary translation tables.",
+    "enum": [
+     "direct",
+     "lemma_index",
+     "translations"
+    ],
+    "title": "Search Method",
+    "type": "string"
+   },
+   "source": {
+    "default": "Wiktionary, the free dictionary (en.wiktionary.org), Old Church Slavonic entries. Wikimedia Foundation. Text available under CC BY-SA 4.0; attribution and share-alike required when republishing. (CC BY-SA 4.0: https://creativecommons.org/licenses/by-sa/4.0/) Adapted: reformatted and condensed from the original.",
+    "title": "Source",
+    "type": "string"
+   },
+   "translations": {
+    "description": "Populated only for eng queries (always [] for chu): the OCS terms each English sense translates to, in sense order. Entries/handles below are the expanded dictionary entries of those terms.",
+    "items": {
+     "$ref": "#/$defs/TranslationSense"
+    },
+    "title": "Translations",
+    "type": "array"
+   },
+   "translations_truncated": {
+    "default": 0,
+    "description": "How many distinct translated lemmas were NOT expanded into entries because the per-search expansion cap was reached (they still appear under translations).",
+    "title": "Translations Truncated",
+    "type": "integer"
+   }
+  },
+  "required": [
+   "query",
+   "language",
+   "found"
+  ],
+  "title": "SearchResult",
+  "type": "object"
+ },
+ "title": "Look a Church Slavonic word up"
+}

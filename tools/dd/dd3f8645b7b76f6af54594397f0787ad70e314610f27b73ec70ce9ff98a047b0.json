@@ -1,0 +1,221 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Fetch a time-series ephemeris for a small body (asteroid or comet) or spacecraft from JPL Horizons \u2014 RA/Dec, distance, and apparent magnitude over a span, optionally with observer-relative altitude/azimuth. This covers objects the in-process major-body set cannot. The designation is passed to Horizons verbatim, so it must be in a form Horizons resolves to a single record: a numbered asteroid takes a trailing-semicolon record lookup (e.g. \"433;\" for Eros, \"1;\" for Ceres), and a periodic comet takes the DES + closest-apparition form (e.g. \"DES=1P;CAP\" for Halley). Spacecraft take their negative SPK-ID. Anything else goes through the Horizons name search: a bare name matching nothing (e.g. \"433 Eros\") or several records (e.g. \"1P/Halley\") is rejected, but one matching a single object succeeds even when that object is not the one meant \u2014 \"Eros\" resolves to Kerberos, a moon of Pluto \u2014 so compare `target_name`, the object Horizons resolved, with the one intended. A major-body name matching several bodies (e.g. \"Mars\") is rejected with the ID number of each body it matched \u2014 pass one, such as \"499\" for the planet. `start` and `stop` are ISO 8601 UTC dates in the Gregorian calendar, extended before 1582, in years 0100 through 9999; `stop` must not be before `start`, and a `stop` equal to `start` returns the single row at that instant. `step` is a count plus a unit of m, h, d, mo, or y, such as \"1d\", \"1h\", or \"10m\". Supplying observer latitude/longitude yields topocentric coordinates and adds alt/az \u2014 supply both or neither. This is a gated, network-backed extension (JPL Horizons is keyless but rate-limited and best-effort); large spans truncate inline at 200 rows, and the truncation notice names the exact `start` to resume from \u2014 one step past the last row returned, because Horizons includes the start instant in its output \u2014 so re-calling from there continues the series without repeating a sample. Splitting the range into smaller adjacent spans works too; keep the same step either way so no sample is lost.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "designation": {
+    "description": "JPL Horizons target, passed verbatim \u2014 use a form that resolves to one record. Numbered asteroid: trailing-semicolon record lookup, e.g. \"433;\" (Eros), \"1;\" (Ceres). Periodic comet: DES + closest-apparition flag, e.g. \"DES=1P;CAP\" (Halley), \"DES=2P;CAP\" (Encke). Spacecraft: negative SPK-ID, e.g. \"-48\" (Hubble). A bare name like \"433 Eros\" (no match) or \"1P/Halley\" (several records) is rejected, and \"Mars\" (several major bodies) is rejected with their ID numbers listed \u2014 the planet is \"499\" \u2014 but one matching a single object succeeds even when it is not the object meant \u2014 check `target_name` in the result. Earth (\"399\") is rejected, being the body the observer is on, and so is a name containing an apostrophe, which the Horizons search cannot match \u2014 \"6P/d'Arrest\" resolves as \"DES=6P;CAP\" \u2014 or any character outside printable ASCII, which Horizons refuses, such as an accent or a typographic apostrophe \u2014 \"\u0160teins\" resolves as \"2867;\". Look up designations at ssd.jpl.nasa.gov/tools/sbdb_lookup.html.",
+    "pattern": "\\S",
+    "type": "string"
+   },
+   "elevation": {
+    "default": 0,
+    "description": "Observer elevation in meters above sea level. Default 0. With latitude and longitude it must be greater than -20000 and less than 40000000 \u2014 the observer altitudes Horizons accepts; a geocentric request ignores it.",
+    "type": "number"
+   },
+   "latitude": {
+    "description": "Observer latitude in decimal degrees \u2014 supply together with longitude for topocentric coordinates and alt/az. Supplying one without the other is rejected.",
+    "maximum": 90,
+    "minimum": -90,
+    "type": "number"
+   },
+   "longitude": {
+    "description": "Observer longitude in decimal degrees. Supply together with latitude; one without the other is rejected.",
+    "maximum": 180,
+    "minimum": -180,
+    "type": "number"
+   },
+   "start": {
+    "description": "Ephemeris start as an ISO 8601 UTC string, e.g. \"2024-01-01T00:00:00Z\", in years 0100 through 9999 \u2014 the calendar years JPL Horizons reads. Dates are Gregorian, extended before 1582. Defaults to now. A value with no zone designator is read as UTC, not the local zone of the server process.",
+    "type": "string"
+   },
+   "step": {
+    "default": "1h",
+    "description": "Step size as a positive count up to 2147483647 plus a unit of m (minutes), h (hours), d (days), mo (months), or y (years), e.g. \"10m\", \"1h\", \"1d\". Default \"1h\".",
+    "type": "string"
+   },
+   "stop": {
+    "description": "Ephemeris stop as an ISO 8601 UTC string in years 0100 through 9999, at or after start \u2014 equal to start returns the single row at that instant. Defaults to 24 hours after start. A value with no zone designator is read as UTC, not the local zone of the server process.",
+    "type": "string"
+   }
+  },
+  "required": [
+   "designation"
+  ],
+  "type": "object"
+ },
+ "name": "astronomy_get_ephemeris",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "designation",
+     "points",
+     "truncated",
+     "shown",
+     "cap"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "cap": {
+    "description": "The inline row cap that was applied.",
+    "type": "number"
+   },
+   "designation": {
+    "description": "The body designation echoed from the request.",
+    "type": "string"
+   },
+   "dropped": {
+    "description": "Rows Horizons returned that carried no usable time, position, or distance and were dropped. Present only when at least one row was dropped, in which case the series has gaps and is shorter than the requested step count.",
+    "type": "number"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `invalid_time`: The start or stop timestamp is not a parseable ISO 8601 instant, names a calendar date that does not exist (e.g. 2026-02-30), or falls outside years 0100 through 9999, the calendar years JPL Horizons reads. `invalid_time_range`: The resolved stop instant is before the resolved start instant. `incomplete_observer`: Exactly one of latitude and longitude was supplied. `invalid_elevation`: An observer (latitude and longitude) was supplied with an elevation of -20000 m or less, or 40000000 m or more \u2014 outside the observer altitudes JPL Horizons accepts. `invalid_step`: The step is not a positive count followed by a unit of m, h, d, mo, or y, its count is past 2147483647, or Horizons reports it longer than the span of data it holds for the target. `time_out_of_range`: The requested span falls outside the target's Horizons data span. The message names the bound Horizons reported, e.g. after A.D. 2599-DEC-31 for Mars. `body_not_found`: JPL Horizons has no match for the designation, the designation is ambiguous (a bare comet name matches multiple apparition records), it contains an apostrophe, which the Horizons search cannot match (e.g. \"6P/d'Arrest\"), or it contains a character outside printable ASCII, which Horizons refuses (e.g. \"\u0160teins\", \"6P/d\u2019Arrest\"). `ambiguous_designation`: A major-body or spacecraft name matches several Horizons bodies (e.g. \"Mars\" matches the planet, its barycenter, and spacecraft). The message lists the candidates with their ID numbers, at most 20, and names the total when there are more. `observer_is_target`: The designation resolves to Earth (e.g. \"399\"), the body every request here observes from. `request_rejected`: JPL Horizons refused a request parameter value with HTTP 400 \u2014 the same answer on every attempt. The message names the input that parameter carries. `horizons_unavailable`: The JPL Horizons API failed after retries. Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "invalid_time",
+         "invalid_time_range",
+         "incomplete_observer",
+         "invalid_elevation",
+         "invalid_step",
+         "time_out_of_range",
+         "body_not_found",
+         "ambiguous_designation",
+         "observer_is_target",
+         "request_rejected",
+         "horizons_unavailable"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "notice": {
+    "description": "Caveats on the returned series \u2014 how to retrieve rows omitted by the cap, and whether any rows were dropped. Absent when the whole span came back intact.",
+    "type": "string"
+   },
+   "points": {
+    "description": "Time-series of positions, one per step, in chronological order.",
+    "items": {
+     "additionalProperties": false,
+     "description": "One ephemeris step: position and, with an observer, alt/az.",
+     "properties": {
+      "altitude_degrees": {
+       "description": "Refraction-corrected altitude in degrees. Present only when an observer was supplied.",
+       "type": "number"
+      },
+      "azimuth_degrees": {
+       "description": "Azimuth in degrees (0=N, 90=E, 180=S, 270=W). Present only when an observer was supplied.",
+       "type": "number"
+      },
+      "dec_degrees": {
+       "description": "Declination in degrees [-90,90].",
+       "type": "number"
+      },
+      "distance_au": {
+       "description": "Observer-to-body distance in astronomical units.",
+       "type": "number"
+      },
+      "magnitude": {
+       "description": "Apparent magnitude, or null when Horizons omits it for this body.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "ra_hours": {
+       "description": "Right ascension in sidereal hours [0,24).",
+       "type": "number"
+      },
+      "time_utc": {
+       "description": "Step instant in ISO 8601 UTC.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "time_utc",
+      "ra_hours",
+      "dec_degrees",
+      "distance_au",
+      "magnitude"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "shown": {
+    "description": "Number of ephemeris rows returned.",
+    "type": "number"
+   },
+   "target_name": {
+    "description": "The object JPL Horizons resolved the designation to, from its 'Target body name' header \u2014 compare it with the intended object, since a bare name can resolve to a different one. Absent when Horizons' response names no target.",
+    "type": "string"
+   },
+   "truncated": {
+    "description": "True when the requested span continues past the returned rows; the notice names the start to resume from.",
+    "type": "boolean"
+   }
+  },
+  "type": "object"
+ },
+ "title": "astronomy-mcp-server: get small-body ephemeris"
+}

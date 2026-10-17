@@ -1,0 +1,37 @@
+{
+ "_meta": {
+  "fastmcp": {
+   "tags": []
+  }
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Poll the current status and action feed for the listing tied to this call's correlation id.\n\nIDENTITY: the correlation id is never a tool argument. It must ride the\n``X-XP-Correlation-Id`` HTTP header on every MCP request, exactly like on\nevery other tool call for this job. A missing/invalid header returns a\nstructured error (below) instead of failing the call -- this tool is\nopen-world (no bearer/OAuth needed); holding the correlation id (an\nunguessable v4 uuid) is itself the access control.\n\nARGS\n    since: the ``cursor`` value returned by the previous call for this\n        same correlation id. Omit (or pass null) on the first call to\n        fetch the full action feed from the beginning. Must be >= 0;\n        a negative value returns ``{\"error\": \"invalid_since\"}``.\n\nPOLL LOOP: store ``cursor`` per correlation id in your own\ncache/store, send it back as ``since`` on the next call, and render\nonly the new ``actions`` entries onto your own timeline -- the array\nalready excludes anything at or before ``since`` and is empty when\nnothing changed. ``listing`` is a snapshot for cheap \"current state\"\ndisplay only (quantity, bid count, bucket, ...); do not diff it\nyourself for history -- ``actions`` is the exact, ordered record (a\nbid placed and rescinded between two polls still yields both events).\n\nRESULT SCHEMA (``found: false`` -> every other field is null/absent;\nan unrecognized correlation id is not an error, just an empty result)::\n\n    {\n      \"correlation_id\": \"<uuid>\",\n      \"found\": true,\n      \"verified\": true,               # identity confirmed when the listing was created\n      \"event_id\": 406,                # last event this correlation looked at\n      \"listing\": {                    # null until a listing exists for this id\n        \"swap\": \"d5b03i1rbqqa\",       # public listing identifier (sell/checkout URLs)\n        \"created_at\": \"2026-08-12T14:00:00+00:00\",\n        \"status_bucket\": \"open\",      # see BUCKETS below\n        \"event_id\": 406,\n        \"quantity\": 2,\n        \"bid_count\": 3,\n        \"top_bid_amount\": 12000,      # cents, open bids, null if none\n        \"accepted_bid_amount\": null,  # cents, set once a bid is accepted\n        \"sold\": false,\n        \"last_activity_at\": \"2026-08-12T14:05:00+00:00\"\n      },\n      \"actions\": [                    # everything after `since`, oldest first, [] if nothing new\n        {\"id\": 91234, \"event\": \"listing_created\", \"at\": \"2026-08-12T14:00:00+00:00\"},\n        {\"id\": 91288, \"event\": \"bid_placed\", \"at\": \"2026-08-12T14:03:10+00:00\", \"amount\": 12000}\n      ],\n      \"cursor\": 91301,                # send back as `since` on the next call\n      \"actions_truncated\": true       # present+true only when 50+ new rows; call again with `cursor` to page\n    }\n\nBUCKETS (listing.status_bucket)\n    open              - accepting bids, none accepted yet\n    awaiting_tickets  - a bid was accepted; seller hasn't transferred tickets yet\n    buyer_has_tickets - tickets transferred; seller payout not yet finalized\n    seller_payout     - funds are ready to release to the seller\n    zombies           - stalled, no forward progress -- needs attention\n    closed            - terminal: cancelled, expired, or fully settled\n\nEVENT VOCABULARY (actions[].event; only bid/sale events carry `amount`, in cents)\n    listing_created, bid_placed, bid_rescinded, bid_accepted, bid_rejected,\n    tickets_transferred, funds_claimed, listing_cancelled,\n    listing_expired, sale_completed\n    NOTE: no separate payout-completion signal exists -- the agent-forward\n    payout rail is retired; sellers claim funds normally (funds_claimed).\n\nFAILURES: this tool never raises and never returns an auth error (401).\n    {\"error\": \"missing_correlation_header\", \"message\": \"...\"}  - header missing/invalid\n    {\"error\": \"invalid_since\"}                                  - since < 0\n    {\"error\": \"status_unavailable\"}                             - backend down/slow/non-200",
+ "inputSchema": {
+  "additionalProperties": false,
+  "properties": {
+   "since": {
+    "anyOf": [
+     {
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Cursor from the previous call's `cursor` field. Omit/null on the first call to fetch the action feed from the beginning. Must be >= 0."
+   }
+  },
+  "type": "object"
+ },
+ "name": "check_listing",
+ "outputSchema": {
+  "additionalProperties": true,
+  "type": "object"
+ },
+ "title": "Check Listing"
+}

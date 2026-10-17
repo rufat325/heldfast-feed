@@ -1,0 +1,503 @@
+{
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true,
+  "title": "Look an Old Norse word up"
+ },
+ "description": "Look an Old Norse word up on Wiktionary and return its senses plus full\ndeclension/conjugation tables \u2014 attested content (including the verbs'\nmediopassive voice), not invented. Any form of the word works; an\ninflected query is resolved to its lemma automatically via previously\ncached paradigms and the result notes the resolution. With\nsearch_language='eng' the query is an English word instead: the result\nlists its per-sense Old Norse equivalents (the translations block) plus\ntheir expanded entries. Returns Markdown plus the same result as\nstructuredContent matching the declared outputSchema.\n\nResults are cached server-side; first-time queries reach the live upstream\npolitely and calls are rate limited \u2014 on a rate-limit error, wait a few\nseconds and retry. Content is from en.wiktionary.org (CC BY-SA 4.0 \u2014\nattribute and share alike if republished).\n",
+ "inputSchema": {
+  "$defs": {
+   "SearchLanguage": {
+    "description": "The query language. ``non`` looks an Old Norse word up directly (any of its\nforms \u2014 an inflected query resolves via cached paradigms). ``eng`` searches in\nreverse: the English Wiktionary page for the query word lists per-sense Old\nNorse translations, and each distinct lemma is then looked up normally.",
+    "enum": [
+     "non",
+     "eng"
+    ],
+    "title": "SearchLanguage",
+    "type": "string"
+   }
+  },
+  "properties": {
+   "include_forms": {
+    "default": true,
+    "description": "When true (default), each match's full declension/conjugation table is returned INLINE \u2014 usable cases/tenses (and the verbs' mediopassive voice) in ONE call, no follow-up norse_get_inflections. Set false for a cheap screen of which entries exist. Bounded by a per-search cap \u2014 use max_forms to adjust per call. For eng queries this governs the expanded Old Norse entries; the per-sense translations list itself is always returned.",
+    "title": "Include Forms",
+    "type": "boolean"
+   },
+   "max_forms": {
+    "anyOf": [
+     {
+      "maximum": 12,
+      "minimum": 0,
+      "type": "integer"
+     },
+     {
+      "type": "null"
+     }
+    ],
+    "default": null,
+    "description": "Optional override for how many inflection tables to expand this call (0\u201312). On an uncached query each table is one politely paced upstream fetch, so high values on cold queries are slow. Omit for the server default.",
+    "title": "Max Forms"
+   },
+   "query": {
+    "description": "The word to look up, in the language search_language names. Old Norse (default): a SINGLE Old Norse word, any form \u2014 an inflected form ('m\u01ebnnum') is resolved to its lemma ('ma\u00f0r') automatically via cached paradigms, and the result says so; diacritics are optional once a paradigm is cached ('madr' and 'mathr' both find ma\u00f0r, 'monnum' finds m\u01ebnnum). English (search_language='eng'): the English word whose Old Norse equivalents you want \u2014 multiword entries like 'apple tree' work.",
+    "maxLength": 80,
+    "minLength": 1,
+    "title": "Query",
+    "type": "string"
+   },
+   "search_language": {
+    "$ref": "#/$defs/SearchLanguage",
+    "default": "non",
+    "description": "Language the query word is in: 'non' (default) looks the Old Norse word up directly; 'eng' finds the Old Norse equivalents of an English word (per-sense, from Wiktionary's translation tables) and returns their full entries. Glosses are in English either way."
+   }
+  },
+  "required": [
+   "query"
+  ],
+  "title": "norse_searchArguments",
+  "type": "object"
+ },
+ "name": "norse_search",
+ "outputSchema": {
+  "$defs": {
+   "Entry": {
+    "description": "One Old Norse entry on the page: the headword (page title) with one\npart-of-speech section's senses.",
+    "properties": {
+     "entry_id": {
+      "default": "",
+      "description": "Page title \u2014 feed to norse_get_inflections.",
+      "title": "Entry Id",
+      "type": "string"
+     },
+     "headword": {
+      "title": "Headword",
+      "type": "string"
+     },
+     "part_of_speech": {
+      "default": "",
+      "title": "Part Of Speech",
+      "type": "string"
+     },
+     "senses": {
+      "items": {
+       "$ref": "#/$defs/Sense"
+      },
+      "title": "Senses",
+      "type": "array"
+     },
+     "word_class": {
+      "default": "",
+      "description": "POS section \u2014 feed to norse_get_inflections.",
+      "title": "Word Class",
+      "type": "string"
+     }
+    },
+    "required": [
+     "headword"
+    ],
+    "title": "Entry",
+    "type": "object"
+   },
+   "InflectionHandle": {
+    "description": "A structured anchor for fetching a full paradigm: feed ``entry_id`` (the page\ntitle) + ``word_class`` (the POS section) to ``norse_get_inflections`` \u2014 or ask\n``search`` to include the table inline (``forms``).",
+    "properties": {
+     "context": {
+      "default": "",
+      "description": "Nearby headword / hint.",
+      "title": "Context",
+      "type": "string"
+     },
+     "entry_id": {
+      "description": "Wiktionary page title \u2014 the lemma itself.",
+      "title": "Entry Id",
+      "type": "string"
+     },
+     "forms": {
+      "anyOf": [
+       {
+        "discriminator": {
+         "mapping": {
+          "nominal": "#/$defs/NorseNominalParadigm",
+          "not_found": "#/$defs/ParadigmNotFound",
+          "verbal": "#/$defs/NorseVerbalParadigm"
+         },
+         "propertyName": "category"
+        },
+        "oneOf": [
+         {
+          "$ref": "#/$defs/NorseNominalParadigm"
+         },
+         {
+          "$ref": "#/$defs/NorseVerbalParadigm"
+         },
+         {
+          "$ref": "#/$defs/ParadigmNotFound"
+         }
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "default": null,
+      "description": "The full paradigm, populated when a search is asked to include forms. None when not requested or beyond the cap.",
+      "title": "Forms"
+     },
+     "pos_hint": {
+      "default": "",
+      "description": "Part-of-speech hint.",
+      "title": "Pos Hint",
+      "type": "string"
+     },
+     "word_class": {
+      "description": "Part-of-speech section, e.g. 'verb', 'noun'.",
+      "title": "Word Class",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entry_id",
+     "word_class"
+    ],
+    "title": "InflectionHandle",
+    "type": "object"
+   },
+   "NorseNominalParadigm": {
+    "description": "Declension of a noun/adjective/etc.: case key \u2192 {singular, plural}.\n\nNoun tables split by definiteness, folded into the key as a prefix:\n'indefinite nominative', 'definite genitive'. Adjective tables split by gender\n(suffixed: 'nominative feminine') and come one per declension class and degree,\nfolded in as a caption-derived prefix: 'strong nominative feminine',\n'weak superlative accusative neuter', 'comparative dative masculine'.\n``category`` discriminates this from the verbal and not-found shapes \u2014 switch\non it before reading the body.",
+    "properties": {
+     "cases": {
+      "additionalProperties": {
+       "$ref": "#/$defs/NorseNumberForms"
+      },
+      "description": "Case key (lower-case: 'nominative', 'genitive', \u2026; nouns prefix the definiteness \u2014 'indefinite nominative'; adjectives prefix the caption-derived declension class/degree and suffix the gender \u2014 'strong nominative feminine') \u2192 its singular/plural forms, in table order.",
+      "title": "Cases",
+      "type": "object"
+     },
+     "category": {
+      "const": "nominal",
+      "default": "nominal",
+      "title": "Category",
+      "type": "string"
+     },
+     "entry_id": {
+      "title": "Entry Id",
+      "type": "string"
+     },
+     "found": {
+      "const": true,
+      "default": true,
+      "title": "Found",
+      "type": "boolean"
+     },
+     "source": {
+      "default": "Wiktionary, the free dictionary (en.wiktionary.org), Old Norse entries. Wikimedia Foundation. Text available under CC BY-SA 4.0; attribution and share-alike required when republishing. (CC BY-SA 4.0: https://creativecommons.org/licenses/by-sa/4.0/) Adapted: reformatted and condensed from the original.",
+      "title": "Source",
+      "type": "string"
+     },
+     "word_class": {
+      "title": "Word Class",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entry_id",
+     "word_class",
+     "cases"
+    ],
+    "title": "NorseNominalParadigm",
+    "type": "object"
+   },
+   "NorseNumberForms": {
+    "description": "A declension cell: the two number forms of one case key. Forms are verbatim\nnormalized Old Norse; alternates stay comma-separated as Wiktionary renders\nthem. A number the table doesn't give (defective paradigms) is an empty\nstring.",
+    "properties": {
+     "plural": {
+      "default": "",
+      "title": "Plural",
+      "type": "string"
+     },
+     "singular": {
+      "default": "",
+      "title": "Singular",
+      "type": "string"
+     }
+    },
+    "title": "NorseNumberForms",
+    "type": "object"
+   },
+   "NorseVerbalParadigm": {
+    "description": "Conjugation of a verb, grouped the way Wiktionary's tables are: finite cells\nkeyed by mood and tense \u2192 person-and-number \u2192 form, plus the non-finite forms\n(infinitive and the participles). The mediopassive voice renders as its own\ntable and its keys carry a 'mediopassive ' prefix; active keys are bare.",
+    "properties": {
+     "category": {
+      "const": "verbal",
+      "default": "verbal",
+      "title": "Category",
+      "type": "string"
+     },
+     "entry_id": {
+      "title": "Entry Id",
+      "type": "string"
+     },
+     "finite": {
+      "additionalProperties": {
+       "additionalProperties": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "description": "Mood and tense (lower-case: 'indicative present', 'subjunctive past', 'imperative present'; the mediopassive table's keys are prefixed \u2014 'mediopassive indicative past') \u2192 person and number ('first singular' \u2026 'third plural') \u2192 the form. Alternates are comma-separated; an em-dash cell (no such form) is omitted.",
+      "title": "Finite",
+      "type": "object"
+     },
+     "found": {
+      "const": true,
+      "default": true,
+      "title": "Found",
+      "type": "boolean"
+     },
+     "nonfinite": {
+      "additionalProperties": {
+       "additionalProperties": {
+        "type": "string"
+       },
+       "type": "object"
+      },
+      "description": "Non-finite form ('infinitive', 'present participle', 'past participle'; mediopassive-prefixed for that voice) \u2192 {'form': <the form>}.",
+      "title": "Nonfinite",
+      "type": "object"
+     },
+     "source": {
+      "default": "Wiktionary, the free dictionary (en.wiktionary.org), Old Norse entries. Wikimedia Foundation. Text available under CC BY-SA 4.0; attribution and share-alike required when republishing. (CC BY-SA 4.0: https://creativecommons.org/licenses/by-sa/4.0/) Adapted: reformatted and condensed from the original.",
+      "title": "Source",
+      "type": "string"
+     },
+     "word_class": {
+      "title": "Word Class",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entry_id",
+     "word_class",
+     "finite",
+     "nonfinite"
+    ],
+    "title": "NorseVerbalParadigm",
+    "type": "object"
+   },
+   "ParadigmNotFound": {
+    "description": "No inflection table for this page/POS (no Old Norse section, no table, or\nthe page doesn't exist). ``found`` is False and there is no body.",
+    "properties": {
+     "category": {
+      "const": "not_found",
+      "default": "not_found",
+      "title": "Category",
+      "type": "string"
+     },
+     "entry_id": {
+      "title": "Entry Id",
+      "type": "string"
+     },
+     "found": {
+      "const": false,
+      "default": false,
+      "title": "Found",
+      "type": "boolean"
+     },
+     "source": {
+      "default": "Wiktionary, the free dictionary (en.wiktionary.org), Old Norse entries. Wikimedia Foundation. Text available under CC BY-SA 4.0; attribution and share-alike required when republishing. (CC BY-SA 4.0: https://creativecommons.org/licenses/by-sa/4.0/) Adapted: reformatted and condensed from the original.",
+      "title": "Source",
+      "type": "string"
+     },
+     "word_class": {
+      "title": "Word Class",
+      "type": "string"
+     }
+    },
+    "required": [
+     "entry_id",
+     "word_class"
+    ],
+    "title": "ParadigmNotFound",
+    "type": "object"
+   },
+   "SearchLanguage": {
+    "description": "The query language. ``non`` looks an Old Norse word up directly (any of its\nforms \u2014 an inflected query resolves via cached paradigms). ``eng`` searches in\nreverse: the English Wiktionary page for the query word lists per-sense Old\nNorse translations, and each distinct lemma is then looked up normally.",
+    "enum": [
+     "non",
+     "eng"
+    ],
+    "title": "SearchLanguage",
+    "type": "string"
+   },
+   "Sense": {
+    "description": "One sense of an entry: the (HTML-stripped) Wiktionary definition line.",
+    "properties": {
+     "examples": {
+      "items": {
+       "type": "string"
+      },
+      "title": "Examples",
+      "type": "array"
+     },
+     "gloss": {
+      "title": "Gloss",
+      "type": "string"
+     },
+     "label": {
+      "default": "",
+      "title": "Label",
+      "type": "string"
+     }
+    },
+    "required": [
+     "gloss"
+    ],
+    "title": "Sense",
+    "type": "object"
+   },
+   "TranslationSense": {
+    "description": "One English sense (a translations table) and the Old Norse terms it offers.",
+    "properties": {
+     "sense": {
+      "description": "The sense gloss the source table carries.",
+      "title": "Sense",
+      "type": "string"
+     },
+     "terms": {
+      "items": {
+       "$ref": "#/$defs/TranslationTerm"
+      },
+      "title": "Terms",
+      "type": "array"
+     }
+    },
+    "required": [
+     "sense"
+    ],
+    "title": "TranslationSense",
+    "type": "object"
+   },
+   "TranslationTerm": {
+    "description": "One Old Norse word a translations table offers for an English sense.\n``word`` is the Wiktionary page title (what an ``eng`` search re-searches and\nwhat ``norse_get_inflections`` needs).",
+    "properties": {
+     "display": {
+      "default": "",
+      "description": "Rendered form when it differs from the title.",
+      "title": "Display",
+      "type": "string"
+     },
+     "gender": {
+      "default": "",
+      "description": "Grammatical gender as marked, e.g. 'n'.",
+      "title": "Gender",
+      "type": "string"
+     },
+     "qualifier": {
+      "default": "",
+      "description": "Usage qualifier as marked, e.g. 'poetic'; else empty.",
+      "title": "Qualifier",
+      "type": "string"
+     },
+     "word": {
+      "description": "Wiktionary page title \u2014 the lemma itself.",
+      "title": "Word",
+      "type": "string"
+     }
+    },
+    "required": [
+     "word"
+    ],
+    "title": "TranslationTerm",
+    "type": "object"
+   }
+  },
+  "description": "The result of a dictionary search.",
+  "properties": {
+   "entries": {
+    "items": {
+     "$ref": "#/$defs/Entry"
+    },
+    "title": "Entries",
+    "type": "array"
+   },
+   "forms_truncated": {
+    "default": 0,
+    "description": "How many handles did NOT get an inline table because the per-search cap was reached.",
+    "title": "Forms Truncated",
+    "type": "integer"
+   },
+   "found": {
+    "description": "False when nothing matched. For an eng query, True means Old Norse translations were found \u2014 entries may still be empty when none of them could be expanded (see translations).",
+    "title": "Found",
+    "type": "boolean"
+   },
+   "handles": {
+    "items": {
+     "$ref": "#/$defs/InflectionHandle"
+    },
+    "title": "Handles",
+    "type": "array"
+   },
+   "language": {
+    "$ref": "#/$defs/SearchLanguage"
+   },
+   "query": {
+    "title": "Query",
+    "type": "string"
+   },
+   "resolved_from": {
+    "default": "",
+    "description": "The original inflected query when resolved; else empty. non queries only \u2014 always empty for eng results.",
+    "title": "Resolved From",
+    "type": "string"
+   },
+   "resolved_lemma": {
+    "default": "",
+    "description": "The lemma actually searched when resolved; else empty. non queries only \u2014 always empty for eng results.",
+    "title": "Resolved Lemma",
+    "type": "string"
+   },
+   "search_method": {
+    "default": "direct",
+    "description": "How the match was found: 'direct' = the query itself matched; 'lemma_index' = an inflected form resolved via a previously cached paradigm; 'translations' = an English query resolved via Wiktionary translation tables.",
+    "enum": [
+     "direct",
+     "lemma_index",
+     "translations"
+    ],
+    "title": "Search Method",
+    "type": "string"
+   },
+   "source": {
+    "default": "Wiktionary, the free dictionary (en.wiktionary.org), Old Norse entries. Wikimedia Foundation. Text available under CC BY-SA 4.0; attribution and share-alike required when republishing. (CC BY-SA 4.0: https://creativecommons.org/licenses/by-sa/4.0/) Adapted: reformatted and condensed from the original.",
+    "title": "Source",
+    "type": "string"
+   },
+   "translations": {
+    "description": "Populated only for eng queries (always [] for non): the Old Norse terms each English sense translates to, in sense order. Entries/handles below are the expanded dictionary entries of those terms.",
+    "items": {
+     "$ref": "#/$defs/TranslationSense"
+    },
+    "title": "Translations",
+    "type": "array"
+   },
+   "translations_truncated": {
+    "default": 0,
+    "description": "How many distinct translated lemmas were NOT expanded into entries because the per-search expansion cap was reached (they still appear under translations).",
+    "title": "Translations Truncated",
+    "type": "integer"
+   }
+  },
+  "required": [
+   "query",
+   "language",
+   "found"
+  ],
+  "title": "SearchResult",
+  "type": "object"
+ },
+ "title": "Look an Old Norse word up"
+}

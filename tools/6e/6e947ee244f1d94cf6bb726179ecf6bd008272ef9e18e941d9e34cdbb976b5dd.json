@@ -1,0 +1,233 @@
+{
+ "annotations": {
+  "idempotentHint": true,
+  "openWorldHint": true,
+  "readOnlyHint": true
+ },
+ "description": "Get current AQI observations or the issued AQI forecast for a US location from the AirNow API. Provide either zip_code or both latitude and longitude. Current mode returns the latest hourly NowCast AQI for each pollutant (PM2.5, ozone, PM10) from the closest monitor within 50 miles, with the monitor site name, site ID, and reporting agency; pollutants in one reporting area can come from different monitors. Forecast mode returns every day the reporting area's agency has issued (typically one to five), each with the AQI category, an action-day flag, and the issue date, plus the agency's forecast discussion when one exists; some agencies forecast a category without an AQI number. In forecast mode, set forecast_date to keep only the forecast valid on that date; current mode rejects it. Data are preliminary \u2014 suitable for awareness, not regulatory, trend, or enforcement decisions. Responses are cached for ~1 hour.",
+ "inputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "properties": {
+   "forecast_date": {
+    "description": "Forecast mode only (rejected in current mode): keep just the forecast valid on this date (YYYY-MM-DD). Omit to get every issued forecast day. When no issued day matches, the result is empty and its message lists the issued dates.",
+    "type": "string"
+   },
+   "latitude": {
+    "description": "Latitude in decimal degrees (use with longitude instead of zip_code)",
+    "type": "number"
+   },
+   "longitude": {
+    "description": "Longitude in decimal degrees (use with latitude instead of zip_code)",
+    "type": "number"
+   },
+   "mode": {
+    "default": "current",
+    "description": "Data mode: \"current\" for the latest hourly observations, \"forecast\" for every forecast day the reporting area has issued",
+    "enum": [
+     "current",
+     "forecast"
+    ],
+    "type": "string"
+   },
+   "zip_code": {
+    "description": "5-digit US ZIP code for the location",
+    "type": "string"
+   }
+  },
+  "type": "object"
+ },
+ "name": "epa_get_air_quality",
+ "outputSchema": {
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "anyOf": [
+   {
+    "not": {
+     "required": [
+      "error"
+     ]
+    },
+    "required": [
+     "observations",
+     "mode",
+     "attribution"
+    ]
+   },
+   {
+    "required": [
+     "error"
+    ]
+   }
+  ],
+  "properties": {
+   "attribution": {
+    "description": "Credit to the reporting or forecasting agencies and the U.S. EPA AirNow program, with the preliminary-data notice. Reproduce it when passing this data on.",
+    "type": "string"
+   },
+   "error": {
+    "additionalProperties": {},
+    "description": "Present when the call failed. Absent on success.",
+    "properties": {
+     "code": {
+      "description": "JSON-RPC error code for this failure.",
+      "maximum": 9007199254740991,
+      "minimum": -9007199254740991,
+      "type": "integer"
+     },
+     "data": {
+      "additionalProperties": {},
+      "properties": {
+       "reason": {
+        "description": "Machine-readable failure mode. Declared by this tool: `no_location`: Neither zip_code nor latitude+longitude was provided. `forecast_date_needs_forecast_mode`: forecast_date was set while mode is \"current\", where it has no effect. `invalid_zip_code`: AirNow rejected zip_code as invalid (HTTP 400). Other values are possible when a failure originates below the handler.",
+        "examples": [
+         "no_location",
+         "forecast_date_needs_forecast_mode",
+         "invalid_zip_code"
+        ],
+        "type": "string"
+       },
+       "recovery": {
+        "additionalProperties": {},
+        "description": "Actionable next step for the caller.",
+        "properties": {
+         "hint": {
+          "type": "string"
+         }
+        },
+        "required": [
+         "hint"
+        ],
+        "type": "object"
+       },
+       "retryable": {
+        "description": "Whether retrying may succeed.",
+        "type": "boolean"
+       }
+      },
+      "type": "object"
+     },
+     "message": {
+      "description": "Human-readable description of what went wrong.",
+      "type": "string"
+     }
+    },
+    "required": [
+     "code",
+     "message"
+    ],
+    "type": "object"
+   },
+   "message": {
+    "description": "Why the result is empty: AirNow's own explanation, the issued forecast dates when forecast_date matched none, or a coverage hint. Absent when data is returned.",
+    "type": "string"
+   },
+   "mode": {
+    "description": "Data mode used: \"current\" or \"forecast\"",
+    "type": "string"
+   },
+   "observations": {
+    "description": "AQI observation or forecast records grouped by reporting area",
+    "items": {
+     "additionalProperties": false,
+     "description": "AQI readings for one reporting area \u2014 per observed hour in current mode, per area across all forecast days in forecast mode",
+     "properties": {
+      "dateObserved": {
+       "description": "Observation date (YYYY-MM-DD). Current mode only.",
+       "type": "string"
+      },
+      "discussion": {
+       "description": "The forecasting agency's discussion for this area, verbatim (may contain HTML). Forecast mode only; omitted when the agency issued none.",
+       "type": "string"
+      },
+      "hourObserved": {
+       "description": "Local hour of the observation as \"HH:00\". Current mode only.",
+       "type": "string"
+      },
+      "localTimeZone": {
+       "description": "Local time zone abbreviation for hourObserved (e.g. \"PDT\"). Current mode only.",
+       "type": "string"
+      },
+      "readings": {
+       "description": "Per-pollutant AQI readings for this reporting area",
+       "items": {
+        "additionalProperties": false,
+        "description": "AQI reading for one pollutant (and, in forecast mode, one valid date)",
+        "properties": {
+         "actionDay": {
+          "description": "True when the agency declared an air quality action day for this date. Forecast mode only.",
+          "type": "boolean"
+         },
+         "aqi": {
+          "description": "Air Quality Index value. Omitted when the agency issued only a category (category-only forecast).",
+          "type": "number"
+         },
+         "categoryName": {
+          "description": "AQI category name (e.g. \"Good\", \"Moderate\", \"Unhealthy\")",
+          "type": "string"
+         },
+         "categoryNumber": {
+          "description": "AQI category number: 1=Good, 2=Moderate, 3=Unhealthy for Sensitive Groups, 4=Unhealthy, 5=Very Unhealthy, 6=Hazardous. Omitted when AirNow reports an unrecognized category.",
+          "type": "number"
+         },
+         "dateIssue": {
+          "description": "Date the forecast was issued (YYYY-MM-DD). Forecast mode only.",
+          "type": "string"
+         },
+         "dateValid": {
+          "description": "Date the forecast applies to (YYYY-MM-DD). Forecast mode only.",
+          "type": "string"
+         },
+         "forecastAgency": {
+          "description": "Agency that issued the forecast. Forecast mode only.",
+          "type": "string"
+         },
+         "parameterName": {
+          "description": "Pollutant name as AirNow reports it (e.g. \"PM2.5\", \"OZONE\", \"PM10\")",
+          "type": "string"
+         },
+         "reportingAgency": {
+          "description": "Agency that reported this observation. Current mode only.",
+          "type": "string"
+         },
+         "siteID": {
+          "description": "AirNow ID of the monitor site. Current mode only.",
+          "type": "string"
+         },
+         "siteName": {
+          "description": "Monitor site that produced this observation. Current mode only.",
+          "type": "string"
+         }
+        },
+        "required": [
+         "parameterName"
+        ],
+        "type": "object"
+       },
+       "type": "array"
+      },
+      "reportingArea": {
+       "description": "Name of the AQI reporting area (e.g. \"Seattle-Bellevue-Kent Valley\")",
+       "type": "string"
+      },
+      "reportingAreaCode": {
+       "description": "AirNow reporting area code (e.g. \"wa004\"). Forecast mode only.",
+       "type": "string"
+      },
+      "stateCode": {
+       "description": "2-letter state code of the reporting area. Forecast mode only.",
+       "type": "string"
+      }
+     },
+     "required": [
+      "readings"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   }
+  },
+  "type": "object"
+ },
+ "title": "Get Air Quality Index"
+}

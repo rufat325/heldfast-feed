@@ -1,0 +1,274 @@
+{
+ "_meta": {
+  "dev.emem/bundles": [],
+  "dev.emem/category": "plan",
+  "dev.emem/level": "L0",
+  "dev.emem/mutation": "server-side materialisation only: fills this responder's cache from upstreams it already registered. No caller content is stored, so nothing can be planted through it.",
+  "dev.emem/observed_latency": {
+   "n": 6,
+   "note": "measured here over recent calls, not a budget",
+   "p50_ms": 9457,
+   "p95_ms": 17010
+  },
+  "dev.emem/shape": "plan",
+  "dev.emem/tier": "core"
+ },
+ "annotations": {
+  "destructiveHint": false,
+  "idempotentHint": false,
+  "openWorldHint": true,
+  "readOnlyHint": false,
+  "title": "Intent-routed planner"
+ },
+ "description": "State what you want in one typed object and get the answer. You do not choose a primitive. `type` selects the intent AND the other fields that the tool reads. Send only the fields in its row. The plan runs in the same call: you get results, not a list of calls.\n\ntype | needs | optional | answers\nwhere_is | description | | cell64 for a named place\nwhat_is_here | cell OR place | description | what is attested at a location\nis_like | a, b | | cosine similarity of two cells\ndid_change | cell, band, window | | delta for one band over [start,end] tslots\nfind_like | key | k, filter | nearest cells by embedding\nconfirm | claim, cell | | verdict and the signed facts behind it\nask | description | place/cell/lat+lng | free-text question, packaged answer\narea_over_time | geometry, bbox OR areas; start_date, end_date | index, max_scenes | index of an area for each overpass, with spread and anomaly\n\nAn unknown or missing `type` returns a `needs_intent_type` envelope with the valid values. It is not a hard error.\n\nWhen to use: Call this when the question matches one of the eight rows and you prefer to state the goal. Otherwise call the primitive. A band at a cell is emem_recall. A region is emem_recall_polygon. A free-text question about a place is emem_ask (type:\"ask\" sends it there). `window` takes tslots, not dates: get them from emem_trajectory. `areas` puts up to 6 areas on one chart. You can call a tool that this text names but your list does not show, by name, through tools/call.\n\nExample arguments: {\"type\":\"did_change\",\"cell\":\"defi.zb64a.cAzU.zfa27\",\"band\":\"indices.ndvi\",\"window\":[20245,20620]}",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "description": "A tagged union on `type`; fields of other intents are ignored.",
+  "properties": {
+   "a": {
+    "description": "is_like only: cell64 of the first place in the pair.",
+    "type": "string"
+   },
+   "areas": {
+    "description": "area_over_time: up to 6 {id,geometry|bbox} on one chart",
+    "maxItems": 6,
+    "type": "array"
+   },
+   "b": {
+    "description": "is_like only: cell64 of the second place. The answer is a cosine similarity in [-1,1] over the two cells' embeddings.",
+    "type": "string"
+   },
+   "band": {
+    "description": "did_change only: which band to test, e.g. \"indices.ndvi\". One band per call; the answer is a delta over `window`, not a whole-cell diff.",
+    "type": "string"
+   },
+   "bbox": {
+    "type": "object"
+   },
+   "cell": {
+    "description": "cell64 address, e.g. \"defi.zb64a.cAzU.zfa27\". Required by did_change and confirm. Optional for what_is_here and ask: supply it to skip geocoding, omit it and give `place` instead.",
+    "type": "string"
+   },
+   "claim": {
+    "description": "confirm only: the claim to test at `cell`, e.g. {\"band\":\"indices.ndvi\",\"op\":\"gt\",\"value\":0.4}. The answer is a verdict plus the signed facts it rests on.",
+    "properties": {
+     "agg": {
+      "description": "How a `window` reduces: any/all quantify over the facts in it; mean/min/max compare the reduced value against `value`.",
+      "enum": [
+       "any",
+       "all",
+       "mean",
+       "min",
+       "max"
+      ],
+      "type": "string"
+     },
+     "band": {
+      "description": "Band to test, e.g. \"indices.ndvi\".",
+      "type": "string"
+     },
+     "op": {
+      "description": "Comparison. These ten spellings and no others: `greater_than`, `>` and `gte` are all rejected. in/ni take an array `value` (member / not member). exists and absent ask only whether the band is attested here.",
+      "enum": [
+       "eq",
+       "ne",
+       "lt",
+       "le",
+       "gt",
+       "ge",
+       "in",
+       "ni",
+       "exists",
+       "absent"
+      ],
+      "type": "string"
+     },
+     "tslot": {
+      "description": "Test at one tslot. Omit for the latest. Mutually exclusive with `window`.",
+      "type": "integer"
+     },
+     "value": {
+      "description": "Right-hand side. A number for the ordering ops, an array for in/ni. REQUIRED by the parser even for exists/absent, which then ignore it \u2014 omitting it fails the whole intent with `missing field value`.",
+      "type": [
+       "string",
+       "number",
+       "boolean",
+       "array",
+       "null"
+      ]
+     },
+     "window": {
+      "description": "Test across [start, end] tslots instead of one. Requires `agg` to say how the values across the window collapse to a verdict.",
+      "items": {
+       "type": "integer"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     }
+    },
+    "required": [
+     "band",
+     "op",
+     "value"
+    ],
+    "type": "object"
+   },
+   "description": {
+    "description": "where_is: the place to resolve, e.g. \"Mount Everest\". ask: the user's question, forwarded verbatim. what_is_here: optional free text used as the question and, if `place` is absent, as the place. Ignored by the other intents.",
+    "type": "string"
+   },
+   "end_date": {
+    "description": "YYYY-MM-DD",
+    "type": "string"
+   },
+   "filter": {
+    "description": "find_like only: optional claim constraining which cells may be returned. Same object as `claim` below, same ops, same required fields.",
+    "properties": {
+     "agg": {
+      "description": "How a `window` reduces to a single verdict.",
+      "enum": [
+       "any",
+       "all",
+       "mean",
+       "min",
+       "max"
+      ],
+      "type": "string"
+     },
+     "band": {
+      "description": "Band the neighbour must satisfy, e.g. \"indices.ndvi\".",
+      "type": "string"
+     },
+     "op": {
+      "description": "Comparison. Symbolic only: `gt`, not `greater_than` or `>`.",
+      "enum": [
+       "eq",
+       "ne",
+       "lt",
+       "le",
+       "gt",
+       "ge",
+       "in",
+       "ni",
+       "exists",
+       "absent"
+      ],
+      "type": "string"
+     },
+     "tslot": {
+      "description": "Test at one tslot. Mutually exclusive with `window`.",
+      "type": "integer"
+     },
+     "value": {
+      "description": "Right-hand side. Required by the parser even for exists/absent, which ignore it.",
+      "type": [
+       "string",
+       "number",
+       "boolean",
+       "array",
+       "null"
+      ]
+     },
+     "window": {
+      "description": "Test across [start, end] tslots instead of one. Requires `agg`.",
+      "items": {
+       "type": "integer"
+      },
+      "maxItems": 2,
+      "minItems": 2,
+      "type": "array"
+     }
+    },
+    "required": [
+     "band",
+     "op",
+     "value"
+    ],
+    "type": "object"
+   },
+   "geometry": {
+    "description": "area_over_time: GeoJSON Polygon; or bbox {min_lat,min_lng,max_lat,max_lng}.",
+    "type": "object"
+   },
+   "index": {
+    "enum": [
+     "ndvi",
+     "ndwi",
+     "ndmi",
+     "lswi",
+     "evi",
+     "vv",
+     "vh",
+     "vh_vv"
+    ],
+    "type": "string"
+   },
+   "k": {
+    "description": "find_like only: how many neighbours to return.",
+    "minimum": 1,
+    "type": "integer"
+   },
+   "key": {
+    "description": "find_like only: cell64 to search from, ranked by embedding cosine.",
+    "type": "string"
+   },
+   "lat": {
+    "description": "ask only: latitude, paired with `lng`, when you want to pin the location by coordinate rather than by name or cell64.",
+    "maximum": 90,
+    "minimum": -90,
+    "type": "number"
+   },
+   "lng": {
+    "description": "ask only: longitude, paired with `lat`.",
+    "maximum": 180,
+    "minimum": -180,
+    "type": "number"
+   },
+   "max_scenes": {
+    "maximum": 24,
+    "minimum": 3,
+    "type": "integer"
+   },
+   "place": {
+    "description": "Free-text place name for what_is_here and ask when you have a name but no cell64, e.g. \"Ashok Nagar, Ranchi\". The responder geocodes it. Ignored when `cell` is present.",
+    "type": "string"
+   },
+   "start_date": {
+    "description": "YYYY-MM-DD",
+    "type": "string"
+   },
+   "type": {
+    "description": "Which intent; the table in the description gives each row's fields.",
+    "enum": [
+     "where_is",
+     "what_is_here",
+     "is_like",
+     "did_change",
+     "find_like",
+     "confirm",
+     "ask",
+     "area_over_time"
+    ],
+    "type": "string"
+   },
+   "window": {
+    "description": "did_change only: exactly two tslots, [start, end], band-tempo-relative integers from the emem epoch (NOT unix seconds or a date string). Get valid tslots for a cell from emem_trajectory.",
+    "items": {
+     "type": "integer"
+    },
+    "maxItems": 2,
+    "minItems": 2,
+    "type": "array"
+   }
+  },
+  "required": [
+   "type"
+  ],
+  "type": "object"
+ },
+ "name": "emem_intent",
+ "title": "Intent-routed planner"
+}

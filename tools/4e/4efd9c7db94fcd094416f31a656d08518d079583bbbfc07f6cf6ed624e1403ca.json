@@ -1,0 +1,237 @@
+{
+ "description": "Get a multi-day weather forecast for any Swiss location. Returns daily summaries (temperature, precipitation, sunshine, wind, weather icon) plus a hierarchical hourly breakdown of every series.\n\nThis uses official MeteoSwiss Open Data \u2014 the same forecasts powering the MeteoSwiss app and website.\n\nAccepts:\n- Postal codes: \"8001\" (Zurich), \"3000\" (Bern), \"1200\" (Geneva)\n- Station abbreviations: \"SMA\" (Zurich Fluntern), \"BER\" (Bern)\n- Place names: \"Zurich\", \"Basel\", \"Lugano\"\n\nCoverage: ~6000 Swiss locations (all postal codes + weather stations + mountain points).\nForecast horizon: up to 9 days. Updated hourly.\n\nEach day's summary fields: temperature_min_c, temperature_max_c, precipitation_total_mm,\nsunshine_total_minutes, wind_avg_kmh, wind_gust_max_kmh, weather, weather_icon_url.\n\nEach day also includes \"hourly\": one array of per-hour objects covering every series\ntogether \u2014 { time, temperature_c, precip_mm, sunshine_minutes, wind_kmh, wind_gust_kmh } \u2014\nuseful for judging *when* rain, sun, or wind is expected, not just the daily summary:\n- Each entry's \"time\" is already local wall-clock time for the location (Europe/Zurich),\n  with the UTC offset included, e.g. \"2026-07-09T14:00:00+02:00\". It is NOT UTC \u2014 do not\n  convert it.\n- A dry/calm/sunless hour is reported as its measured value (often 0), not omitted. A\n  fully dry day is still a full array of zero-precipitation hours, not an empty array.\n- Each field is independently null if just THAT series has no reading for a given hour \u2014\n  the other fields for that same hour are still populated. An hour is omitted entirely\n  only when every series is missing for it.\n- \"hourly\" itself is null when no hourly breakdown exists for this location at all (a\n  total data gap); [] only when this location supports hourly data but none was available\n  for that specific day.\n- For weather stations, temperature_min_c/temperature_max_c/precipitation_total_mm are\n  MeteoSwiss's own official daily aggregates \u2014 a different, separately-curated product\n  from the hourly series shown alongside them. They can legitimately NOT match summing/\n  averaging the hourly entries for that day; this is expected, not a data error.\n  sunshine_total_minutes/wind_avg_kmh/wind_gust_max_kmh have no official daily product for\n  stations and are always derived from the hourly series. For postal codes/mountain\n  points, every summary field is derived from the same hourly series shown alongside it,\n  so it always matches summing/averaging that series exactly.",
+ "execution": {
+  "taskSupport": "forbidden"
+ },
+ "inputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "properties": {
+   "days": {
+    "default": 5,
+    "description": "Number of forecast days (1-9, default 5)",
+    "maximum": 9,
+    "minimum": 1,
+    "type": "integer"
+   },
+   "location": {
+    "description": "Swiss location: postal code (e.g., \"8001\"), station abbreviation (e.g., \"SMA\"), or place name (e.g., \"Zurich\")",
+    "maxLength": 200,
+    "minLength": 1,
+    "type": "string"
+   }
+  },
+  "required": [
+   "location"
+  ],
+  "type": "object"
+ },
+ "name": "meteoswissLocalForecast",
+ "outputSchema": {
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "additionalProperties": false,
+  "properties": {
+   "forecast": {
+    "description": "One entry per forecast day, in date order",
+    "items": {
+     "additionalProperties": false,
+     "properties": {
+      "date": {
+       "description": "Local Europe/Zurich calendar date (YYYY-MM-DD) for postal codes/mountain points; the station data source's native daily date for weather stations.",
+       "type": "string"
+      },
+      "hourly": {
+       "anyOf": [
+        {
+         "items": {
+          "additionalProperties": false,
+          "properties": {
+           "precip_mm": {
+            "description": "Precipitation sum for this hour, in mm",
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "sunshine_minutes": {
+            "description": "Sunshine duration within this hour, in minutes",
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "temperature_c": {
+            "description": "Temperature at this hour, in \u00b0C",
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "time": {
+            "description": "ISO 8601 timestamp with UTC offset, in local Europe/Zurich time (e.g. \"2026-03-28T09:00:00+01:00\")",
+            "type": "string"
+           },
+           "wind_gust_kmh": {
+            "description": "Peak wind gust for this hour, in km/h",
+            "type": [
+             "number",
+             "null"
+            ]
+           },
+           "wind_kmh": {
+            "description": "Mean wind speed for this hour, in km/h",
+            "type": [
+             "number",
+             "null"
+            ]
+           }
+          },
+          "required": [
+           "time",
+           "temperature_c",
+           "precip_mm",
+           "sunshine_minutes",
+           "wind_kmh",
+           "wind_gust_kmh"
+          ],
+          "type": "object"
+         },
+         "type": "array"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "description": "Per-hour breakdown across every series, keyed to the local Europe/Zurich calendar day this `date` represents (each entry's `time` always falls within this day). `null` when no hourly breakdown exists for this location at all (a total data gap); `[]` when the point type supports hourly data but none was available for this specific day. A dry/calm/sunless hour still appears with its measured 0 value \u2014 0-valued readings are kept, not omitted."
+      },
+      "precipitation_total_mm": {
+       "description": "Daily precipitation total, mm. For postal codes/mountain points, the sum of `hourly`'s `precip_mm` (cannot disagree with the series). For weather stations, MeteoSwiss's official daily aggregate (`rka150d0`) \u2014 a *different* product than re-summing the station's hourly series, so it may legitimately NOT equal `sum(hourly precip_mm)` for stations. This is expected, not a data inconsistency.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "sunshine_total_minutes": {
+       "description": "Daily sunshine total, minutes. Derived from `hourly`'s `sunshine_minutes` for every point type (no official daily aggregate exists for this parameter).",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "temperature_max_c": {
+       "description": "Daily temperature maximum, \u00b0C. Same sourcing rules as temperature_min_c (station aggregate: `tre200dx`).",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "temperature_min_c": {
+       "description": "Daily temperature minimum, \u00b0C. For postal codes/mountain points, derived from the same hourly series as `hourly` (so they cannot disagree). For weather stations, MeteoSwiss's official daily aggregate (`tre200dn`) \u2014 may capture sub-hourly extremes the hourly series alone wouldn't show.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "weather": {
+       "description": "Human-readable weather description",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "weather_icon_url": {
+       "description": "URL of the official MeteoSwiss weather icon",
+       "type": [
+        "string",
+        "null"
+       ]
+      },
+      "wind_avg_kmh": {
+       "description": "Daily mean wind speed, km/h. Derived from `hourly`'s `wind_kmh` for every point type.",
+       "type": [
+        "number",
+        "null"
+       ]
+      },
+      "wind_gust_max_kmh": {
+       "description": "Daily peak wind gust, km/h. Derived from `hourly`'s `wind_gust_kmh` for every point type.",
+       "type": [
+        "number",
+        "null"
+       ]
+      }
+     },
+     "required": [
+      "date",
+      "weather",
+      "weather_icon_url",
+      "temperature_min_c",
+      "temperature_max_c",
+      "precipitation_total_mm",
+      "sunshine_total_minutes",
+      "wind_avg_kmh",
+      "wind_gust_max_kmh",
+      "hourly"
+     ],
+     "type": "object"
+    },
+    "type": "array"
+   },
+   "generated": {
+    "description": "Timestamp the forecast was generated (ISO 8601)",
+    "type": "string"
+   },
+   "location": {
+    "additionalProperties": false,
+    "properties": {
+     "coordinates": {
+      "additionalProperties": false,
+      "description": "WGS84 coordinates of the resolved point",
+      "properties": {
+       "lat": {
+        "type": "number"
+       },
+       "lon": {
+        "type": "number"
+       }
+      },
+      "required": [
+       "lat",
+       "lon"
+      ],
+      "type": "object"
+     },
+     "elevation": {
+      "description": "Elevation in metres above sea level",
+      "type": "number"
+     },
+     "name": {
+      "description": "Resolved location name",
+      "type": "string"
+     },
+     "type": {
+      "description": "Point type: \"station\", \"postal_code\", or \"mountain\"",
+      "type": "string"
+     }
+    },
+    "required": [
+     "name",
+     "type",
+     "elevation",
+     "coordinates"
+    ],
+    "type": "object"
+   },
+   "source": {
+    "description": "Data attribution",
+    "type": "string"
+   }
+  },
+  "required": [
+   "location",
+   "generated",
+   "forecast",
+   "source"
+  ],
+  "type": "object"
+ }
+}
